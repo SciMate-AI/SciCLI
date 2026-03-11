@@ -9,17 +9,17 @@ import (
 	"sync"
 	"time"
 
-	"github.com/opencode-ai/opencode/internal/config"
-	"github.com/opencode-ai/opencode/internal/db"
-	"github.com/opencode-ai/opencode/internal/format"
-	"github.com/opencode-ai/opencode/internal/history"
-	"github.com/opencode-ai/opencode/internal/llm/agent"
-	"github.com/opencode-ai/opencode/internal/logging"
-	"github.com/opencode-ai/opencode/internal/lsp"
-	"github.com/opencode-ai/opencode/internal/message"
-	"github.com/opencode-ai/opencode/internal/permission"
-	"github.com/opencode-ai/opencode/internal/session"
-	"github.com/opencode-ai/opencode/internal/tui/theme"
+	"github.com/SciMate-AI/scicli/internal/config"
+	"github.com/SciMate-AI/scicli/internal/db"
+	"github.com/SciMate-AI/scicli/internal/format"
+	"github.com/SciMate-AI/scicli/internal/history"
+	"github.com/SciMate-AI/scicli/internal/llm/agent"
+	"github.com/SciMate-AI/scicli/internal/logging"
+	"github.com/SciMate-AI/scicli/internal/lsp"
+	"github.com/SciMate-AI/scicli/internal/message"
+	"github.com/SciMate-AI/scicli/internal/permission"
+	"github.com/SciMate-AI/scicli/internal/session"
+	"github.com/SciMate-AI/scicli/internal/tui/theme"
 )
 
 type App struct {

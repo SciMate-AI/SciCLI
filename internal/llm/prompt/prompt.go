@@ -8,9 +8,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/opencode-ai/opencode/internal/config"
-	"github.com/opencode-ai/opencode/internal/llm/models"
-	"github.com/opencode-ai/opencode/internal/logging"
+	"github.com/SciMate-AI/scicli/internal/config"
+	"github.com/SciMate-AI/scicli/internal/llm/models"
+	"github.com/SciMate-AI/scicli/internal/logging"
 )
 
 func GetAgentPrompt(agentName config.AgentName, provider models.ModelProvider) string {

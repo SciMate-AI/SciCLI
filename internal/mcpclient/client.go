@@ -12,8 +12,8 @@ import (
 
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
-	"github.com/opencode-ai/opencode/internal/config"
-	"github.com/opencode-ai/opencode/internal/version"
+	"github.com/SciMate-AI/scicli/internal/config"
+	"github.com/SciMate-AI/scicli/internal/version"
 )
 
 type Client interface {

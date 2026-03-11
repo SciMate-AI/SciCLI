@@ -99,6 +99,6 @@ On this machine, Go commands need explicit cache/proxy env vars because the defa
 
 ## Current Limitations
 
-- The Go module path is still `github.com/opencode-ai/opencode`, so `go install` is not yet aligned with the SciCLI repo path.
+- The Go module path is now `github.com/SciMate-AI/scicli`, so `go install github.com/SciMate-AI/scicli@latest` matches the SciCLI repo path.
 - The npm package path is ready, but the first public publish still depends on npm scope ownership and `NPM_TOKEN`.
 - Homebrew and AUR publishing were removed from the automated release path to keep the first release minimal and reliable.

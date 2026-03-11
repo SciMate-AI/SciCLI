@@ -3,12 +3,12 @@ package agent
 import (
 	"context"
 
-	"github.com/opencode-ai/opencode/internal/history"
-	"github.com/opencode-ai/opencode/internal/llm/tools"
-	"github.com/opencode-ai/opencode/internal/lsp"
-	"github.com/opencode-ai/opencode/internal/message"
-	"github.com/opencode-ai/opencode/internal/permission"
-	"github.com/opencode-ai/opencode/internal/session"
+	"github.com/SciMate-AI/scicli/internal/history"
+	"github.com/SciMate-AI/scicli/internal/llm/tools"
+	"github.com/SciMate-AI/scicli/internal/lsp"
+	"github.com/SciMate-AI/scicli/internal/message"
+	"github.com/SciMate-AI/scicli/internal/permission"
+	"github.com/SciMate-AI/scicli/internal/session"
 )
 
 func CoderAgentTools(

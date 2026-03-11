@@ -13,9 +13,9 @@ import (
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
-	"github.com/opencode-ai/opencode/internal/auth"
-	"github.com/opencode-ai/opencode/internal/config"
-	"github.com/opencode-ai/opencode/internal/mcpclient"
+	"github.com/SciMate-AI/scicli/internal/auth"
+	"github.com/SciMate-AI/scicli/internal/config"
+	"github.com/SciMate-AI/scicli/internal/mcpclient"
 )
 
 type Client struct {

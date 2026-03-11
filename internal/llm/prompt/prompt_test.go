@@ -7,7 +7,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/opencode-ai/opencode/internal/config"
+	"github.com/SciMate-AI/scicli/internal/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

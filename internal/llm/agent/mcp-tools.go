@@ -6,13 +6,13 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/opencode-ai/opencode/internal/auth"
-	"github.com/opencode-ai/opencode/internal/config"
-	"github.com/opencode-ai/opencode/internal/llm/tools"
-	"github.com/opencode-ai/opencode/internal/logging"
-	"github.com/opencode-ai/opencode/internal/mcpclient"
-	"github.com/opencode-ai/opencode/internal/permission"
-	"github.com/opencode-ai/opencode/internal/version"
+	"github.com/SciMate-AI/scicli/internal/auth"
+	"github.com/SciMate-AI/scicli/internal/config"
+	"github.com/SciMate-AI/scicli/internal/llm/tools"
+	"github.com/SciMate-AI/scicli/internal/logging"
+	"github.com/SciMate-AI/scicli/internal/mcpclient"
+	"github.com/SciMate-AI/scicli/internal/permission"
+	"github.com/SciMate-AI/scicli/internal/version"
 
 	"github.com/mark3labs/mcp-go/mcp"
 )

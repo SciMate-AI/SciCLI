@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/opencode-ai/opencode/internal/scimate"
-	"github.com/opencode-ai/opencode/internal/state"
+	"github.com/SciMate-AI/scicli/internal/scimate"
+	"github.com/SciMate-AI/scicli/internal/state"
 	"github.com/spf13/cobra"
 )
 

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/opencode-ai/opencode/internal/config"
+	"github.com/SciMate-AI/scicli/internal/config"
 )
 
 func loadRuntimeConfig(cmdCwd string, debug bool) error {

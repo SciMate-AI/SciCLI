@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/opencode-ai/opencode/internal/auth"
+	"github.com/SciMate-AI/scicli/internal/auth"
 	"github.com/spf13/cobra"
 )
 

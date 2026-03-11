@@ -64,7 +64,7 @@ Detailed repository setup is documented in `docs/release-setup.md`.
 ### Using Go
 
 ```bash
-go install github.com/opencode-ai/opencode@latest
+go install github.com/SciMate-AI/scicli@latest
 ```
 
 ## Configuration
@@ -658,8 +658,8 @@ You can also configure a self-hosted model in the configuration file under the `
 
 ```bash
 # Clone the repository
-git clone https://github.com/opencode-ai/opencode.git
-cd opencode
+git clone https://github.com/SciMate-AI/scicli.git
+cd scicli
 
 # Build
 go build -o opencode

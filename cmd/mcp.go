@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/opencode-ai/opencode/internal/scimate"
+	"github.com/SciMate-AI/scicli/internal/scimate"
 	"github.com/spf13/cobra"
 )
 

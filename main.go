@@ -1,8 +1,8 @@
 package main
 
 import (
-	"github.com/opencode-ai/opencode/cmd"
-	"github.com/opencode-ai/opencode/internal/logging"
+	"github.com/SciMate-AI/scicli/cmd"
+	"github.com/SciMate-AI/scicli/internal/logging"
 )
 
 func main() {

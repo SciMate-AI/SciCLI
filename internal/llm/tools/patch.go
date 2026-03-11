@@ -8,12 +8,12 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/opencode-ai/opencode/internal/config"
-	"github.com/opencode-ai/opencode/internal/diff"
-	"github.com/opencode-ai/opencode/internal/history"
-	"github.com/opencode-ai/opencode/internal/logging"
-	"github.com/opencode-ai/opencode/internal/lsp"
-	"github.com/opencode-ai/opencode/internal/permission"
+	"github.com/SciMate-AI/scicli/internal/config"
+	"github.com/SciMate-AI/scicli/internal/diff"
+	"github.com/SciMate-AI/scicli/internal/history"
+	"github.com/SciMate-AI/scicli/internal/logging"
+	"github.com/SciMate-AI/scicli/internal/lsp"
+	"github.com/SciMate-AI/scicli/internal/permission"
 )
 
 type PatchParams struct {
