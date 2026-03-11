@@ -11,6 +11,7 @@ concurrency: ${{ github.workflow }}-${{ github.ref }}
 permissions:
   contents: write
   packages: write
+  id-token: write
 
 jobs:
   goreleaser:
@@ -28,7 +29,15 @@ jobs:
           cache: true
           cache-dependency-path: go.sum
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+
       - run: go mod download
+
+      - name: Sync npm package version from git tag
+        run: npm run release:sync-version -- "${GITHUB_REF_NAME#v}"
 
       - uses: goreleaser/goreleaser-action@v6
         with:
@@ -38,3 +47,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.HOMEBREW_GITHUB_TOKEN }}
           AUR_KEY: ${{ secrets.AUR_KEY }}
+
+      - name: Publish npm package
+        run: npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

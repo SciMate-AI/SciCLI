@@ -20,8 +20,9 @@ type MCPType string
 
 // Supported MCP types
 const (
-	MCPStdio MCPType = "stdio"
-	MCPSse   MCPType = "sse"
+	MCPStdio          MCPType = "stdio"
+	MCPSse            MCPType = "sse"
+	MCPStreamableHTTP MCPType = "streamable-http"
 )
 
 // MCPServer defines the configuration for a Model Control Protocol server.
@@ -80,6 +81,15 @@ type ShellConfig struct {
 	Args []string `json:"args,omitempty"`
 }
 
+type SupabaseConfig struct {
+	URL     string `json:"url,omitempty"`
+	AnonKey string `json:"anonKey,omitempty"`
+}
+
+type AuthConfig struct {
+	Supabase SupabaseConfig `json:"supabase,omitempty"`
+}
+
 // Config is the main configuration structure for the application.
 type Config struct {
 	Data         Data                              `json:"data"`
@@ -88,6 +98,7 @@ type Config struct {
 	Providers    map[models.ModelProvider]Provider `json:"providers,omitempty"`
 	LSP          map[string]LSPConfig              `json:"lsp,omitempty"`
 	Agents       map[AgentName]Agent               `json:"agents,omitempty"`
+	Auth         AuthConfig                        `json:"auth,omitempty"`
 	Debug        bool                              `json:"debug,omitempty"`
 	DebugLSP     bool                              `json:"debugLSP,omitempty"`
 	ContextPaths []string                          `json:"contextPaths,omitempty"`
@@ -98,11 +109,20 @@ type Config struct {
 
 // Application constants
 const (
-	defaultDataDirectory = ".opencode"
+	defaultDataDirectory = ".scicli"
 	defaultLogLevel      = "info"
-	appName              = "opencode"
+	appName              = "scicli"
+	defaultThemeName     = "scicli"
 
 	MaxTokensFallbackDefault = 4096
+)
+
+const (
+	DefaultSciMateMcpSseEndpoint       = "https://cae-agent-service-495426659633.us-central1.run.app/sse"
+	DefaultSciMateOriginMcpSseEndpoint = "https://origin-mcp-server-495426659633.us-central1.run.app/sse"
+	DefaultSciMateRdkitMcpHTTPEndpoint = "https://rdkit-mcp-495426659633.us-central1.run.app/mcp"
+	DefaultSupabaseURL                 = "https://ltwikvvzbuuuigzkqggs.supabase.co"
+	DefaultSupabaseAnonKey             = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imx0d2lrdnZ6YnV1dWlnemtxZ2dzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njk1NjU4NDEsImV4cCI6MjA4NTE0MTg0MX0.V4oVqYAjDQ3xeiCvCI1iora-WklFdXJAmbpIOia_Eq4"
 )
 
 var defaultContextPaths = []string{
@@ -111,12 +131,12 @@ var defaultContextPaths = []string{
 	".cursor/rules/",
 	"CLAUDE.md",
 	"CLAUDE.local.md",
-	"opencode.md",
-	"opencode.local.md",
-	"OpenCode.md",
-	"OpenCode.local.md",
-	"OPENCODE.md",
-	"OPENCODE.local.md",
+	"SCICLI.md",
+	"SCICLI.local.md",
+	"scicli.md",
+	"scicli.local.md",
+	"SciCLI.md",
+	"SciCLI.local.md",
 }
 
 // Global configuration instance
@@ -160,7 +180,8 @@ func Load(workingDir string, debug bool) (*Config, error) {
 	if cfg.Debug {
 		defaultLevel = slog.LevelDebug
 	}
-	if os.Getenv("OPENCODE_DEV_DEBUG") == "true" {
+	devDebug := os.Getenv("SCICLI_DEV_DEBUG") == "true" || os.Getenv("OPENCODE_DEV_DEBUG") == "true"
+	if devDebug {
 		loggingFile := fmt.Sprintf("%s/%s", cfg.Data.Directory, "debug.log")
 		messagesPath := fmt.Sprintf("%s/%s", cfg.Data.Directory, "messages")
 
@@ -230,8 +251,24 @@ func configureViper() {
 func setDefaults(debug bool) {
 	viper.SetDefault("data.directory", defaultDataDirectory)
 	viper.SetDefault("contextPaths", defaultContextPaths)
-	viper.SetDefault("tui.theme", "opencode")
+	viper.SetDefault("tui.theme", defaultThemeName)
 	viper.SetDefault("autoCompact", true)
+	viper.SetDefault("auth.supabase.url", envOrDefault("SCICLI_SUPABASE_URL", DefaultSupabaseURL))
+	viper.SetDefault("auth.supabase.anonKey", envOrDefault("SCICLI_SUPABASE_ANON_KEY", DefaultSupabaseAnonKey))
+	viper.SetDefault("mcpServers", map[string]any{
+		"cae-agent": map[string]any{
+			"type": "sse",
+			"url":  envOrDefault("SCICLI_MCP_CAE_AGENT_URL", DefaultSciMateMcpSseEndpoint),
+		},
+		"origin": map[string]any{
+			"type": "sse",
+			"url":  envOrDefault("SCICLI_MCP_ORIGIN_URL", DefaultSciMateOriginMcpSseEndpoint),
+		},
+		"rdkit": map[string]any{
+			"type": "streamable-http",
+			"url":  envOrDefault("SCICLI_MCP_RDKIT_URL", DefaultSciMateRdkitMcpHTTPEndpoint),
+		},
+	})
 
 	// Set default shell from environment or fallback to /bin/bash
 	shellPath := os.Getenv("SHELL")
@@ -248,6 +285,14 @@ func setDefaults(debug bool) {
 		viper.SetDefault("debug", false)
 		viper.SetDefault("log.level", defaultLogLevel)
 	}
+}
+
+func envOrDefault(key, fallback string) string {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	return value
 }
 
 // setProviderDefaults configures LLM provider defaults based on provider provided by
@@ -866,6 +911,30 @@ func updateCfgFile(updateCfg func(config *Config)) error {
 // It's safe to call this function multiple times.
 func Get() *Config {
 	return cfg
+}
+
+func AppName() string {
+	return appName
+}
+
+func DataDirectory() string {
+	if cfg == nil {
+		panic("config not loaded")
+	}
+	return cfg.Data.Directory
+}
+
+func RequireSupabase() (SupabaseConfig, error) {
+	if cfg == nil {
+		return SupabaseConfig{}, fmt.Errorf("config not loaded")
+	}
+	if strings.TrimSpace(cfg.Auth.Supabase.URL) == "" {
+		return SupabaseConfig{}, fmt.Errorf("supabase url is not configured")
+	}
+	if strings.TrimSpace(cfg.Auth.Supabase.AnonKey) == "" {
+		return SupabaseConfig{}, fmt.Errorf("supabase anon key is not configured")
+	}
+	return cfg.Auth.Supabase, nil
 }
 
 // WorkingDirectory returns the current working directory from the configuration.

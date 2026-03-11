@@ -89,12 +89,15 @@ func AvailableThemes() []string {
 
 	names := make([]string, 0, len(globalManager.themes))
 	for name := range globalManager.themes {
+		if name == "opencode" {
+			continue
+		}
 		names = append(names, name)
 	}
 	slices.SortFunc(names, func(a, b string) int {
-		if a == "opencode" {
+		if a == "scicli" {
 			return -1
-		} else if b == "opencode" {
+		} else if b == "scicli" {
 			return 1
 		}
 		return strings.Compare(a, b)

@@ -271,7 +271,8 @@ func NewOpenCodeTheme() *OpenCodeTheme {
 }
 
 func init() {
-	// Register the OpenCode theme with the theme manager
-	RegisterTheme("opencode", NewOpenCodeTheme())
+	// Keep the legacy theme name as an alias while exposing SciCLI as the default.
+	theme := NewOpenCodeTheme()
+	RegisterTheme("scicli", theme)
+	RegisterTheme("opencode", theme)
 }
-

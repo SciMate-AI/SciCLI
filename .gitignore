@@ -42,6 +42,18 @@ Thumbs.db
 .env.local
 
 .opencode/
+.scicli/
+.tmp-go-cache/
+.tmp-go-modcache/
+.tmp-npm-cache/
+.tmp-npm-install/
+.tmp-npm-prefix/
+node_modules/
+bin/scicli-real
+bin/scicli-real.exe
 
 opencode
+scicli
 opencode.md
+scicli.md
+SCICLI.md

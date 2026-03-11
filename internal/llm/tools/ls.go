@@ -96,11 +96,11 @@ func (l *lsTool) Run(ctx context.Context, call ToolCall) (ToolResponse, error) {
 
 	searchPath := params.Path
 	if searchPath == "" {
-		searchPath = config.WorkingDirectory()
+		searchPath = currentWorkingDirectory()
 	}
 
 	if !filepath.IsAbs(searchPath) {
-		searchPath = filepath.Join(config.WorkingDirectory(), searchPath)
+		searchPath = filepath.Join(currentWorkingDirectory(), searchPath)
 	}
 
 	if _, err := os.Stat(searchPath); os.IsNotExist(err) {
@@ -126,6 +126,18 @@ func (l *lsTool) Run(ctx context.Context, call ToolCall) (ToolResponse, error) {
 			Truncated:     truncated,
 		},
 	), nil
+}
+
+func currentWorkingDirectory() string {
+	cfg := config.Get()
+	if cfg != nil && cfg.WorkingDir != "" {
+		return cfg.WorkingDir
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "."
+	}
+	return cwd
 }
 
 func listDirectory(initialPath string, ignorePatterns []string, limit int) ([]string, bool, error) {
@@ -228,17 +240,11 @@ func createFileTree(sortedPaths []string) []*TreeNode {
 	pathMap := make(map[string]*TreeNode)
 
 	for _, path := range sortedPaths {
-		parts := strings.Split(path, string(filepath.Separator))
+		parts := strings.FieldsFunc(filepath.Clean(path), func(r rune) bool {
+			return r == '/' || r == '\\'
+		})
 		currentPath := ""
 		var parentPath string
-
-		var cleanParts []string
-		for _, part := range parts {
-			if part != "" {
-				cleanParts = append(cleanParts, part)
-			}
-		}
-		parts = cleanParts
 
 		if len(parts) == 0 {
 			continue
@@ -289,7 +295,11 @@ func createFileTree(sortedPaths []string) []*TreeNode {
 func printTree(tree []*TreeNode, rootPath string) string {
 	var result strings.Builder
 
-	result.WriteString(fmt.Sprintf("- %s%s\n", rootPath, string(filepath.Separator)))
+	displayRoot := filepath.ToSlash(rootPath)
+	if !strings.HasSuffix(displayRoot, "/") {
+		displayRoot += "/"
+	}
+	result.WriteString(fmt.Sprintf("- %s\n", displayRoot))
 
 	for _, node := range tree {
 		printNode(&result, node, 1)
@@ -303,7 +313,7 @@ func printNode(builder *strings.Builder, node *TreeNode, level int) {
 
 	nodeName := node.Name
 	if node.Type == "directory" {
-		nodeName += string(filepath.Separator)
+		nodeName += "/"
 	}
 
 	fmt.Fprintf(builder, "%s- %s\n", indent, nodeName)

@@ -38,8 +38,8 @@ func main() {
 func generateSchema() map[string]any {
 	schema := map[string]any{
 		"$schema":     "http://json-schema.org/draft-07/schema#",
-		"title":       "OpenCode Configuration",
-		"description": "Configuration schema for the OpenCode application",
+		"title":       "SciCLI Configuration",
+		"description": "Configuration schema for the SciCLI application",
 		"type":        "object",
 		"properties":  map[string]any{},
 	}
@@ -52,7 +52,7 @@ func generateSchema() map[string]any {
 			"directory": map[string]any{
 				"type":        "string",
 				"description": "Directory where application data is stored",
-				"default":     ".opencode",
+				"default":     ".scicli",
 			},
 		},
 		"required": []string{"directory"},
@@ -89,12 +89,12 @@ func generateSchema() map[string]any {
 			".cursor/rules/",
 			"CLAUDE.md",
 			"CLAUDE.local.md",
-			"opencode.md",
-			"opencode.local.md",
-			"OpenCode.md",
-			"OpenCode.local.md",
-			"OPENCODE.md",
-			"OPENCODE.local.md",
+			"SCICLI.md",
+			"SCICLI.local.md",
+			"scicli.md",
+			"scicli.local.md",
+			"SciCLI.md",
+			"SciCLI.local.md",
 		},
 	}
 
@@ -105,8 +105,9 @@ func generateSchema() map[string]any {
 			"theme": map[string]any{
 				"type":        "string",
 				"description": "TUI theme name",
-				"default":     "opencode",
+				"default":     "scicli",
 				"enum": []string{
+					"scicli",
 					"opencode",
 					"catppuccin",
 					"dracula",
@@ -150,7 +151,7 @@ func generateSchema() map[string]any {
 				"type": map[string]any{
 					"type":        "string",
 					"description": "Type of MCP server",
-					"enum":        []string{"stdio", "sse"},
+					"enum":        []string{"stdio", "sse", "streamable-http"},
 					"default":     "stdio",
 				},
 				"url": map[string]any{
@@ -165,7 +166,29 @@ func generateSchema() map[string]any {
 					},
 				},
 			},
-			"required": []string{"command"},
+		},
+	}
+
+	schema["properties"].(map[string]any)["auth"] = map[string]any{
+		"type":        "object",
+		"description": "Authentication configuration",
+		"properties": map[string]any{
+			"supabase": map[string]any{
+				"type":        "object",
+				"description": "Supabase authentication settings",
+				"properties": map[string]any{
+					"url": map[string]any{
+						"type":        "string",
+						"description": "Supabase project URL",
+						"default":     config.DefaultSupabaseURL,
+					},
+					"anonKey": map[string]any{
+						"type":        "string",
+						"description": "Supabase anon key",
+						"default":     config.DefaultSupabaseAnonKey,
+					},
+				},
+			},
 		},
 	}
 

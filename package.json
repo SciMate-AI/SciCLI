@@ -1,0 +1,43 @@
+{
+  "name": "@scimate/scicli",
+  "version": "0.0.55",
+  "description": "SciCLI terminal agent packaged for npm distribution",
+  "license": "MIT",
+  "bin": {
+    "scicli": "./bin/scicli.js"
+  },
+  "scripts": {
+    "postinstall": "node ./npm/postinstall.mjs",
+    "release:sync-version": "node ./npm/sync-version.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "bin/scicli.js",
+    "cmd/",
+    "internal/",
+    "npm/",
+    "main.go",
+    "go.mod",
+    "go.sum",
+    "README.md",
+    "LICENSE",
+    ".goreleaser.yml"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/scimate-ai/scicli.git"
+  },
+  "homepage": "https://github.com/scimate-ai/scicli",
+  "bugs": {
+    "url": "https://github.com/scimate-ai/scicli/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scicli": {
+    "releaseRepo": "scimate-ai/scicli",
+    "releaseAssetPrefix": "scicli"
+  }
+}

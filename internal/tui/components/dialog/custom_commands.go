@@ -29,8 +29,22 @@ func LoadCustomCommands() ([]Command, error) {
 	}
 
 	var commands []Command
+	appendUniqueCommands := func(existing []Command, incoming []Command) []Command {
+		seen := make(map[string]bool, len(existing))
+		for _, command := range existing {
+			seen[command.ID] = true
+		}
+		for _, command := range incoming {
+			if seen[command.ID] {
+				continue
+			}
+			seen[command.ID] = true
+			existing = append(existing, command)
+		}
+		return existing
+	}
 
-	// Load user commands from XDG_CONFIG_HOME/opencode/commands
+	// Load user commands from XDG_CONFIG_HOME/scicli/commands
 	xdgConfigHome := os.Getenv("XDG_CONFIG_HOME")
 	if xdgConfigHome == "" {
 		// Default to ~/.config if XDG_CONFIG_HOME is not set
@@ -41,26 +55,46 @@ func LoadCustomCommands() ([]Command, error) {
 	}
 
 	if xdgConfigHome != "" {
-		userCommandsDir := filepath.Join(xdgConfigHome, "opencode", "commands")
+		userCommandsDir := filepath.Join(xdgConfigHome, "scicli", "commands")
 		userCommands, err := loadCommandsFromDir(userCommandsDir, UserCommandPrefix)
 		if err != nil {
 			// Log error but continue - we'll still try to load other commands
 			fmt.Printf("Warning: failed to load user commands from XDG_CONFIG_HOME: %v\n", err)
 		} else {
-			commands = append(commands, userCommands...)
+			commands = appendUniqueCommands(commands, userCommands)
+		}
+
+		legacyCommandsDir := filepath.Join(xdgConfigHome, "opencode", "commands")
+		if _, err := os.Stat(legacyCommandsDir); err == nil {
+			legacyCommands, err := loadCommandsFromDir(legacyCommandsDir, UserCommandPrefix)
+			if err != nil {
+				fmt.Printf("Warning: failed to load legacy user commands from XDG_CONFIG_HOME: %v\n", err)
+			} else {
+				commands = appendUniqueCommands(commands, legacyCommands)
+			}
 		}
 	}
 
-	// Load commands from $HOME/.opencode/commands
+	// Load commands from $HOME/.scicli/commands
 	home, err := os.UserHomeDir()
 	if err == nil {
-		homeCommandsDir := filepath.Join(home, ".opencode", "commands")
+		homeCommandsDir := filepath.Join(home, ".scicli", "commands")
 		homeCommands, err := loadCommandsFromDir(homeCommandsDir, UserCommandPrefix)
 		if err != nil {
 			// Log error but continue - we'll still try to load other commands
 			fmt.Printf("Warning: failed to load home commands: %v\n", err)
 		} else {
-			commands = append(commands, homeCommands...)
+			commands = appendUniqueCommands(commands, homeCommands)
+		}
+
+		legacyHomeCommandsDir := filepath.Join(home, ".opencode", "commands")
+		if _, err := os.Stat(legacyHomeCommandsDir); err == nil {
+			legacyHomeCommands, err := loadCommandsFromDir(legacyHomeCommandsDir, UserCommandPrefix)
+			if err != nil {
+				fmt.Printf("Warning: failed to load legacy home commands: %v\n", err)
+			} else {
+				commands = appendUniqueCommands(commands, legacyHomeCommands)
+			}
 		}
 	}
 
@@ -71,7 +105,7 @@ func LoadCustomCommands() ([]Command, error) {
 		// Log error but return what we have so far
 		fmt.Printf("Warning: failed to load project commands: %v\n", err)
 	} else {
-		commands = append(commands, projectCommands...)
+		commands = appendUniqueCommands(commands, projectCommands)
 	}
 
 	return commands, nil

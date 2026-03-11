@@ -1,5 +1,5 @@
 version: 2
-project_name: opencode
+project_name: scicli
 before:
   hooks:
 builds:
@@ -8,6 +8,7 @@ builds:
     goos:
       - linux
       - darwin
+      - windows
     goarch:
       - amd64
       - arm64
@@ -18,7 +19,7 @@ builds:
 archives:
   - format: tar.gz
     name_template: >-
-      opencode-
+      scicli-
       {{- if eq .Os "darwin" }}mac-
       {{- else if eq .Os "windows" }}windows-
       {{- else if eq .Os "linux" }}linux-{{end}}

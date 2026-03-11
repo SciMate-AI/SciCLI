@@ -4,14 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
+	"github.com/opencode-ai/opencode/internal/auth"
 	"github.com/opencode-ai/opencode/internal/config"
 	"github.com/opencode-ai/opencode/internal/llm/tools"
 	"github.com/opencode-ai/opencode/internal/logging"
+	"github.com/opencode-ai/opencode/internal/mcpclient"
 	"github.com/opencode-ai/opencode/internal/permission"
 	"github.com/opencode-ai/opencode/internal/version"
 
-	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -41,12 +43,12 @@ func (b *mcpTool) Info() tools.ToolInfo {
 	}
 }
 
-func runTool(ctx context.Context, c MCPClient, toolName string, input string) (tools.ToolResponse, error) {
+func runTool(ctx context.Context, c MCPClient, tool mcp.Tool, input string) (tools.ToolResponse, error) {
 	defer c.Close()
 	initRequest := mcp.InitializeRequest{}
 	initRequest.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
 	initRequest.Params.ClientInfo = mcp.Implementation{
-		Name:    "OpenCode",
+		Name:    "SciCLI",
 		Version: version.Version,
 	}
 
@@ -56,27 +58,67 @@ func runTool(ctx context.Context, c MCPClient, toolName string, input string) (t
 	}
 
 	toolRequest := mcp.CallToolRequest{}
-	toolRequest.Params.Name = toolName
+	toolRequest.Params.Name = tool.Name
 	var args map[string]any
 	if err = json.Unmarshal([]byte(input), &args); err != nil {
 		return tools.NewTextErrorResponse(fmt.Sprintf("error parsing parameters: %s", err)), nil
 	}
+	var authSvc *auth.Service
+	needsAccessToken := false
+	if _, ok := tool.InputSchema.Properties["access_token"]; ok {
+		needsAccessToken = true
+		authSvc, authErr := auth.NewService()
+		if authErr != nil {
+			return tools.NewTextErrorResponse(authErr.Error()), nil
+		}
+		if _, exists := args["access_token"]; !exists {
+			token, tokenErr := authSvc.RequireAccessToken()
+			if tokenErr != nil {
+				return tools.NewTextErrorResponse(tokenErr.Error()), nil
+			}
+			args["access_token"] = token
+		}
+	}
 	toolRequest.Params.Arguments = args
 	result, err := c.CallTool(ctx, toolRequest)
+	if err != nil {
+		if needsAccessToken && authSvc != nil && isAuthError(err) {
+			refreshed, refreshErr := authSvc.Refresh()
+			if refreshErr == nil {
+				args["access_token"] = refreshed.AccessToken
+				toolRequest.Params.Arguments = args
+				result, err = c.CallTool(ctx, toolRequest)
+			}
+		}
+	}
 	if err != nil {
 		return tools.NewTextErrorResponse(err.Error()), nil
 	}
 
 	output := ""
 	for _, v := range result.Content {
-		if v, ok := v.(mcp.TextContent); ok {
-			output = v.Text
-		} else {
+		switch item := v.(type) {
+		case mcp.TextContent:
+			output = item.Text
+		case *mcp.TextContent:
+			output = item.Text
+		default:
 			output = fmt.Sprintf("%v", v)
 		}
 	}
 
 	return tools.NewTextResponse(output), nil
+}
+
+func isAuthError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "unauthorized") ||
+		strings.Contains(msg, "access_token") ||
+		strings.Contains(msg, "access token") ||
+		strings.Contains(msg, "jwt")
 }
 
 func (b *mcpTool) Run(ctx context.Context, params tools.ToolCall) (tools.ToolResponse, error) {
@@ -101,24 +143,23 @@ func (b *mcpTool) Run(ctx context.Context, params tools.ToolCall) (tools.ToolRes
 
 	switch b.mcpConfig.Type {
 	case config.MCPStdio:
-		c, err := client.NewStdioMCPClient(
-			b.mcpConfig.Command,
-			b.mcpConfig.Env,
-			b.mcpConfig.Args...,
-		)
+		c, err := mcpclient.New(b.mcpConfig)
 		if err != nil {
 			return tools.NewTextErrorResponse(err.Error()), nil
 		}
-		return runTool(ctx, c, b.tool.Name, params.Input)
+		return runTool(ctx, c, b.tool, params.Input)
 	case config.MCPSse:
-		c, err := client.NewSSEMCPClient(
-			b.mcpConfig.URL,
-			client.WithHeaders(b.mcpConfig.Headers),
-		)
+		c, err := mcpclient.New(b.mcpConfig)
 		if err != nil {
 			return tools.NewTextErrorResponse(err.Error()), nil
 		}
-		return runTool(ctx, c, b.tool.Name, params.Input)
+		return runTool(ctx, c, b.tool, params.Input)
+	case config.MCPStreamableHTTP:
+		c, err := mcpclient.New(b.mcpConfig)
+		if err != nil {
+			return tools.NewTextErrorResponse(err.Error()), nil
+		}
+		return runTool(ctx, c, b.tool, params.Input)
 	}
 
 	return tools.NewTextErrorResponse("invalid mcp type"), nil
@@ -140,7 +181,7 @@ func getTools(ctx context.Context, name string, m config.MCPServer, permissions 
 	initRequest := mcp.InitializeRequest{}
 	initRequest.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
 	initRequest.Params.ClientInfo = mcp.Implementation{
-		Name:    "OpenCode",
+		Name:    "SciCLI",
 		Version: version.Version,
 	}
 
@@ -168,23 +209,8 @@ func GetMcpTools(ctx context.Context, permissions permission.Service) []tools.Ba
 	}
 	for name, m := range config.Get().MCPServers {
 		switch m.Type {
-		case config.MCPStdio:
-			c, err := client.NewStdioMCPClient(
-				m.Command,
-				m.Env,
-				m.Args...,
-			)
-			if err != nil {
-				logging.Error("error creating mcp client", "error", err)
-				continue
-			}
-
-			mcpTools = append(mcpTools, getTools(ctx, name, m, permissions, c)...)
-		case config.MCPSse:
-			c, err := client.NewSSEMCPClient(
-				m.URL,
-				client.WithHeaders(m.Headers),
-			)
+		case config.MCPStdio, config.MCPSse, config.MCPStreamableHTTP:
+			c, err := mcpclient.New(m)
 			if err != nil {
 				logging.Error("error creating mcp client", "error", err)
 				continue

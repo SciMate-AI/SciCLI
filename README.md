@@ -9,11 +9,11 @@
 
 > **⚠️ Early Development Notice:** This project is in early development and is not yet ready for production use. Features may change, break, or be incomplete. Use at your own risk.
 
-A powerful terminal-based AI assistant for developers, providing intelligent coding assistance directly in your terminal.
+A terminal-based AI assistant for developers, adapted from the `opencode` code-agent baseline and extended for SciMate workflows.
 
 ## Overview
 
-OpenCode is a Go-based CLI application that brings AI assistance to your terminal. It provides a TUI (Terminal User Interface) for interacting with various AI models to help with coding tasks, debugging, and more.
+SciCLI is a Go-based CLI application that brings AI assistance to your terminal. It provides a TUI (Terminal User Interface) for interacting with various AI models, local coding tools, and SciMate MCP services.
 
 <p>For a quick video overview, check out
 <a href="https://www.youtube.com/watch?v=P8luPmEa1QI"><img width="25" src="https://upload.wikimedia.org/wikipedia/commons/0/09/YouTube_full-color_icon_%282017%29.svg"> OpenCode + Gemini 2.5 Pro: BYE Claude Code! I'm SWITCHING To the FASTEST AI Coder!</a></p>
@@ -35,31 +35,31 @@ OpenCode is a Go-based CLI application that brings AI assistance to your termina
 
 ## Installation
 
-### Using the Install Script
+### Current Status
 
 ```bash
-# Install the latest version
-curl -fsSL https://raw.githubusercontent.com/opencode-ai/opencode/refs/heads/main/install | bash
-
-# Install a specific version
-curl -fsSL https://raw.githubusercontent.com/opencode-ai/opencode/refs/heads/main/install | VERSION=0.1.0 bash
+go build ./...
 ```
 
-### Using Homebrew (macOS and Linux)
+Release packaging is not published yet. The included `install` script expects a repository that publishes `scicli` release artifacts and can be configured with `SCICLI_RELEASE_REPO`.
+
+### Using npm
 
 ```bash
-brew install opencode-ai/tap/opencode
+npm install -g @scimate/scicli
 ```
 
-### Using AUR (Arch Linux)
+The npm package is a thin wrapper around the Go binary. During install it tries to download a matching prebuilt release asset and falls back to `go build` if a release is not available.
 
-```bash
-# Using yay
-yay -S opencode-ai-bin
+### Release Automation
 
-# Using paru
-paru -S opencode-ai-bin
-```
+Tag-based release automation publishes both the GitHub release artifacts and the npm package.
+
+Required GitHub Actions secrets:
+
+- `NPM_TOKEN`: npm publish token for `@scimate/scicli`
+- `HOMEBREW_GITHUB_TOKEN`: token used by GoReleaser for GitHub release and tap updates
+- `AUR_KEY`: optional if AUR publishing remains enabled in GoReleaser
 
 ### Using Go
 
@@ -69,15 +69,15 @@ go install github.com/opencode-ai/opencode@latest
 
 ## Configuration
 
-OpenCode looks for configuration in the following locations:
+SciCLI looks for configuration in the following locations:
 
-- `$HOME/.opencode.json`
-- `$XDG_CONFIG_HOME/opencode/.opencode.json`
-- `./.opencode.json` (local directory)
+- `$HOME/.scicli.json`
+- `$XDG_CONFIG_HOME/scicli/.scicli.json`
+- `./.scicli.json` (local directory)
 
 ### Auto Compact Feature
 
-OpenCode includes an auto compact feature that automatically summarizes your conversation when it approaches the model's context window limit. When enabled (default setting), this feature:
+SciCLI includes an auto compact feature that automatically summarizes your conversation when it approaches the model's context window limit. When enabled (default setting), this feature:
 
 - Monitors token usage during your conversation
 - Automatically triggers summarization when usage reaches 95% of the model's context window
@@ -94,7 +94,7 @@ You can enable or disable this feature in your configuration file:
 
 ### Environment Variables
 
-You can configure OpenCode using environment variables:
+You can configure SciCLI using environment variables:
 
 | Environment Variable       | Purpose                                                                          |
 | -------------------------- | -------------------------------------------------------------------------------- |
@@ -116,7 +116,7 @@ You can configure OpenCode using environment variables:
 
 ### Shell Configuration
 
-OpenCode allows you to configure the shell used by the bash tool. By default, it uses the shell specified in the `SHELL` environment variable, or falls back to `/bin/bash` if not set.
+SciCLI allows you to configure the shell used by the bash tool. By default, it uses the shell specified in the `SHELL` environment variable, or falls back to `/bin/bash` if not set.
 
 You can override this in your configuration file:
 
@@ -199,7 +199,7 @@ This is useful if you want to use a different shell than your default system she
 
 ## Supported AI Models
 
-OpenCode supports a variety of AI models from different providers:
+SciCLI supports a variety of AI models from different providers:
 
 ### OpenAI
 
@@ -304,7 +304,7 @@ By default, a spinner animation is displayed while the model is processing your 
 
 ### Output Formats
 
-OpenCode supports the following output formats in non-interactive mode:
+SciCLI supports the following output formats in non-interactive mode:
 
 | Format | Description                     |
 | ------ | ------------------------------- |
@@ -436,7 +436,7 @@ OpenCode is built with a modular architecture:
 
 ## Custom Commands
 
-OpenCode supports custom commands that can be created by users to quickly send predefined prompts to the AI assistant.
+SciCLI supports custom commands that can be created by users to quickly send predefined prompts to the AI assistant.
 
 ### Creating Custom Commands
 
@@ -445,26 +445,26 @@ Custom commands are predefined prompts stored as Markdown files in one of three 
 1. **User Commands** (prefixed with `user:`):
 
    ```
-   $XDG_CONFIG_HOME/opencode/commands/
+   $XDG_CONFIG_HOME/scicli/commands/
    ```
 
-   (typically `~/.config/opencode/commands/` on Linux/macOS)
+   (typically `~/.config/scicli/commands/` on Linux/macOS)
 
    or
 
    ```
-   $HOME/.opencode/commands/
+   $HOME/.scicli/commands/
    ```
 
 2. **Project Commands** (prefixed with `project:`):
 
    ```
-   <PROJECT DIR>/.opencode/commands/
+   <PROJECT DIR>/.scicli/commands/
    ```
 
 Each `.md` file in these directories becomes a custom command. The file name (without extension) becomes the command ID.
 
-For example, creating a file at `~/.config/opencode/commands/prime-context.md` with content:
+For example, creating a file at `~/.config/scicli/commands/prime-context.md` with content:
 
 ```markdown
 RUN git ls-files
@@ -475,7 +475,7 @@ This creates a command called `user:prime-context`.
 
 ### Command Arguments
 
-OpenCode supports named arguments in custom commands using placeholders in the format `$NAME` (where NAME consists of uppercase letters, numbers, and underscores, and must start with a letter).
+SciCLI supports named arguments in custom commands using placeholders in the format `$NAME` (where NAME consists of uppercase letters, numbers, and underscores, and must start with a letter).
 
 For example:
 
@@ -487,7 +487,7 @@ RUN git grep --author="$AUTHOR_NAME" -n .
 RUN grep -R "$SEARCH_PATTERN" $DIRECTORY
 ```
 
-When you run a command with arguments, OpenCode will prompt you to enter values for each unique placeholder. Named arguments provide several benefits:
+When you run a command with arguments, SciCLI will prompt you to enter values for each unique placeholder. Named arguments provide several benefits:
 
 - Clear identification of what each argument represents
 - Ability to use the same argument multiple times
@@ -498,7 +498,7 @@ When you run a command with arguments, OpenCode will prompt you to enter values 
 You can organize commands in subdirectories:
 
 ```
-~/.config/opencode/commands/git/commit.md
+~/.config/scicli/commands/git/commit.md
 ```
 
 This creates a command with ID `user:git:commit`.
@@ -513,16 +513,16 @@ The content of the command file will be sent as a message to the AI assistant.
 
 ### Built-in Commands
 
-OpenCode includes several built-in commands:
+SciCLI includes several built-in commands:
 
 | Command            | Description                                                                                         |
 | ------------------ | --------------------------------------------------------------------------------------------------- |
-| Initialize Project | Creates or updates the OpenCode.md memory file with project-specific information                    |
+| Initialize Project | Creates or updates the SCICLI.md memory file with project-specific information                      |
 | Compact Session    | Manually triggers the summarization of the current session, creating a new session with the summary |
 
 ## MCP (Model Context Protocol)
 
-OpenCode implements the Model Context Protocol (MCP) to extend its capabilities through external tools. MCP provides a standardized way for the AI assistant to interact with external services and tools.
+SciCLI implements the Model Context Protocol (MCP) to extend its capabilities through external tools. MCP provides a standardized way for the AI assistant to interact with external services and tools.
 
 ### MCP Features
 
@@ -617,17 +617,17 @@ the tool with your github account. This should create a github token at one of t
 - ~/.config/github-copilot/[hosts,apps].json
 - $XDG_CONFIG_HOME/github-copilot/[hosts,apps].json
 
-If using an explicit github token, you may either set the $GITHUB_TOKEN environment variable or add it to the opencode.json config file at `providers.copilot.apiKey`.
+If using an explicit github token, you may either set the $GITHUB_TOKEN environment variable or add it to the `.scicli.json` config file at `providers.copilot.apiKey`.
 
 ## Using a self-hosted model provider
 
-OpenCode can also load and use models from a self-hosted (OpenAI-like) provider.
+SciCLI can also load and use models from a self-hosted (OpenAI-like) provider.
 This is useful for developers who want to experiment with custom models.
 
 ### Configuring a self-hosted provider
 
 You can use a self-hosted model by setting the `LOCAL_ENDPOINT` environment variable.
-This will cause OpenCode to load and use the models from the specified endpoint.
+This will cause SciCLI to load and use the models from the specified endpoint.
 
 ```bash
 LOCAL_ENDPOINT=http://localhost:1235/v1
