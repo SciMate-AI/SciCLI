@@ -51,6 +51,8 @@ npm install -g @scimate/scicli
 
 The npm package is a thin wrapper around the Go binary. During install it tries to download a matching prebuilt release asset and falls back to `go build` if a release is not available.
 
+On the first interactive launch, `scicli` opens a setup wizard if no default AI provider/model has been configured yet. The wizard writes the resulting configuration to your global `~/.scicli.json`.
+
 ### Release Automation
 
 Tag-based release automation publishes both the GitHub release artifacts and the npm package.

@@ -7,17 +7,18 @@ import (
 	"sync"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
-	zone "github.com/lrstanley/bubblezone"
 	"github.com/SciMate-AI/scicli/internal/app"
 	"github.com/SciMate-AI/scicli/internal/config"
 	"github.com/SciMate-AI/scicli/internal/db"
 	"github.com/SciMate-AI/scicli/internal/format"
 	"github.com/SciMate-AI/scicli/internal/llm/agent"
 	"github.com/SciMate-AI/scicli/internal/logging"
+	"github.com/SciMate-AI/scicli/internal/onboarding"
 	"github.com/SciMate-AI/scicli/internal/pubsub"
 	"github.com/SciMate-AI/scicli/internal/tui"
 	"github.com/SciMate-AI/scicli/internal/version"
+	tea "github.com/charmbracelet/bubbletea"
+	zone "github.com/lrstanley/bubblezone"
 	"github.com/spf13/cobra"
 )
 
@@ -85,6 +86,15 @@ to assist developers in writing, debugging, and understanding code directly from
 		_, err := config.Load(cwd, debug)
 		if err != nil {
 			return err
+		}
+		if config.NeedsOnboarding() {
+			if prompt != "" {
+				return fmt.Errorf("SciCLI needs first-run AI setup before non-interactive use. Run `scicli` once to configure a provider and model")
+			}
+
+			if err := onboarding.Run(); err != nil {
+				return err
+			}
 		}
 
 		// Connect DB, this will also run migrations

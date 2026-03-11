@@ -1,7 +1,7 @@
 {
-  "$schema": "./opencode-schema.json",
+  "$schema": "./scicli-schema.json",
   "lsp": {
-    "gopls": {
+    "go": {
       "command": "gopls"
     }
   }

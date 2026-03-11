@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 
 	"github.com/SciMate-AI/scicli/internal/llm/models"
@@ -176,6 +177,7 @@ func Load(workingDir string, debug bool) (*Config, error) {
 	}
 
 	applyDefaultValues()
+	normalizeLSPAliases()
 	defaultLevel := slog.LevelInfo
 	if cfg.Debug {
 		defaultLevel = slog.LevelDebug
@@ -564,6 +566,15 @@ func validateAgent(cfg *Config, name AgentName, agent Agent) error {
 			logging.Info("added provider from environment", "provider", provider)
 		}
 	} else if providerCfg.Disabled || providerCfg.APIKey == "" {
+		if !providerCfg.Disabled && providerCfg.APIKey == "" {
+			if apiKey := getProviderAPIKey(provider); apiKey != "" {
+				providerCfg.APIKey = apiKey
+				cfg.Providers[provider] = providerCfg
+				logging.Info("added provider from environment", "provider", provider)
+				goto validateMaxTokens
+			}
+		}
+
 		// Provider is disabled or has no API key
 		logging.Warn("provider is disabled or has no API key, reverting to default",
 			"agent", name,
@@ -578,6 +589,7 @@ func validateAgent(cfg *Config, name AgentName, agent Agent) error {
 		}
 	}
 
+validateMaxTokens:
 	// Validate max tokens
 	if agent.MaxTokens <= 0 {
 		logging.Warn("invalid max tokens, setting to default",
@@ -666,6 +678,13 @@ func Validate() error {
 	// Validate providers
 	for provider, providerCfg := range cfg.Providers {
 		if providerCfg.APIKey == "" && !providerCfg.Disabled {
+			if apiKey := getProviderAPIKey(provider); apiKey != "" {
+				providerCfg.APIKey = apiKey
+				cfg.Providers[provider] = providerCfg
+				logging.Info("added provider from environment", "provider", provider)
+				continue
+			}
+
 			fmt.Printf("provider has no API key, marking as disabled %s", provider)
 			logging.Warn("provider has no API key, marking as disabled", "provider", provider)
 			providerCfg.Disabled = true
@@ -700,13 +719,22 @@ func getProviderAPIKey(provider models.ModelProvider) string {
 		return os.Getenv("AZURE_OPENAI_API_KEY")
 	case models.ProviderOpenRouter:
 		return os.Getenv("OPENROUTER_API_KEY")
+	case models.ProviderXAI:
+		return os.Getenv("XAI_API_KEY")
 	case models.ProviderBedrock:
 		if hasAWSCredentials() {
 			return "aws-credentials-available"
 		}
+	case models.ProviderCopilot:
+		token, _ := LoadGitHubToken()
+		return token
 	case models.ProviderVertexAI:
 		if hasVertexAICredentials() {
 			return "vertex-ai-credentials-available"
+		}
+	case models.ProviderLocal:
+		if os.Getenv("LOCAL_ENDPOINT") != "" {
+			return "dummy"
 		}
 	}
 	return ""
@@ -891,6 +919,9 @@ func updateCfgFile(updateCfg func(config *Config)) error {
 	if err := json.Unmarshal(configData, &userCfg); err != nil {
 		return fmt.Errorf("failed to parse config file: %w", err)
 	}
+	if userCfg == nil {
+		userCfg = &Config{}
+	}
 
 	updateCfg(userCfg)
 
@@ -905,6 +936,194 @@ func updateCfgFile(updateCfg func(config *Config)) error {
 	}
 
 	return nil
+}
+
+func normalizeLSPAliases() {
+	if cfg == nil || len(cfg.LSP) == 0 {
+		return
+	}
+
+	if goConfig, exists := cfg.LSP["go"]; exists {
+		if _, hasLegacy := cfg.LSP["gopls"]; hasLegacy {
+			logging.Warn("legacy lsp key detected; use `lsp.go` instead of `lsp.gopls`")
+			delete(cfg.LSP, "gopls")
+		}
+		cfg.LSP["go"] = goConfig
+		return
+	}
+
+	if legacyConfig, exists := cfg.LSP["gopls"]; exists {
+		delete(cfg.LSP, "gopls")
+		cfg.LSP["go"] = legacyConfig
+		logging.Warn("legacy lsp key detected; use `lsp.go` instead of `lsp.gopls`")
+	}
+}
+
+func ConfigFilePath() string {
+	if configFile := viper.ConfigFileUsed(); configFile != "" {
+		return configFile
+	}
+
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Sprintf(".%s.json", appName)
+	}
+	return filepath.Join(homeDir, fmt.Sprintf(".%s.json", appName))
+}
+
+func NeedsOnboarding() bool {
+	if cfg == nil {
+		return true
+	}
+
+	agentCfg, ok := cfg.Agents[AgentCoder]
+	if !ok {
+		return true
+	}
+
+	model, ok := models.SupportedModels[agentCfg.Model]
+	if !ok {
+		return true
+	}
+
+	providerCfg, ok := cfg.Providers[model.Provider]
+	if ok {
+		if providerCfg.Disabled {
+			return true
+		}
+		if strings.TrimSpace(providerCfg.APIKey) != "" {
+			return false
+		}
+	}
+
+	return strings.TrimSpace(getProviderAPIKey(model.Provider)) == ""
+}
+
+type OnboardingProvider struct {
+	Provider             models.ModelProvider
+	Label                string
+	CredentialHint       string
+	DetectedCredential   bool
+	DetectedCredentialID string
+	SupportsManualAPIKey bool
+}
+
+func OnboardingProviders() []OnboardingProvider {
+	providers := []OnboardingProvider{
+		{
+			Provider:             models.ProviderAnthropic,
+			Label:                "Anthropic",
+			CredentialHint:       "ANTHROPIC_API_KEY",
+			DetectedCredential:   strings.TrimSpace(getProviderAPIKey(models.ProviderAnthropic)) != "",
+			DetectedCredentialID: "environment",
+			SupportsManualAPIKey: true,
+		},
+		{
+			Provider:             models.ProviderOpenAI,
+			Label:                "OpenAI",
+			CredentialHint:       "OPENAI_API_KEY",
+			DetectedCredential:   strings.TrimSpace(getProviderAPIKey(models.ProviderOpenAI)) != "",
+			DetectedCredentialID: "environment",
+			SupportsManualAPIKey: true,
+		},
+		{
+			Provider:             models.ProviderGemini,
+			Label:                "Google Gemini",
+			CredentialHint:       "GEMINI_API_KEY",
+			DetectedCredential:   strings.TrimSpace(getProviderAPIKey(models.ProviderGemini)) != "",
+			DetectedCredentialID: "environment",
+			SupportsManualAPIKey: true,
+		},
+		{
+			Provider:             models.ProviderOpenRouter,
+			Label:                "OpenRouter",
+			CredentialHint:       "OPENROUTER_API_KEY",
+			DetectedCredential:   strings.TrimSpace(getProviderAPIKey(models.ProviderOpenRouter)) != "",
+			DetectedCredentialID: "environment",
+			SupportsManualAPIKey: true,
+		},
+		{
+			Provider:             models.ProviderGROQ,
+			Label:                "Groq",
+			CredentialHint:       "GROQ_API_KEY",
+			DetectedCredential:   strings.TrimSpace(getProviderAPIKey(models.ProviderGROQ)) != "",
+			DetectedCredentialID: "environment",
+			SupportsManualAPIKey: true,
+		},
+		{
+			Provider:             models.ProviderXAI,
+			Label:                "xAI",
+			CredentialHint:       "XAI_API_KEY",
+			DetectedCredential:   strings.TrimSpace(getProviderAPIKey(models.ProviderXAI)) != "",
+			DetectedCredentialID: "environment",
+			SupportsManualAPIKey: true,
+		},
+	}
+
+	if strings.TrimSpace(getProviderAPIKey(models.ProviderCopilot)) != "" {
+		providers = append(providers, OnboardingProvider{
+			Provider:             models.ProviderCopilot,
+			Label:                "GitHub Copilot",
+			CredentialHint:       "Detected from GitHub / Copilot auth",
+			DetectedCredential:   true,
+			DetectedCredentialID: "detected token",
+			SupportsManualAPIKey: false,
+		})
+	}
+
+	if strings.TrimSpace(getProviderAPIKey(models.ProviderBedrock)) != "" {
+		providers = append(providers, OnboardingProvider{
+			Provider:             models.ProviderBedrock,
+			Label:                "AWS Bedrock",
+			CredentialHint:       "Detected from AWS credentials",
+			DetectedCredential:   true,
+			DetectedCredentialID: "environment",
+			SupportsManualAPIKey: false,
+		})
+	}
+
+	if strings.TrimSpace(getProviderAPIKey(models.ProviderVertexAI)) != "" {
+		providers = append(providers, OnboardingProvider{
+			Provider:             models.ProviderVertexAI,
+			Label:                "Google Vertex AI",
+			CredentialHint:       "Detected from Vertex AI environment",
+			DetectedCredential:   true,
+			DetectedCredentialID: "environment",
+			SupportsManualAPIKey: false,
+		})
+	}
+
+	if strings.TrimSpace(getProviderAPIKey(models.ProviderLocal)) != "" {
+		providers = append(providers, OnboardingProvider{
+			Provider:             models.ProviderLocal,
+			Label:                "Local OpenAI-compatible",
+			CredentialHint:       "Detected from LOCAL_ENDPOINT",
+			DetectedCredential:   true,
+			DetectedCredentialID: "environment",
+			SupportsManualAPIKey: false,
+		})
+	}
+
+	slices.SortFunc(providers, func(a, b OnboardingProvider) int {
+		rA := models.ProviderPopularity[a.Provider]
+		rB := models.ProviderPopularity[b.Provider]
+		if rA == 0 {
+			rA = 999
+		}
+		if rB == 0 {
+			rB = 999
+		}
+
+		if a.DetectedCredential != b.DetectedCredential {
+			if a.DetectedCredential {
+				return -1
+			}
+			return 1
+		}
+		return rA - rB
+	})
+
+	return providers
 }
 
 // Get returns the current configuration.
