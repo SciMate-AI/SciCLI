@@ -45,8 +45,7 @@ jobs:
           version: latest
           args: release --clean
         env:
-          GITHUB_TOKEN: ${{ secrets.HOMEBREW_GITHUB_TOKEN }}
-          AUR_KEY: ${{ secrets.AUR_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Publish npm package
         run: npm publish --access public --provenance

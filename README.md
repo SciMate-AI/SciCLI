@@ -55,11 +55,11 @@ The npm package is a thin wrapper around the Go binary. During install it tries 
 
 Tag-based release automation publishes both the GitHub release artifacts and the npm package.
 
-Required GitHub Actions secrets:
+Required GitHub Actions secret:
 
 - `NPM_TOKEN`: npm publish token for `@scimate/scicli`
-- `HOMEBREW_GITHUB_TOKEN`: token used by GoReleaser for GitHub release and tap updates
-- `AUR_KEY`: optional if AUR publishing remains enabled in GoReleaser
+
+Detailed repository setup is documented in `docs/release-setup.md`.
 
 ### Using Go
 
