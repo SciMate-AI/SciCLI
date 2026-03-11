@@ -36,9 +36,6 @@ jobs:
 
       - run: go mod download
 
-      - name: Sync npm package version from git tag
-        run: npm run release:sync-version -- "${GITHUB_REF_NAME#v}"
-
       - uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser
@@ -46,6 +43,9 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Sync npm package version from git tag
+        run: npm run release:sync-version -- "${GITHUB_REF_NAME#v}"
 
       - name: Publish npm package
         run: npm publish --access public --provenance
