@@ -27,17 +27,17 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/scimate-ai/scicli.git"
+    "url": "https://github.com/SciMate-AI/scicli"
   },
-  "homepage": "https://github.com/scimate-ai/scicli",
+  "homepage": "https://github.com/SciMate-AI/scicli",
   "bugs": {
-    "url": "https://github.com/scimate-ai/scicli/issues"
+    "url": "https://github.com/SciMate-AI/scicli/issues"
   },
   "publishConfig": {
     "access": "public"
   },
   "scicli": {
-    "releaseRepo": "scimate-ai/scicli",
+    "releaseRepo": "SciMate-AI/scicli",
     "releaseAssetPrefix": "scicli"
   }
 }
