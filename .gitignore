@@ -34,7 +34,8 @@ Thumbs.db
 *.log
 
 # Binary output directory
-/bin/
+/bin/*
+!/bin/scicli.js
 /dist/
 
 # Local environment variables
