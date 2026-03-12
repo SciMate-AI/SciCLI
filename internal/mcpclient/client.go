@@ -325,13 +325,7 @@ func (c *sseMCPClient) call(ctx context.Context, method string, params any, out 
 		if result.Error != nil {
 			return fmt.Errorf("%s", result.Error.Message)
 		}
-		if out == nil || len(result.Result) == 0 {
-			return nil
-		}
-		if err := json.Unmarshal(result.Result, out); err != nil {
-			return fmt.Errorf("failed to decode mcp result: %w", err)
-		}
-		return nil
+		return decodeMCPResult(result.Result, out)
 	case <-callCtx.Done():
 		return fmt.Errorf("mcp request timed out")
 	}
@@ -695,13 +689,7 @@ func decodeResponseBody(contentType string, body []byte, out any) error {
 	if parsed.Error != nil {
 		return fmt.Errorf("%s", parsed.Error.Message)
 	}
-	if out == nil || len(parsed.Result) == 0 {
-		return nil
-	}
-	if err := json.Unmarshal(parsed.Result, out); err != nil {
-		return fmt.Errorf("failed to decode mcp result: %w", err)
-	}
-	return nil
+	return decodeMCPResult(parsed.Result, out)
 }
 
 func decodeRPCResult(body []byte, out any) error {
@@ -712,10 +700,22 @@ func decodeRPCResult(body []byte, out any) error {
 	if parsed.Error != nil {
 		return fmt.Errorf("%s", parsed.Error.Message)
 	}
-	if out == nil || len(parsed.Result) == 0 {
+	return decodeMCPResult(parsed.Result, out)
+}
+
+func decodeMCPResult(result json.RawMessage, out any) error {
+	if out == nil || len(result) == 0 {
 		return nil
 	}
-	if err := json.Unmarshal(parsed.Result, out); err != nil {
+	if callToolResult, ok := out.(*mcp.CallToolResult); ok {
+		parsed, err := mcp.ParseCallToolResult((*json.RawMessage)(&result))
+		if err != nil {
+			return fmt.Errorf("failed to decode mcp result: %w", err)
+		}
+		*callToolResult = *parsed
+		return nil
+	}
+	if err := json.Unmarshal(result, out); err != nil {
 		return fmt.Errorf("failed to decode mcp result: %w", err)
 	}
 	return nil

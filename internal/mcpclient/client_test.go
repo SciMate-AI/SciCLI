@@ -124,3 +124,45 @@ func TestStreamableHTTPClientTracksSessionAndDecodesSSE(t *testing.T) {
 		t.Fatalf("unexpected tools response: %#v", tools.Tools)
 	}
 }
+
+func TestDecodeRPCResultParsesCallToolResult(t *testing.T) {
+	body := []byte(`{"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"hello world"}],"structuredContent":{"formula":"C8H10N4O2"},"isError":false}}`)
+
+	var result mcp.CallToolResult
+	if err := decodeRPCResult(body, &result); err != nil {
+		t.Fatalf("decodeRPCResult() error = %v", err)
+	}
+	if result.IsError {
+		t.Fatal("expected IsError to be false")
+	}
+	if len(result.Content) != 1 {
+		t.Fatalf("len(result.Content) = %d, want 1", len(result.Content))
+	}
+	text, ok := result.Content[0].(mcp.TextContent)
+	if !ok {
+		t.Fatalf("unexpected content type: %T", result.Content[0])
+	}
+	if text.Text != "hello world" {
+		t.Fatalf("text.Text = %q, want %q", text.Text, "hello world")
+	}
+}
+
+func TestDecodeResponseBodyParsesCallToolResultFromSSE(t *testing.T) {
+	body := []byte("event: message\n" +
+		"data: {\"jsonrpc\":\"2.0\",\"id\":3,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"caffeine\"}],\"structuredContent\":{\"formula\":\"C8H10N4O2\"},\"isError\":false}}\n\n")
+
+	var result mcp.CallToolResult
+	if err := decodeResponseBody("text/event-stream", body, &result); err != nil {
+		t.Fatalf("decodeResponseBody() error = %v", err)
+	}
+	if len(result.Content) != 1 {
+		t.Fatalf("len(result.Content) = %d, want 1", len(result.Content))
+	}
+	text, ok := result.Content[0].(mcp.TextContent)
+	if !ok {
+		t.Fatalf("unexpected content type: %T", result.Content[0])
+	}
+	if text.Text != "caffeine" {
+		t.Fatalf("text.Text = %q, want %q", text.Text, "caffeine")
+	}
+}
