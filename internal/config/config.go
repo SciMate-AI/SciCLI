@@ -274,13 +274,9 @@ func setDefaults(debug bool) {
 		},
 	})
 
-	// Set default shell from environment or fallback to /bin/bash
-	shellPath := os.Getenv("SHELL")
-	if shellPath == "" {
-		shellPath = "/bin/bash"
-	}
-	viper.SetDefault("shell.path", shellPath)
-	viper.SetDefault("shell.args", []string{"-l"})
+	defaultShell := DefaultShellConfig()
+	viper.SetDefault("shell.path", defaultShell.Path)
+	viper.SetDefault("shell.args", defaultShell.Args)
 
 	if debug {
 		viper.SetDefault("debug", true)
@@ -288,6 +284,28 @@ func setDefaults(debug bool) {
 	} else {
 		viper.SetDefault("debug", false)
 		viper.SetDefault("log.level", defaultLogLevel)
+	}
+}
+
+func DefaultShellConfig() ShellConfig {
+	if runtime.GOOS == "windows" {
+		path := strings.TrimSpace(os.Getenv("SCICLI_SHELL_PATH"))
+		if path == "" {
+			path = "powershell.exe"
+		}
+		return ShellConfig{
+			Path: path,
+			Args: []string{"-NoLogo", "-NoProfile"},
+		}
+	}
+
+	path := strings.TrimSpace(os.Getenv("SHELL"))
+	if path == "" {
+		path = "/bin/bash"
+	}
+	return ShellConfig{
+		Path: path,
+		Args: []string{"-l"},
 	}
 }
 

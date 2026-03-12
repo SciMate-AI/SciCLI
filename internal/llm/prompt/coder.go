@@ -174,6 +174,10 @@ func getEnvironmentInfo() string {
 	isGit := isGitRepo(cwd)
 	platform := runtime.GOOS
 	date := time.Now().Format("1/2/2006")
+	shellGuidance := "Use shell commands and paths that match the current platform."
+	if platform == "windows" {
+		shellGuidance = "Use PowerShell or other Windows-native commands and Windows paths by default. Do not assume Bash, /bin/bash, /dev/null, or POSIX paths are available."
+	}
 	ls := tools.NewLsTool()
 	r, _ := ls.Run(context.Background(), tools.ToolCall{
 		Input: `{"path":"."}`,
@@ -184,11 +188,12 @@ Working directory: %s
 Is directory a git repo: %s
 Platform: %s
 Today's date: %s
+Shell guidance: %s
 </env>
 <project>
 %s
 </project>
-		`, cwd, boolToYesNo(isGit), platform, date, r.Content)
+		`, cwd, boolToYesNo(isGit), platform, date, shellGuidance, r.Content)
 }
 
 func isGitRepo(dir string) bool {

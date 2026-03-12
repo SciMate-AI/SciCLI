@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -20,9 +21,17 @@ type PersistentShell struct {
 	stdin        *os.File
 	isAlive      bool
 	cwd          string
+	kind         shellKind
 	mu           sync.Mutex
 	commandQueue chan *commandExecution
 }
+
+type shellKind int
+
+const (
+	shellKindPOSIX shellKind = iota
+	shellKindPowerShell
+)
 
 type commandExecution struct {
 	command    string
@@ -61,26 +70,27 @@ func GetPersistentShell(workingDir string) *PersistentShell {
 func newPersistentShell(cwd string) *PersistentShell {
 	// Get shell configuration from config
 	cfg := config.Get()
-	
+
 	// Default to environment variable if config is not set or nil
 	var shellPath string
 	var shellArgs []string
-	
+
 	if cfg != nil {
 		shellPath = cfg.Shell.Path
 		shellArgs = cfg.Shell.Args
 	}
-	
+
 	if shellPath == "" {
-		shellPath = os.Getenv("SHELL")
-		if shellPath == "" {
-			shellPath = "/bin/bash"
+		defaultShell := config.DefaultShellConfig()
+		shellPath = defaultShell.Path
+		if len(shellArgs) == 0 {
+			shellArgs = defaultShell.Args
 		}
 	}
-	
+
 	// Default shell args
 	if len(shellArgs) == 0 {
-		shellArgs = []string{"-l"}
+		shellArgs = config.DefaultShellConfig().Args
 	}
 
 	cmd := exec.Command(shellPath, shellArgs...)
@@ -103,6 +113,7 @@ func newPersistentShell(cwd string) *PersistentShell {
 		stdin:        stdinPipe.(*os.File),
 		isAlive:      true,
 		cwd:          cwd,
+		kind:         detectShellKind(shellPath),
 		commandQueue: make(chan *commandExecution, 10),
 	}
 
@@ -148,11 +159,22 @@ func (s *PersistentShell) execCommand(command string, timeout time.Duration, ctx
 		}
 	}
 
-	tempDir := os.TempDir()
-	stdoutFile := filepath.Join(tempDir, fmt.Sprintf("opencode-stdout-%d", time.Now().UnixNano()))
-	stderrFile := filepath.Join(tempDir, fmt.Sprintf("opencode-stderr-%d", time.Now().UnixNano()))
-	statusFile := filepath.Join(tempDir, fmt.Sprintf("opencode-status-%d", time.Now().UnixNano()))
-	cwdFile := filepath.Join(tempDir, fmt.Sprintf("opencode-cwd-%d", time.Now().UnixNano()))
+	stdoutFile, err := createTempPath("scicli-stdout-*")
+	if err != nil {
+		return commandResult{stderr: fmt.Sprintf("Failed to create stdout file: %v", err), exitCode: 1, err: err}
+	}
+	stderrFile, err := createTempPath("scicli-stderr-*")
+	if err != nil {
+		return commandResult{stderr: fmt.Sprintf("Failed to create stderr file: %v", err), exitCode: 1, err: err}
+	}
+	statusFile, err := createTempPath("scicli-status-*")
+	if err != nil {
+		return commandResult{stderr: fmt.Sprintf("Failed to create status file: %v", err), exitCode: 1, err: err}
+	}
+	cwdFile, err := createTempPath("scicli-cwd-*")
+	if err != nil {
+		return commandResult{stderr: fmt.Sprintf("Failed to create cwd file: %v", err), exitCode: 1, err: err}
+	}
 
 	defer func() {
 		os.Remove(stdoutFile)
@@ -161,20 +183,17 @@ func (s *PersistentShell) execCommand(command string, timeout time.Duration, ctx
 		os.Remove(cwdFile)
 	}()
 
-	fullCommand := fmt.Sprintf(`
-eval %s < /dev/null > %s 2> %s
-EXEC_EXIT_CODE=$?
-pwd > %s
-echo $EXEC_EXIT_CODE > %s
-`,
-		shellQuote(command),
-		shellQuote(stdoutFile),
-		shellQuote(stderrFile),
-		shellQuote(cwdFile),
-		shellQuote(statusFile),
-	)
+	fullCommand, cleanup, err := s.buildCommandInvocation(command, stdoutFile, stderrFile, statusFile, cwdFile)
+	if err != nil {
+		return commandResult{
+			stderr:   fmt.Sprintf("Failed to prepare command execution: %v", err),
+			exitCode: 1,
+			err:      err,
+		}
+	}
+	defer cleanup()
 
-	_, err := s.stdin.Write([]byte(fullCommand + "\n"))
+	_, err = s.stdin.Write([]byte(fullCommand + "\n"))
 	if err != nil {
 		return commandResult{
 			stderr:   fmt.Sprintf("Failed to write command to shell: %v", err),
@@ -248,6 +267,12 @@ func (s *PersistentShell) killChildren() {
 		return
 	}
 
+	if s.kind == shellKindPowerShell || runtime.GOOS == "windows" {
+		_ = exec.Command("taskkill", "/T", "/F", "/PID", fmt.Sprintf("%d", s.cmd.Process.Pid)).Run()
+		s.isAlive = false
+		return
+	}
+
 	pgrepCmd := exec.Command("pgrep", "-P", fmt.Sprintf("%d", s.cmd.Process.Pid))
 	output, err := pgrepCmd.Output()
 	if err != nil {
@@ -303,6 +328,96 @@ func (s *PersistentShell) Close() {
 
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
+}
+
+func powerShellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
+}
+
+func (s *PersistentShell) buildCommandInvocation(command, stdoutFile, stderrFile, statusFile, cwdFile string) (string, func(), error) {
+	switch s.kind {
+	case shellKindPowerShell:
+		return buildPowerShellInvocation(command, stdoutFile, stderrFile, statusFile, cwdFile)
+	default:
+		return buildPOSIXInvocation(command, stdoutFile, stderrFile, statusFile, cwdFile), func() {}, nil
+	}
+}
+
+func buildPOSIXInvocation(command, stdoutFile, stderrFile, statusFile, cwdFile string) string {
+	return fmt.Sprintf(`
+eval %s < /dev/null > %s 2> %s
+EXEC_EXIT_CODE=$?
+pwd > %s
+echo $EXEC_EXIT_CODE > %s
+`,
+		shellQuote(command),
+		shellQuote(stdoutFile),
+		shellQuote(stderrFile),
+		shellQuote(cwdFile),
+		shellQuote(statusFile),
+	)
+}
+
+func buildPowerShellInvocation(command, stdoutFile, stderrFile, statusFile, cwdFile string) (string, func(), error) {
+	scriptFile, err := createTempPath("scicli-shell-*.ps1")
+	if err != nil {
+		return "", func() {}, err
+	}
+
+	script := fmt.Sprintf(`$global:LASTEXITCODE = 0
+$execExitCode = 0
+try {
+    Invoke-Expression %s 1> %s 2> %s
+    if ($null -ne $LASTEXITCODE) {
+        $execExitCode = [int]$LASTEXITCODE
+    }
+} catch {
+    $_ | Out-File -FilePath %s -Append -Encoding utf8
+    $execExitCode = 1
+}
+(Get-Location).Path | Set-Content -Path %s -Encoding utf8
+$execExitCode | Set-Content -Path %s -Encoding utf8
+`,
+		powerShellQuote(command),
+		powerShellQuote(stdoutFile),
+		powerShellQuote(stderrFile),
+		powerShellQuote(stderrFile),
+		powerShellQuote(cwdFile),
+		powerShellQuote(statusFile),
+	)
+	if err := os.WriteFile(scriptFile, []byte(script), 0o600); err != nil {
+		_ = os.Remove(scriptFile)
+		return "", func() {}, err
+	}
+
+	invocation := ". " + powerShellQuote(scriptFile)
+	cleanup := func() {
+		_ = os.Remove(scriptFile)
+	}
+	return invocation, cleanup, nil
+}
+
+func createTempPath(pattern string) (string, error) {
+	file, err := os.CreateTemp("", pattern)
+	if err != nil {
+		return "", err
+	}
+	path := file.Name()
+	if closeErr := file.Close(); closeErr != nil {
+		_ = os.Remove(path)
+		return "", closeErr
+	}
+	return path, nil
+}
+
+func detectShellKind(shellPath string) shellKind {
+	base := strings.ToLower(filepath.Base(strings.TrimSpace(shellPath)))
+	switch base {
+	case "powershell.exe", "powershell", "pwsh.exe", "pwsh":
+		return shellKindPowerShell
+	default:
+		return shellKindPOSIX
+	}
 }
 
 func readFileOrEmpty(path string) string {

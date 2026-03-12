@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"runtime"
 	"strings"
 	"time"
 
@@ -56,6 +57,10 @@ var safeReadOnlyCommands = []string{
 
 func bashDescription() string {
 	bannedCommandsStr := strings.Join(bannedCommands, ", ")
+	shellGuidance := "Use POSIX shell syntax and paths that match the current environment."
+	if runtime.GOOS == "windows" {
+		shellGuidance = "This SciCLI session is running on Windows. Prefer PowerShell/native Windows commands and Windows paths. Do not assume /bin/bash, /dev/null, or POSIX-only utilities are available."
+	}
 	return fmt.Sprintf(`Executes a given bash command in a persistent shell session with optional timeout, ensuring proper handling and security measures.
 
 Before executing the command, please follow these steps:
@@ -81,6 +86,7 @@ Before executing the command, please follow these steps:
  - If any errors occurred during execution, include those in the output.
 
 Usage notes:
+- %s
 - The command argument is required.
 - You can specify an optional timeout in milliseconds (up to 600000ms / 10 minutes). If not specified, commands will timeout after 30 minutes.
 - VERY IMPORTANT: You MUST avoid using search commands like 'find' and 'grep'. Instead use Grep, Glob, or Agent tools to search. You MUST avoid read tools like 'cat', 'head', 'tail', and 'ls', and use FileRead and LS tools to read files.
@@ -200,7 +206,7 @@ EOF
 
 Important:
 - Return an empty response - the user will see the gh output directly
-- Never update git config`, bannedCommandsStr, MaxOutputLength)
+- Never update git config`, bannedCommandsStr, MaxOutputLength, shellGuidance)
 }
 
 func NewBashTool(permission permission.Service) BaseTool {
@@ -285,6 +291,9 @@ func (b *bashTool) Run(ctx context.Context, call ToolCall) (ToolResponse, error)
 	}
 	startTime := time.Now()
 	shell := shell.GetPersistentShell(config.WorkingDirectory())
+	if shell == nil {
+		return NewTextErrorResponse("failed to start configured shell"), nil
+	}
 	stdout, stderr, exitCode, interrupted, err := shell.Exec(ctx, params.Command, params.Timeout)
 	if err != nil {
 		return ToolResponse{}, fmt.Errorf("error executing command: %w", err)
