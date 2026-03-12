@@ -211,7 +211,7 @@ func (c *Client) prepareArgs(args map[string]any, tool *mcp.Tool) (map[string]an
 		args = map[string]any{}
 	}
 	if toolWantsAccessToken(tool) {
-		if _, exists := args["access_token"]; !exists {
+		if !hasUsableAccessToken(args) {
 			token, err := c.auth.RequireAccessToken()
 			if err != nil {
 				return nil, err
@@ -220,6 +220,18 @@ func (c *Client) prepareArgs(args map[string]any, tool *mcp.Tool) (map[string]an
 		}
 	}
 	return args, nil
+}
+
+func hasUsableAccessToken(args map[string]any) bool {
+	if args == nil {
+		return false
+	}
+	raw, exists := args["access_token"]
+	if !exists {
+		return false
+	}
+	token, ok := raw.(string)
+	return ok && strings.TrimSpace(token) != ""
 }
 
 func toolWantsAccessToken(tool *mcp.Tool) bool {

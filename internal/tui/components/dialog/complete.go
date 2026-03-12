@@ -1,16 +1,16 @@
 package dialog
 
 import (
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/textarea"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/SciMate-AI/scicli/internal/logging"
 	utilComponents "github.com/SciMate-AI/scicli/internal/tui/components/util"
 	"github.com/SciMate-AI/scicli/internal/tui/layout"
 	"github.com/SciMate-AI/scicli/internal/tui/styles"
 	"github.com/SciMate-AI/scicli/internal/tui/theme"
 	"github.com/SciMate-AI/scicli/internal/tui/util"
+	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/textarea"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 type CompletionItem struct {
@@ -237,7 +237,9 @@ func (c *completionDialogCmp) SetWidth(width int) {
 }
 
 func (c *completionDialogCmp) BindingKeys() []key.Binding {
-	return layout.KeyMapToSlice(completionDialogKeys)
+	bindings := layout.KeyMapToSlice(completionDialogKeys)
+	bindings = append(bindings, c.listView.BindingKeys()...)
+	return bindings
 }
 
 func NewCompletionDialogCmp(completionProvider CompletionProvider) CompletionDialog {

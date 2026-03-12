@@ -12,9 +12,9 @@ Adapted from the original `opencode` code-agent baseline and significantly exten
 SciCLI is not just a generic terminal chat wrapper around an LLM. It is designed to be a practical coding and scientific workflow agent with a local-first terminal UX and built-in support for SciMate services.
 
 - **SciMate-native MCP integration**: SciCLI boots with default remote MCP endpoints for `cae-agent`, `origin`, and `rdkit`, so chemistry, CAE, and origin-analysis workflows can be exposed as normal agent tools.
-- **Built-in SciMate auth flow**: `scicli auth login` stores your session locally, and MCP tools that require `access_token` can receive it automatically instead of asking the user to paste tokens into prompts.
+- **Built-in SciMate auth flow**: `scicli auth register|login|logout|status` store a persistent local session, and MCP tools that require `access_token` can receive a refreshed token automatically instead of asking the user to paste credentials into prompts.
 - **Context-window protection for long tool outputs**: long MCP tool returns are compacted before being sent back to the model, while the full raw result remains available in metadata for the UI. This reduces 400 errors caused by oversized tool context.
-- **Terminal UI built for tool-heavy sessions**: sessions, permissions, logs, model switching, file edits, and tool results all live in the TUI. Tool output can be expanded or collapsed with `Ctrl+G` so large results do not swamp the chat view.
+- **Terminal UI built for tool-heavy sessions**: sessions, permissions, logs, account actions, provider/model switching, file edits, and tool results all live in the TUI. Long histories can be browsed with mouse wheel support, a visible scrollbar, and scroll position hints.
 - **Local coding tools plus remote tools**: the agent can inspect files, run shell commands, edit code, apply patches, fetch URLs, read diagnostics, and call MCP tools in the same conversation.
 - **Conversation continuity**: automatic session compaction summarizes long conversations before they exceed the current model's context window, so work can continue without manually restarting from scratch.
 - **Project memory support**: SciCLI automatically looks for files such as `SCICLI.md`, `scicli.md`, `CLAUDE.md`, and `.github/copilot-instructions.md` to load project-specific guidance into the agent context.
@@ -74,7 +74,7 @@ You can also configure providers manually in `~/.scicli.json`.
 scicli auth login
 ```
 
-After login, remote MCP tools whose schema includes `access_token` can use the stored token automatically.
+After login, remote MCP tools whose schema includes `access_token` can use the stored token automatically. SciCLI will also refresh the token before protected calls when the saved session is close to expiry.
 
 ### 4. Optional local dependencies
 
@@ -105,6 +105,7 @@ scicli -p "Check whether the tests mention flaky behavior" -q
 ### Auth commands
 
 ```bash
+scicli auth register
 scicli auth login
 scicli auth status
 scicli auth logout
@@ -130,7 +131,10 @@ scicli runs artifacts list
 
 ### Terminal UI
 
-- Session sidebar with persistent conversation history
+- Command palette (`Ctrl+K`) for account actions, session switching, and provider/model switching
+- Session history browser with persistent saved sessions
+- Scrollable conversation history with mouse wheel support, visible scrollbar, and position indicator
+- Account dialog for register/login/logout/token refresh from inside the UI
 - Model/provider switcher from inside the UI
 - Permission prompts for tool execution
 - Logs view for debugging and tool inspection
@@ -367,14 +371,23 @@ Common shortcuts:
 
 - `Ctrl+C`: quit
 - `Ctrl+L`: open logs
-- `Ctrl+A`: switch sessions
-- `Ctrl+K`: open command dialog
-- `Ctrl+O`: switch model
-- `Ctrl+N`: create new session
-- `Ctrl+X`: cancel current generation
-- `Ctrl+E`: open external editor
+- `Ctrl+S`: switch sessions
+- `Ctrl+K`: open the command palette
+- `Ctrl+O`: switch provider / model
+- `Ctrl+N`: create a new session
+- `Ctrl+E`: open the external editor
+- `Ctrl+F`: open the file picker
+- `Ctrl+T`: switch theme
 - `Ctrl+G`: toggle tool output expansion
-- `Esc`: close current overlay or leave editor focus
+- `PgUp` / `PgDn` / `Ctrl+U` / `Ctrl+D`: scroll chat history
+- `Esc`: cancel current generation or close the active overlay
+
+Useful command-palette actions:
+
+- `Account`: open the account panel with current login status
+- `Login` / `Register` / `Logout` / `Refresh Login`
+- `Switch Session`
+- `Switch Provider / Model`
 
 The in-app help dialog shows the current complete keymap.
 

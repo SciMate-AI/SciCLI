@@ -1,14 +1,14 @@
 package dialog
 
 import (
-	"github.com/charmbracelet/bubbles/key"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	utilComponents "github.com/SciMate-AI/scicli/internal/tui/components/util"
 	"github.com/SciMate-AI/scicli/internal/tui/layout"
 	"github.com/SciMate-AI/scicli/internal/tui/styles"
 	"github.com/SciMate-AI/scicli/internal/tui/theme"
 	"github.com/SciMate-AI/scicli/internal/tui/util"
+	"github.com/charmbracelet/bubbles/key"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // Command represents a command that can be executed
@@ -105,6 +105,9 @@ func (c *commandDialogCmp) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		c.width = msg.Width
 		c.height = msg.Height
+		if c.height > 0 {
+			c.listView.SetMaxVisibleItems(max(6, min(14, c.height/2)))
+		}
 	}
 
 	u, cmd := c.listView.Update(msg)
@@ -159,7 +162,9 @@ func (c *commandDialogCmp) View() string {
 }
 
 func (c *commandDialogCmp) BindingKeys() []key.Binding {
-	return layout.KeyMapToSlice(commandKeys)
+	bindings := layout.KeyMapToSlice(commandKeys)
+	bindings = append(bindings, c.listView.BindingKeys()...)
+	return bindings
 }
 
 func (c *commandDialogCmp) SetCommands(commands []Command) {

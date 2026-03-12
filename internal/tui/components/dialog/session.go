@@ -1,25 +1,25 @@
 package dialog
 
 import (
-	"github.com/charmbracelet/bubbles/key"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"fmt"
+
 	"github.com/SciMate-AI/scicli/internal/session"
+	utilComponents "github.com/SciMate-AI/scicli/internal/tui/components/util"
 	"github.com/SciMate-AI/scicli/internal/tui/layout"
 	"github.com/SciMate-AI/scicli/internal/tui/styles"
 	"github.com/SciMate-AI/scicli/internal/tui/theme"
 	"github.com/SciMate-AI/scicli/internal/tui/util"
+	"github.com/charmbracelet/bubbles/key"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
-// SessionSelectedMsg is sent when a session is selected
 type SessionSelectedMsg struct {
 	Session session.Session
 }
 
-// CloseSessionDialogMsg is sent when the session dialog is closed
 type CloseSessionDialogMsg struct{}
 
-// SessionDialog interface for the session switching dialog
 type SessionDialog interface {
 	tea.Model
 	layout.Bindings
@@ -28,31 +28,44 @@ type SessionDialog interface {
 }
 
 type sessionDialogCmp struct {
+	listView          utilComponents.SimpleList[sessionListItem]
 	sessions          []session.Session
-	selectedIdx       int
 	width             int
 	height            int
 	selectedSessionID string
 }
 
+type sessionListItem struct {
+	session session.Session
+}
+
+func (s sessionListItem) Render(selected bool, width int) string {
+	t := theme.CurrentTheme()
+	baseStyle := styles.BaseStyle()
+
+	itemStyle := baseStyle.
+		Width(width).
+		Padding(0, 1)
+	if selected {
+		itemStyle = itemStyle.
+			Background(t.Primary()).
+			Foreground(t.Background()).
+			Bold(true)
+	}
+
+	title := s.session.Title
+	if title == "" {
+		title = "(untitled session)"
+	}
+	return itemStyle.Render(title)
+}
+
 type sessionKeyMap struct {
-	Up     key.Binding
-	Down   key.Binding
 	Enter  key.Binding
 	Escape key.Binding
-	J      key.Binding
-	K      key.Binding
 }
 
 var sessionKeys = sessionKeyMap{
-	Up: key.NewBinding(
-		key.WithKeys("up"),
-		key.WithHelp("↑", "previous session"),
-	),
-	Down: key.NewBinding(
-		key.WithKeys("down"),
-		key.WithHelp("↓", "next session"),
-	),
 	Enter: key.NewBinding(
 		key.WithKeys("enter"),
 		key.WithHelp("enter", "select session"),
@@ -61,39 +74,22 @@ var sessionKeys = sessionKeyMap{
 		key.WithKeys("esc"),
 		key.WithHelp("esc", "close"),
 	),
-	J: key.NewBinding(
-		key.WithKeys("j"),
-		key.WithHelp("j", "next session"),
-	),
-	K: key.NewBinding(
-		key.WithKeys("k"),
-		key.WithHelp("k", "previous session"),
-	),
 }
 
 func (s *sessionDialogCmp) Init() tea.Cmd {
-	return nil
+	return s.listView.Init()
 }
 
 func (s *sessionDialogCmp) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmds []tea.Cmd
+
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch {
-		case key.Matches(msg, sessionKeys.Up) || key.Matches(msg, sessionKeys.K):
-			if s.selectedIdx > 0 {
-				s.selectedIdx--
-			}
-			return s, nil
-		case key.Matches(msg, sessionKeys.Down) || key.Matches(msg, sessionKeys.J):
-			if s.selectedIdx < len(s.sessions)-1 {
-				s.selectedIdx++
-			}
-			return s, nil
 		case key.Matches(msg, sessionKeys.Enter):
-			if len(s.sessions) > 0 {
-				return s, util.CmdHandler(SessionSelectedMsg{
-					Session: s.sessions[s.selectedIdx],
-				})
+			selectedItem, idx := s.listView.GetSelectedItem()
+			if idx != -1 {
+				return s, util.CmdHandler(SessionSelectedMsg{Session: selectedItem.session})
 			}
 		case key.Matches(msg, sessionKeys.Escape):
 			return s, util.CmdHandler(CloseSessionDialogMsg{})
@@ -101,14 +97,19 @@ func (s *sessionDialogCmp) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		s.width = msg.Width
 		s.height = msg.Height
+		s.setVisibleRows()
 	}
-	return s, nil
+
+	u, cmd := s.listView.Update(msg)
+	s.listView = u.(utilComponents.SimpleList[sessionListItem])
+	cmds = append(cmds, cmd)
+	return s, tea.Batch(cmds...)
 }
 
 func (s *sessionDialogCmp) View() string {
 	t := theme.CurrentTheme()
 	baseStyle := styles.BaseStyle()
-	
+
 	if len(s.sessions) == 0 {
 		return baseStyle.Padding(1, 2).
 			Border(lipgloss.RoundedBorder()).
@@ -118,62 +119,31 @@ func (s *sessionDialogCmp) View() string {
 			Render("No sessions available")
 	}
 
-	// Calculate max width needed for session titles
-	maxWidth := 40 // Minimum width
+	maxWidth := 40
 	for _, sess := range s.sessions {
-		if len(sess.Title) > maxWidth-4 { // Account for padding
+		if len(sess.Title) > maxWidth-4 {
 			maxWidth = len(sess.Title) + 4
 		}
 	}
-
-	maxWidth = max(30, min(maxWidth, s.width-15)) // Limit width to avoid overflow
-
-	// Limit height to avoid taking up too much screen space
-	maxVisibleSessions := min(10, len(s.sessions))
-
-	// Build the session list
-	sessionItems := make([]string, 0, maxVisibleSessions)
-	startIdx := 0
-
-	// If we have more sessions than can be displayed, adjust the start index
-	if len(s.sessions) > maxVisibleSessions {
-		// Center the selected item when possible
-		halfVisible := maxVisibleSessions / 2
-		if s.selectedIdx >= halfVisible && s.selectedIdx < len(s.sessions)-halfVisible {
-			startIdx = s.selectedIdx - halfVisible
-		} else if s.selectedIdx >= len(s.sessions)-halfVisible {
-			startIdx = len(s.sessions) - maxVisibleSessions
-		}
+	if s.width > 0 {
+		maxWidth = max(30, min(maxWidth, s.width-15))
 	}
 
-	endIdx := min(startIdx+maxVisibleSessions, len(s.sessions))
-
-	for i := startIdx; i < endIdx; i++ {
-		sess := s.sessions[i]
-		itemStyle := baseStyle.Width(maxWidth)
-
-		if i == s.selectedIdx {
-			itemStyle = itemStyle.
-				Background(t.Primary()).
-				Foreground(t.Background()).
-				Bold(true)
-		}
-
-		sessionItems = append(sessionItems, itemStyle.Padding(0, 1).Render(sess.Title))
-	}
+	s.listView.SetMaxWidth(maxWidth)
+	s.setVisibleRows()
 
 	title := baseStyle.
 		Foreground(t.Primary()).
 		Bold(true).
 		Width(maxWidth).
 		Padding(0, 1).
-		Render("Switch Session")
+		Render(fmt.Sprintf("Switch Session (%d)", len(s.sessions)))
 
 	content := lipgloss.JoinVertical(
 		lipgloss.Left,
 		title,
 		baseStyle.Width(maxWidth).Render(""),
-		baseStyle.Width(maxWidth).Render(lipgloss.JoinVertical(lipgloss.Left, sessionItems...)),
+		baseStyle.Width(maxWidth).Render(s.listView.View()),
 		baseStyle.Width(maxWidth).Render(""),
 	)
 
@@ -186,45 +156,59 @@ func (s *sessionDialogCmp) View() string {
 }
 
 func (s *sessionDialogCmp) BindingKeys() []key.Binding {
-	return layout.KeyMapToSlice(sessionKeys)
+	bindings := layout.KeyMapToSlice(sessionKeys)
+	bindings = append(bindings, s.listView.BindingKeys()...)
+	return bindings
 }
 
 func (s *sessionDialogCmp) SetSessions(sessions []session.Session) {
 	s.sessions = sessions
 
-	// If we have a selected session ID, find its index
-	if s.selectedSessionID != "" {
-		for i, sess := range sessions {
-			if sess.ID == s.selectedSessionID {
-				s.selectedIdx = i
-				return
-			}
+	items := make([]sessionListItem, 0, len(sessions))
+	for _, sess := range sessions {
+		items = append(items, sessionListItem{session: sess})
+	}
+	s.listView.SetItems(items)
+
+	if s.selectedSessionID == "" {
+		s.listView.SetSelectedIndex(0)
+		return
+	}
+	for i, sess := range sessions {
+		if sess.ID == s.selectedSessionID {
+			s.listView.SetSelectedIndex(i)
+			return
 		}
 	}
-
-	// Default to first session if selected not found
-	s.selectedIdx = 0
+	s.listView.SetSelectedIndex(0)
 }
 
 func (s *sessionDialogCmp) SetSelectedSession(sessionID string) {
 	s.selectedSessionID = sessionID
-
-	// Update the selected index if sessions are already loaded
-	if len(s.sessions) > 0 {
-		for i, sess := range s.sessions {
-			if sess.ID == sessionID {
-				s.selectedIdx = i
-				return
-			}
+	for i, sess := range s.sessions {
+		if sess.ID == sessionID {
+			s.listView.SetSelectedIndex(i)
+			return
 		}
 	}
 }
 
-// NewSessionDialogCmp creates a new session switching dialog
+func (s *sessionDialogCmp) setVisibleRows() {
+	rows := 10
+	if s.height > 0 {
+		rows = max(6, min(18, s.height/2))
+	}
+	s.listView.SetMaxVisibleItems(rows)
+}
+
 func NewSessionDialogCmp() SessionDialog {
 	return &sessionDialogCmp{
-		sessions:          []session.Session{},
-		selectedIdx:       0,
-		selectedSessionID: "",
+		listView: utilComponents.NewSimpleList(
+			[]sessionListItem{},
+			10,
+			"No sessions available",
+			true,
+		),
+		sessions: []session.Session{},
 	}
 }

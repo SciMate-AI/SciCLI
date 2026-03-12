@@ -45,6 +45,7 @@ Thumbs.db
 .opencode/
 .scicli/
 .tmp-go-cache/
+.tmp-go-build/
 .tmp-go-modcache/
 .tmp-npm-cache/
 .tmp-npm-install/

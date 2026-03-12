@@ -102,22 +102,16 @@ func (s *Service) Logout() error {
 }
 
 func (s *Service) Status() (*Session, error) {
-	return s.store.Load()
+	return s.currentSession(true)
 }
 
 func (s *Service) GetAccessToken() (string, error) {
-	session, err := s.store.Load()
+	session, err := s.currentSession(true)
 	if err != nil {
 		return "", err
 	}
 	if session == nil {
 		return "", nil
-	}
-	if session.RefreshToken != "" && isLikelyExpired(session) {
-		refreshed, refreshErr := s.Refresh()
-		if refreshErr == nil {
-			return refreshed.AccessToken, nil
-		}
 	}
 	return session.AccessToken, nil
 }
@@ -134,7 +128,7 @@ func (s *Service) RequireAccessToken() (string, error) {
 }
 
 func (s *Service) Refresh() (*Session, error) {
-	session, err := s.store.Load()
+	session, err := s.currentSession(false)
 	if err != nil {
 		return nil, err
 	}
@@ -168,6 +162,23 @@ func (s *Service) Refresh() (*Session, error) {
 		return nil, err
 	}
 	return refreshed, nil
+}
+
+func (s *Service) currentSession(allowRefresh bool) (*Session, error) {
+	session, err := s.store.Load()
+	if err != nil {
+		return nil, err
+	}
+	if session == nil {
+		return nil, nil
+	}
+	if allowRefresh && session.RefreshToken != "" && isLikelyExpired(session) {
+		refreshed, refreshErr := s.Refresh()
+		if refreshErr == nil {
+			return refreshed, nil
+		}
+	}
+	return session, nil
 }
 
 func (s *Service) request(method, path string, payload any, out any) error {

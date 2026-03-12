@@ -102,7 +102,7 @@ func runTool(ctx context.Context, c MCPClient, tool mcp.Tool, input string) (too
 		if authErr != nil {
 			return tools.NewTextErrorResponse(authErr.Error()), nil
 		}
-		if _, exists := args["access_token"]; !exists {
+		if !hasUsableAccessToken(args) {
 			token, tokenErr := authSvc.RequireAccessToken()
 			if tokenErr != nil {
 				return tools.NewTextErrorResponse(tokenErr.Error()), nil
@@ -361,6 +361,18 @@ func isAuthError(err error) bool {
 		strings.Contains(msg, "access_token") ||
 		strings.Contains(msg, "access token") ||
 		strings.Contains(msg, "jwt")
+}
+
+func hasUsableAccessToken(args map[string]any) bool {
+	if args == nil {
+		return false
+	}
+	raw, exists := args["access_token"]
+	if !exists {
+		return false
+	}
+	token, ok := raw.(string)
+	return ok && strings.TrimSpace(token) != ""
 }
 
 func (b *mcpTool) Run(ctx context.Context, params tools.ToolCall) (tools.ToolResponse, error) {

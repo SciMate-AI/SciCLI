@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"strings"
 
 	"github.com/SciMate-AI/scicli/internal/app"
 	"github.com/SciMate-AI/scicli/internal/message"
@@ -37,6 +38,7 @@ type messagesCmp struct {
 	rendering     bool
 	expandTools   bool
 	attachments   viewport.Model
+	contentLines  int
 }
 type renderFinishedMsg struct{}
 
@@ -100,6 +102,10 @@ func (m *messagesCmp) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.expandTools = !m.expandTools
 			m.rerender()
 		}
+	case tea.MouseMsg:
+		u, cmd := m.viewport.Update(msg)
+		m.viewport = u
+		cmds = append(cmds, cmd)
 
 	case renderFinishedMsg:
 		m.rendering = false
@@ -256,16 +262,16 @@ func (m *messagesCmp) renderView() {
 		)
 	}
 
-	m.viewport.SetContent(
-		baseStyle.
-			Width(m.width).
-			Render(
-				lipgloss.JoinVertical(
-					lipgloss.Top,
-					messages...,
-				),
+	content := baseStyle.
+		Width(m.viewport.Width).
+		Render(
+			lipgloss.JoinVertical(
+				lipgloss.Top,
+				messages...,
 			),
-	)
+		)
+	m.contentLines = strings.Count(content, "\n") + 1
+	m.viewport.SetContent(content)
 }
 
 func (m *messagesCmp) View() string {
@@ -279,7 +285,7 @@ func (m *messagesCmp) View() string {
 					lipgloss.Top,
 					"Loading...",
 					m.working(),
-					m.help(),
+					m.footer(),
 				),
 			)
 	}
@@ -298,7 +304,7 @@ func (m *messagesCmp) View() string {
 					lipgloss.Top,
 					content,
 					"",
-					m.help(),
+					m.footer(),
 				),
 			)
 	}
@@ -308,9 +314,9 @@ func (m *messagesCmp) View() string {
 		Render(
 			lipgloss.JoinVertical(
 				lipgloss.Top,
-				m.viewport.View(),
+				m.renderViewport(),
 				m.working(),
-				m.help(),
+				m.footer(),
 			),
 		)
 }
@@ -386,7 +392,7 @@ func (m *messagesCmp) working() string {
 	return text
 }
 
-func (m *messagesCmp) help() string {
+func (m *messagesCmp) helpText() string {
 	t := theme.CurrentTheme()
 	baseStyle := styles.BaseStyle()
 
@@ -418,9 +424,7 @@ func (m *messagesCmp) help() string {
 			baseStyle.Foreground(t.TextMuted()).Bold(true).Render(" to toggle tool output"),
 		)
 	}
-	return baseStyle.
-		Width(m.width).
-		Render(text)
+	return text
 }
 
 func (m *messagesCmp) initialScreen() string {
@@ -449,7 +453,7 @@ func (m *messagesCmp) SetSize(width, height int) tea.Cmd {
 	}
 	m.width = width
 	m.height = height
-	m.viewport.Width = width
+	m.viewport.Width = max(1, width-2)
 	m.viewport.Height = height - 2
 	m.attachments.Width = width + 40
 	m.attachments.Height = 3
@@ -508,4 +512,92 @@ func NewMessagesCmp(app *app.App) tea.Model {
 		spinner:       s,
 		attachments:   attachmets,
 	}
+}
+
+func (m *messagesCmp) renderViewport() string {
+	if m.width <= 0 {
+		return ""
+	}
+	return lipgloss.JoinHorizontal(
+		lipgloss.Top,
+		m.viewport.View(),
+		m.renderScrollbar(),
+	)
+}
+
+func (m *messagesCmp) renderScrollbar() string {
+	t := theme.CurrentTheme()
+	baseStyle := styles.BaseStyle()
+
+	height := max(1, m.viewport.Height)
+	if m.contentLines <= height {
+		return baseStyle.Foreground(t.TextMuted()).Render(strings.Repeat(" ", 1))
+	}
+
+	thumbSize := max(1, int(math.Round(float64(height*height)/float64(max(1, m.contentLines)))))
+	maxTop := max(0, height-thumbSize)
+	thumbTop := 0
+	if maxTop > 0 {
+		thumbTop = int(math.Round(m.viewport.ScrollPercent() * float64(maxTop)))
+	}
+
+	lines := make([]string, 0, height)
+	for i := 0; i < height; i++ {
+		ch := "|"
+		color := t.TextMuted()
+		if i >= thumbTop && i < thumbTop+thumbSize {
+			ch = "#"
+			color = t.Primary()
+		}
+		lines = append(lines, baseStyle.Foreground(color).Render(ch))
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, lines...)
+}
+
+func (m *messagesCmp) footer() string {
+	baseStyle := styles.BaseStyle()
+
+	left := m.scrollStatusText()
+	right := m.helpText()
+	if left == "" {
+		return baseStyle.Width(m.width).Render(right)
+	}
+
+	space := m.width - lipgloss.Width(left) - lipgloss.Width(right)
+	if space < 1 {
+		return baseStyle.Width(m.width).Render(left + " " + right)
+	}
+	return baseStyle.Width(m.width).Render(left + strings.Repeat(" ", space) + right)
+}
+
+func (m *messagesCmp) scrollStatusText() string {
+	t := theme.CurrentTheme()
+	baseStyle := styles.BaseStyle()
+
+	if len(m.messages) == 0 {
+		return ""
+	}
+
+	position := "top"
+	switch {
+	case m.contentLines <= m.viewport.Height:
+		position = "all"
+	case m.viewport.AtBottom():
+		position = "bottom"
+	case !m.viewport.AtTop():
+		position = fmt.Sprintf("%.0f%%", m.viewport.ScrollPercent()*100)
+	}
+
+	up := " "
+	if !m.viewport.AtTop() {
+		up = "^"
+	}
+	down := " "
+	if !m.viewport.AtBottom() {
+		down = "v"
+	}
+
+	return baseStyle.
+		Foreground(t.TextMuted()).
+		Render(fmt.Sprintf("%s%s history %s", up, down, position))
 }
