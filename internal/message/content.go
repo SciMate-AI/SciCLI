@@ -223,6 +223,16 @@ func (m *Message) AppendContent(delta string) {
 	}
 }
 
+func (m *Message) SetContent(text string) {
+	for i, part := range m.Parts {
+		if _, ok := part.(TextContent); ok {
+			m.Parts[i] = TextContent{Text: text}
+			return
+		}
+	}
+	m.Parts = append(m.Parts, TextContent{Text: text})
+}
+
 func (m *Message) AppendReasoningContent(delta string) {
 	found := false
 	for i, part := range m.Parts {

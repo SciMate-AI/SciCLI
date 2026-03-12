@@ -58,6 +58,9 @@ type Service interface {
 
 type agent struct {
 	*pubsub.Broker[AgentEvent]
+	agentName config.AgentName
+	maxTokens int64
+
 	sessions session.Service
 	messages message.Service
 
@@ -98,7 +101,9 @@ func NewAgent(
 
 	agent := &agent{
 		Broker:            pubsub.NewBroker[AgentEvent](),
+		agentName:         agentName,
 		provider:          agentProvider,
+		maxTokens:         configuredAgentMaxTokens(agentName, agentProvider.Model()),
 		messages:          messages,
 		sessions:          sessions,
 		tools:             agentTools,
@@ -272,6 +277,7 @@ func (a *agent) processGeneration(ctx context.Context, sessionID, content string
 	}
 	// Append the new user message to the conversation history.
 	msgHistory := append(msgs, userMsg)
+	loopState := newExecutionLoopState()
 
 	for {
 		// Check for cancellation before each iteration
@@ -281,7 +287,18 @@ func (a *agent) processGeneration(ctx context.Context, sessionID, content string
 		default:
 			// Continue processing
 		}
-		agentMessage, toolResults, err := a.streamAndHandleEvents(ctx, sessionID, msgHistory)
+		persistentHistory, requestHistory, err := a.prepareHistoryForTurn(ctx, sessionID, msgHistory, &loopState)
+		if err != nil {
+			return a.err(fmt.Errorf("failed to prepare history: %w", err))
+		}
+		msgHistory = persistentHistory
+
+		availableTools := a.tools
+		if !loopState.toolsAllowed() {
+			availableTools = nil
+		}
+
+		agentMessage, toolResults, err := a.streamAndHandleEvents(ctx, sessionID, requestHistory, availableTools)
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				agentMessage.AddFinish(message.FinishReasonCanceled)
@@ -291,17 +308,38 @@ func (a *agent) processGeneration(ctx context.Context, sessionID, content string
 			return a.err(fmt.Errorf("failed to process events: %w", err))
 		}
 		if cfg.Debug {
-			seqId := (len(msgHistory) + 1) / 2
+			seqId := (len(requestHistory) + 1) / 2
 			toolResultFilepath := logging.WriteToolResultsJson(sessionID, seqId, toolResults)
 			logging.Info("Result", "message", agentMessage.FinishReason(), "toolResults", "{}", "filepath", toolResultFilepath)
 		} else {
 			logging.Info("Result", "message", agentMessage.FinishReason(), "toolResults", toolResults)
 		}
 		if (agentMessage.FinishReason() == message.FinishReasonToolUse) && toolResults != nil {
-			// We are not done, we need to respond with the tool response
+			loopState.toolRounds++
 			msgHistory = append(msgHistory, agentMessage, *toolResults)
 			continue
 		}
+
+		decision := sanitizeLoopDecision(&agentMessage)
+		if err := a.messages.Update(context.Background(), agentMessage); err != nil {
+			return a.err(fmt.Errorf("failed to update loop decision message: %w", err))
+		}
+
+		if loopState.phase == loopPhasePlan {
+			msgHistory = append(msgHistory, agentMessage)
+			loopState.phase = loopPhaseReview
+			loopState.injectControl = true
+			continue
+		}
+
+		if decision != loopDecisionComplete && !loopState.isLastStep() {
+			msgHistory = append(msgHistory, agentMessage)
+			loopState.currentStep++
+			loopState.phase = loopPhasePlan
+			loopState.injectControl = true
+			continue
+		}
+
 		return AgentEvent{
 			Type:    AgentEventTypeResponse,
 			Message: agentMessage,
@@ -319,9 +357,9 @@ func (a *agent) createUserMessage(ctx context.Context, sessionID, content string
 	})
 }
 
-func (a *agent) streamAndHandleEvents(ctx context.Context, sessionID string, msgHistory []message.Message) (message.Message, *message.Message, error) {
+func (a *agent) streamAndHandleEvents(ctx context.Context, sessionID string, msgHistory []message.Message, availableTools []tools.BaseTool) (message.Message, *message.Message, error) {
 	ctx = context.WithValue(ctx, tools.SessionIDContextKey, sessionID)
-	eventChan := a.provider.StreamResponse(ctx, msgHistory, a.tools)
+	eventChan := a.provider.StreamResponse(ctx, msgHistory, availableTools)
 
 	assistantMsg, err := a.messages.Create(ctx, sessionID, message.CreateMessageParams{
 		Role:  message.Assistant,
@@ -365,7 +403,7 @@ func (a *agent) streamAndHandleEvents(ctx context.Context, sessionID string, msg
 		default:
 			// Continue processing
 			var tool tools.BaseTool
-			for _, availableTool := range a.tools {
+			for _, availableTool := range availableTools {
 				if availableTool.Info().Name == toolCall.Name {
 					tool = availableTool
 					break
@@ -410,6 +448,7 @@ func (a *agent) streamAndHandleEvents(ctx context.Context, sessionID string, msg
 					break
 				}
 			}
+			toolResult = compactToolResponseForModelContext(toolCall.Name, toolResult)
 			toolResults[i] = message.ToolResult{
 				ToolCallID: toolCall.ID,
 				Content:    toolResult.Content,
@@ -528,6 +567,7 @@ func (a *agent) Update(agentName config.AgentName, modelID models.ModelID) (mode
 	}
 
 	a.provider = provider
+	a.maxTokens = configuredAgentMaxTokens(agentName, provider.Model())
 
 	return a.provider.Model(), nil
 }
@@ -768,4 +808,17 @@ func createAgentProvider(agentName config.AgentName) (provider.Provider, error) 
 	}
 
 	return agentProvider, nil
+}
+
+func configuredAgentMaxTokens(agentName config.AgentName, model models.Model) int64 {
+	cfg := config.Get()
+	if cfg != nil {
+		if agentCfg, ok := cfg.Agents[agentName]; ok && agentCfg.MaxTokens > 0 {
+			return agentCfg.MaxTokens
+		}
+	}
+	if model.DefaultMaxTokens > 0 {
+		return model.DefaultMaxTokens
+	}
+	return config.MaxTokensFallbackDefault
 }

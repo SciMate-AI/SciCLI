@@ -143,26 +143,7 @@ func runTool(ctx context.Context, c MCPClient, tool mcp.Tool, input string) (too
 }
 
 func compactMCPToolResponse(toolName, output string) tools.ToolResponse {
-	output = strings.TrimSpace(output)
-	if output == "" {
-		return tools.NewTextResponse(output)
-	}
-
-	lines := strings.Count(output, "\n") + 1
-	summary := summarizeMCPOutput(toolName, output)
-	if summary == output {
-		return tools.NewTextResponse(output)
-	}
-
-	return tools.WithResponseMetadata(
-		tools.NewTextResponse(summary),
-		MCPToolResponseMetadata{
-			RawContent:    output,
-			OriginalChars: len(output),
-			OriginalLines: lines,
-			Compacted:     true,
-		},
-	)
+	return compactToolResponseForModelContext(toolName, tools.NewTextResponse(output))
 }
 
 func summarizeMCPOutput(toolName, output string) string {
