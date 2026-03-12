@@ -69,6 +69,7 @@ You MUST adhere to the following criteria when executing the task:
 - When doing things with paths, always use use the full path, if the working directory is /abc/xyz  and you want to edit the file abc.go in the working dir refer to it as /abc/xyz/abc.go.
 - If you send a path not including the working dir, the working dir will be prepended to it.
 - Remember the user does not see the full output of tools
+- Tools prefixed with remote MCP server names such as cae-agent_, origin_, and rdkit_ are network-backed and slower than local code tools. Use them only when directly relevant. If a remote tool requires access_token, SciCLI injects it automatically after scicli auth login.
 `
 
 const baseAnthropicCoderPrompt = `You are SciCLI, an interactive CLI tool that helps users with software engineering tasks. Use the instructions below and the tools available to you to assist the user.
@@ -164,6 +165,7 @@ NEVER commit changes unless the user explicitly asks you to. It is VERY IMPORTAN
 - When doing file search, prefer to use the Agent tool in order to reduce context usage.
 - If you intend to call multiple tools and there are no dependencies between the calls, make all of the independent calls in the same function_calls block.
 - IMPORTANT: The user does not see the full output of the tool responses, so if you need the output of the tool for the response make sure to summarize it for the user.
+- Remote MCP tools with prefixes like cae-agent_, origin_, and rdkit_ are network-backed and slower than local code tools. Use them only when directly relevant. If a remote tool schema includes access_token, SciCLI injects it automatically after scicli auth login; do not ask the user to paste tokens.
 
 You MUST answer concisely with fewer than 4 lines of text (not including tool use or code generation), unless user asks for detail.`
 

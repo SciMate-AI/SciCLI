@@ -35,9 +35,18 @@ type MCPClient interface {
 }
 
 func (b *mcpTool) Info() tools.ToolInfo {
+	description := strings.TrimSpace(b.tool.Description)
+	if description == "" {
+		description = fmt.Sprintf("Remote MCP tool exposed by the %s server.", b.mcpName)
+	} else {
+		description = fmt.Sprintf("Remote MCP tool from %s: %s", b.mcpName, description)
+	}
+	if _, ok := b.tool.InputSchema.Properties["access_token"]; ok {
+		description += " Requires SciCLI login; access_token is injected automatically."
+	}
 	return tools.ToolInfo{
 		Name:        fmt.Sprintf("%s_%s", b.mcpName, b.tool.Name),
-		Description: b.tool.Description,
+		Description: description,
 		Parameters:  b.tool.InputSchema.Properties,
 		Required:    b.tool.InputSchema.Required,
 	}
@@ -45,6 +54,11 @@ func (b *mcpTool) Info() tools.ToolInfo {
 
 func runTool(ctx context.Context, c MCPClient, tool mcp.Tool, input string) (tools.ToolResponse, error) {
 	defer c.Close()
+	if client, ok := c.(mcpclient.Client); ok {
+		if err := mcpclient.EnsureStarted(ctx, client); err != nil {
+			return tools.NewTextErrorResponse(err.Error()), nil
+		}
+	}
 	initRequest := mcp.InitializeRequest{}
 	initRequest.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
 	initRequest.Params.ClientInfo = mcp.Implementation{
@@ -178,6 +192,12 @@ var mcpTools []tools.BaseTool
 
 func getTools(ctx context.Context, name string, m config.MCPServer, permissions permission.Service, c MCPClient) []tools.BaseTool {
 	var stdioTools []tools.BaseTool
+	if client, ok := c.(mcpclient.Client); ok {
+		if err := mcpclient.EnsureStarted(ctx, client); err != nil {
+			logging.Error("error starting mcp client", "error", err)
+			return stdioTools
+		}
+	}
 	initRequest := mcp.InitializeRequest{}
 	initRequest.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
 	initRequest.Params.ClientInfo = mcp.Implementation{

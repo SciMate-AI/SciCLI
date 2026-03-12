@@ -12,10 +12,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/SciMate-AI/scicli/internal/auth"
 	"github.com/SciMate-AI/scicli/internal/config"
 	"github.com/SciMate-AI/scicli/internal/mcpclient"
+	"github.com/mark3labs/mcp-go/mcp"
 )
 
 type Client struct {
@@ -65,6 +65,9 @@ func (c *Client) ListTools(ctx context.Context) ([]mcp.Tool, error) {
 	}
 	defer client.Close()
 
+	if err := mcpclient.EnsureStarted(ctx, client); err != nil {
+		return nil, err
+	}
 	if _, err := client.Initialize(ctx, mcpclient.DefaultInitializeRequest()); err != nil {
 		return nil, err
 	}
@@ -81,6 +84,9 @@ func (c *Client) CallTool(ctx context.Context, toolName string, args map[string]
 		return nil, err
 	}
 	defer client.Close()
+	if err := mcpclient.EnsureStarted(ctx, client); err != nil {
+		return nil, err
+	}
 	if _, err := client.Initialize(ctx, mcpclient.DefaultInitializeRequest()); err != nil {
 		return nil, err
 	}
