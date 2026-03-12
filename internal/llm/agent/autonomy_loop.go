@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	defaultStepBudget               = 8
+	defaultStepBudget               = 0
 	contextCompactionThreshold      = 0.82
 	contextCompactionReserveRatio   = 0.12
 	minMessagesBeforeCompaction     = 10
@@ -57,7 +57,14 @@ func newExecutionLoopState() executionLoopState {
 	}
 }
 
+func (s executionLoopState) hasStepBudget() bool {
+	return s.stepBudget > 0
+}
+
 func (s executionLoopState) remainingSteps() int {
+	if !s.hasStepBudget() {
+		return -1
+	}
 	remaining := s.stepBudget - s.currentStep + 1
 	if remaining < 0 {
 		return 0
@@ -66,11 +73,24 @@ func (s executionLoopState) remainingSteps() int {
 }
 
 func (s executionLoopState) toolsAllowed() bool {
+	if !s.hasStepBudget() {
+		return true
+	}
 	return s.currentStep <= s.stepBudget
 }
 
 func (s executionLoopState) isLastStep() bool {
+	if !s.hasStepBudget() {
+		return false
+	}
 	return s.currentStep >= s.stepBudget
+}
+
+func (s executionLoopState) promptStepLabel() string {
+	if !s.hasStepBudget() {
+		return fmt.Sprintf("%d (no fixed step limit)", s.currentStep)
+	}
+	return fmt.Sprintf("%d/%d", s.currentStep, s.stepBudget)
 }
 
 func buildLoopControlMessage(state executionLoopState) message.Message {
@@ -85,7 +105,7 @@ func buildLoopControlMessage(state executionLoopState) message.Message {
 			Parts: []message.ContentPart{
 				message.TextContent{Text: strings.TrimSpace(fmt.Sprintf(`
 Autonomous loop controller.
-Current step: %d/%d.
+Current step: %s.
 Phase: review.
 
 Review the work completed so far, including tool results and verification status.
@@ -93,7 +113,7 @@ Review the work completed so far, including tool results and verification status
 - %s
 - If the task is fully complete, start your response with <agent_loop_status>complete</agent_loop_status> and then provide the final user-facing answer.
 - Remove any internal planning language from the final answer.
-`, state.currentStep, state.stepBudget, lastStepRule))},
+`, state.promptStepLabel(), lastStepRule))},
 			},
 		}
 	default:
@@ -102,7 +122,7 @@ Review the work completed so far, including tool results and verification status
 			Parts: []message.ContentPart{
 				message.TextContent{Text: strings.TrimSpace(fmt.Sprintf(`
 Autonomous loop controller.
-Current step: %d/%d.
+Current step: %s.
 Phase: plan and execute.
 
 Update your internal plan, choose the single highest-value next action, and execute it now.
@@ -110,7 +130,7 @@ Update your internal plan, choose the single highest-value next action, and exec
 - Do not stop just because one command or tool call finished.
 - Do not give the final user-facing answer in this phase unless the task is already fully complete without more work.
 - Keep any plain-text in this phase minimal.
-`, state.currentStep, state.stepBudget))},
+`, state.promptStepLabel()))},
 			},
 		}
 	}

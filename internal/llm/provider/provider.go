@@ -35,10 +35,11 @@ type TokenUsage struct {
 }
 
 type ProviderResponse struct {
-	Content      string
-	ToolCalls    []message.ToolCall
-	Usage        TokenUsage
-	FinishReason message.FinishReason
+	Content          string
+	ToolCalls        []message.ToolCall
+	Usage            TokenUsage
+	FinishReason     message.FinishReason
+	GeminiRawContent *message.GeminiRawContent
 }
 
 type ProviderEvent struct {

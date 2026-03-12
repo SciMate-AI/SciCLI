@@ -7,10 +7,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/SciMate-AI/scicli/internal/db"
 	"github.com/SciMate-AI/scicli/internal/llm/models"
 	"github.com/SciMate-AI/scicli/internal/pubsub"
+	"github.com/google/uuid"
 )
 
 type CreateMessageParams struct {
@@ -164,6 +164,7 @@ type partType string
 
 const (
 	reasoningType  partType = "reasoning"
+	geminiRawType  partType = "gemini_raw"
 	textType       partType = "text"
 	imageURLType   partType = "image_url"
 	binaryType     partType = "binary"
@@ -186,6 +187,8 @@ func marshallParts(parts []ContentPart) ([]byte, error) {
 		switch part.(type) {
 		case ReasoningContent:
 			typ = reasoningType
+		case GeminiRawContent:
+			typ = geminiRawType
 		case TextContent:
 			typ = textType
 		case ImageURLContent:
@@ -232,6 +235,12 @@ func unmarshallParts(data []byte) ([]ContentPart, error) {
 		switch wrapper.Type {
 		case reasoningType:
 			part := ReasoningContent{}
+			if err := json.Unmarshal(wrapper.Data, &part); err != nil {
+				return nil, err
+			}
+			parts = append(parts, part)
+		case geminiRawType:
+			part := GeminiRawContent{}
 			if err := json.Unmarshal(wrapper.Data, &part); err != nil {
 				return nil, err
 			}

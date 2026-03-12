@@ -44,6 +44,12 @@ func (tc ReasoningContent) String() string {
 }
 func (ReasoningContent) isPart() {}
 
+type GeminiRawContent struct {
+	Parts []map[string]any `json:"parts"`
+}
+
+func (GeminiRawContent) isPart() {}
+
 type TextContent struct {
 	Text string `json:"text"`
 }
@@ -134,6 +140,15 @@ func (m *Message) ReasoningContent() ReasoningContent {
 		}
 	}
 	return ReasoningContent{}
+}
+
+func (m *Message) GeminiRawContent() *GeminiRawContent {
+	for _, part := range m.Parts {
+		if c, ok := part.(GeminiRawContent); ok {
+			return &c
+		}
+	}
+	return nil
 }
 
 func (m *Message) ImageURLContent() []ImageURLContent {
@@ -309,6 +324,23 @@ func (m *Message) SetToolCalls(tc []ToolCall) {
 
 func (m *Message) AddToolResult(tr ToolResult) {
 	m.Parts = append(m.Parts, tr)
+}
+
+func (m *Message) SetGeminiRawContent(raw GeminiRawContent) {
+	for i, part := range m.Parts {
+		if _, ok := part.(GeminiRawContent); ok {
+			if len(raw.Parts) == 0 {
+				m.Parts = slices.Delete(m.Parts, i, i+1)
+				return
+			}
+			m.Parts[i] = raw
+			return
+		}
+	}
+
+	if len(raw.Parts) > 0 {
+		m.Parts = append(m.Parts, raw)
+	}
 }
 
 func (m *Message) SetToolResults(tr []ToolResult) {

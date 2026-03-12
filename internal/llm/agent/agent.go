@@ -519,6 +519,9 @@ func (a *agent) processEvent(ctx context.Context, sessionID string, assistantMsg
 		logging.ErrorPersist(event.Error.Error())
 		return event.Error
 	case provider.EventComplete:
+		if event.Response.GeminiRawContent != nil {
+			assistantMsg.SetGeminiRawContent(*event.Response.GeminiRawContent)
+		}
 		assistantMsg.SetToolCalls(event.Response.ToolCalls)
 		assistantMsg.AddFinish(event.Response.FinishReason)
 		if err := a.messages.Update(ctx, *assistantMsg); err != nil {

@@ -89,3 +89,20 @@ func TestHistoryNeedsCompactionWhenEstimatedUsageNearWindow(t *testing.T) {
 		t.Fatal("expected history to require compaction near the context window")
 	}
 }
+
+func TestExecutionLoopStateDefaultsToNoFixedStepLimit(t *testing.T) {
+	state := newExecutionLoopState()
+
+	if state.hasStepBudget() {
+		t.Fatal("expected default loop state to have no fixed step budget")
+	}
+	if !state.toolsAllowed() {
+		t.Fatal("expected tools to remain allowed without a step budget")
+	}
+	if state.isLastStep() {
+		t.Fatal("did not expect last-step behavior without a step budget")
+	}
+	if got := state.promptStepLabel(); !strings.Contains(got, "no fixed step limit") {
+		t.Fatalf("expected prompt step label to describe unlimited mode, got %q", got)
+	}
+}
