@@ -5,11 +5,6 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/spinner"
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/SciMate-AI/scicli/internal/app"
 	"github.com/SciMate-AI/scicli/internal/message"
 	"github.com/SciMate-AI/scicli/internal/pubsub"
@@ -18,6 +13,11 @@ import (
 	"github.com/SciMate-AI/scicli/internal/tui/styles"
 	"github.com/SciMate-AI/scicli/internal/tui/theme"
 	"github.com/SciMate-AI/scicli/internal/tui/util"
+	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/viewport"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 type cacheItem struct {
@@ -35,6 +35,7 @@ type messagesCmp struct {
 	cachedContent map[string]cacheItem
 	spinner       spinner.Model
 	rendering     bool
+	expandTools   bool
 	attachments   viewport.Model
 }
 type renderFinishedMsg struct{}
@@ -94,6 +95,10 @@ func (m *messagesCmp) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			u, cmd := m.viewport.Update(msg)
 			m.viewport = u
 			cmds = append(cmds, cmd)
+		}
+		if key.Matches(msg, toggleToolResultsKey) {
+			m.expandTools = !m.expandTools
+			m.rerender()
 		}
 
 	case renderFinishedMsg:
@@ -225,6 +230,7 @@ func (m *messagesCmp) renderView() {
 				m.app.Messages,
 				m.currentMsgID,
 				isSummary,
+				m.expandTools,
 				m.width,
 				pos,
 			)
@@ -345,6 +351,15 @@ func hasUnfinishedToolCalls(messages []message.Message) bool {
 	return false
 }
 
+func hasToolResults(messages []message.Message) bool {
+	for _, msg := range messages {
+		if len(msg.ToolResults()) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *messagesCmp) working() string {
 	text := ""
 	if m.IsAgentWorking() && len(m.messages) > 0 {
@@ -393,6 +408,14 @@ func (m *messagesCmp) help() string {
 			baseStyle.Foreground(t.TextMuted()).Bold(true).Render(" write"),
 			baseStyle.Foreground(t.Text()).Bold(true).Render(" \\"),
 			baseStyle.Foreground(t.TextMuted()).Bold(true).Render(" and enter to add a new line"),
+		)
+	}
+	if hasToolResults(m.messages) {
+		text += lipgloss.JoinHorizontal(
+			lipgloss.Left,
+			baseStyle.Foreground(t.TextMuted()).Bold(true).Render(", "),
+			baseStyle.Foreground(t.Text()).Bold(true).Render(toggleToolResultsKey.Help().Key),
+			baseStyle.Foreground(t.TextMuted()).Bold(true).Render(" to toggle tool output"),
 		)
 	}
 	return baseStyle.
@@ -465,6 +488,7 @@ func (m *messagesCmp) BindingKeys() []key.Binding {
 		m.viewport.KeyMap.PageUp,
 		m.viewport.KeyMap.HalfPageUp,
 		m.viewport.KeyMap.HalfPageDown,
+		toggleToolResultsKey,
 	}
 }
 

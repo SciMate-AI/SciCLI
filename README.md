@@ -1,146 +1,219 @@
-> [!NOTE]  
-> This is the original OpenCode repository, now continuing at [Charm](https://github.com/charmbracelet) with its original creator, [Kujtim Hoxha](https://github.com/kujtimiihoxha).  
-> Development is continuing under a new name as we prepare for a public relaunch.  
-> Follow [@charmcli](https://x.com/charmcli) or join our [Discord](https://charm.sh/chat) for updates.
+# SciCLI
 
-# ⌬ OpenCode
+Terminal-based AI assistant for coding and SciMate workflows.
 
-<p align="center"><img src="https://github.com/user-attachments/assets/9ae61ef6-70e5-4876-bc45-5bcb4e52c714" width="800"></p>
+Adapted from the original `opencode` code-agent baseline and significantly extended for SciMate-native tooling, authentication, MCP integration, and scientific/engineering use cases.
 
-> **⚠️ Early Development Notice:** This project is in early development and is not yet ready for production use. Features may change, break, or be incomplete. Use at your own risk.
+> [!WARNING]
+> SciCLI is still evolving quickly. Interfaces, prompts, defaults, and provider/model support may change between releases.
 
-A terminal-based AI assistant for developers, adapted from the `opencode` code-agent baseline and extended for SciMate workflows.
+## What Makes SciCLI Different
 
-## Overview
+SciCLI is not just a generic terminal chat wrapper around an LLM. It is designed to be a practical coding and scientific workflow agent with a local-first terminal UX and built-in support for SciMate services.
 
-SciCLI is a Go-based CLI application that brings AI assistance to your terminal. It provides a TUI (Terminal User Interface) for interacting with various AI models, local coding tools, and SciMate MCP services.
-
-<p>For a quick video overview, check out
-<a href="https://www.youtube.com/watch?v=P8luPmEa1QI"><img width="25" src="https://upload.wikimedia.org/wikipedia/commons/0/09/YouTube_full-color_icon_%282017%29.svg"> OpenCode + Gemini 2.5 Pro: BYE Claude Code! I'm SWITCHING To the FASTEST AI Coder!</a></p>
-
-<a href="https://www.youtube.com/watch?v=P8luPmEa1QI"><img width="550" src="https://i3.ytimg.com/vi/P8luPmEa1QI/maxresdefault.jpg"></a><p>
-
-## Features
-
-- **Interactive TUI**: Built with [Bubble Tea](https://github.com/charmbracelet/bubbletea) for a smooth terminal experience
-- **Multiple AI Providers**: Support for OpenAI, Anthropic Claude, Google Gemini, AWS Bedrock, Groq, Azure OpenAI, and OpenRouter
-- **Session Management**: Save and manage multiple conversation sessions
-- **Tool Integration**: AI can execute commands, search files, and modify code
-- **Vim-like Editor**: Integrated editor with text input capabilities
-- **Persistent Storage**: SQLite database for storing conversations and sessions
-- **LSP Integration**: Language Server Protocol support for code intelligence
-- **File Change Tracking**: Track and visualize file changes during sessions
-- **External Editor Support**: Open your preferred editor for composing messages
-- **Named Arguments for Custom Commands**: Create powerful custom commands with multiple named placeholders
+- **SciMate-native MCP integration**: SciCLI boots with default remote MCP endpoints for `cae-agent`, `origin`, and `rdkit`, so chemistry, CAE, and origin-analysis workflows can be exposed as normal agent tools.
+- **Built-in SciMate auth flow**: `scicli auth login` stores your session locally, and MCP tools that require `access_token` can receive it automatically instead of asking the user to paste tokens into prompts.
+- **Context-window protection for long tool outputs**: long MCP tool returns are compacted before being sent back to the model, while the full raw result remains available in metadata for the UI. This reduces 400 errors caused by oversized tool context.
+- **Terminal UI built for tool-heavy sessions**: sessions, permissions, logs, model switching, file edits, and tool results all live in the TUI. Tool output can be expanded or collapsed with `Ctrl+G` so large results do not swamp the chat view.
+- **Local coding tools plus remote tools**: the agent can inspect files, run shell commands, edit code, apply patches, fetch URLs, read diagnostics, and call MCP tools in the same conversation.
+- **Conversation continuity**: automatic session compaction summarizes long conversations before they exceed the current model's context window, so work can continue without manually restarting from scratch.
+- **Project memory support**: SciCLI automatically looks for files such as `SCICLI.md`, `scicli.md`, `CLAUDE.md`, and `.github/copilot-instructions.md` to load project-specific guidance into the agent context.
+- **Interactive and non-interactive modes**: use the full TUI for exploratory work, or run one-shot prompts from scripts and CI with `-p`.
+- **Multi-provider model routing**: SciCLI supports OpenAI, Anthropic, Gemini, OpenRouter, Groq, xAI, Copilot, Bedrock, Vertex AI, Azure OpenAI, local OpenAI-compatible endpoints, and custom OpenAI-compatible servers.
+- **Developer ergonomics**: SQLite-backed history, session switching, custom slash-like commands, external editor support, LSP diagnostics, and permission prompts are built in.
 
 ## Installation
 
-### Current Status
-
-```bash
-go build ./...
-```
-
-Release packaging is not published yet. The included `install` script expects a repository that publishes `scicli` release artifacts and can be configured with `SCICLI_RELEASE_REPO`.
-
-### Using npm
+### npm
 
 ```bash
 npm install -g @scimate/scicli
 ```
 
-The npm package is a thin wrapper around the Go binary. During install it tries to download a matching prebuilt release asset and falls back to `go build` if a release is not available.
+The npm package installs a thin wrapper around the Go binary. It tries to download a matching release artifact first and falls back to `go build` if needed.
 
-On the first interactive launch, `scicli` opens a setup wizard if no default AI provider/model has been configured yet. The wizard writes the resulting configuration to your global `~/.scicli.json`.
-
-### Release Automation
-
-Tag-based release automation publishes both the GitHub release artifacts and the npm package.
-
-Required GitHub Actions secret:
-
-- `NPM_TOKEN`: npm publish token for `@scimate/scicli`
-
-Detailed repository setup is documented in `docs/release-setup.md`.
-
-### Using Go
+### Go
 
 ```bash
 go install github.com/SciMate-AI/scicli@latest
 ```
 
+### Build from source
+
+```bash
+git clone https://github.com/SciMate-AI/scicli.git
+cd scicli
+go build ./...
+```
+
+## Quick Start
+
+### 1. Launch the interactive TUI
+
+```bash
+scicli
+```
+
+On first launch, SciCLI opens an onboarding flow if no usable provider/model is configured yet.
+
+### 2. Configure a model provider
+
+SciCLI can detect many credentials from environment variables automatically, for example:
+
+```bash
+export OPENAI_API_KEY=...
+export GEMINI_API_KEY=...
+export ANTHROPIC_API_KEY=...
+```
+
+You can also configure providers manually in `~/.scicli.json`.
+
+### 3. Log in to SciMate if you use protected MCP services
+
+```bash
+scicli auth login
+```
+
+After login, remote MCP tools whose schema includes `access_token` can use the stored token automatically.
+
+### 4. Optional local dependencies
+
+SciCLI works without these tools, but some features are better with them installed:
+
+- `rg` / `ripgrep`: faster file search, grep, and project scanning
+- `fzf`: better interactive selection for some terminal workflows
+- language servers such as `gopls` or `typescript-language-server`: diagnostics support
+
+## CLI Usage
+
+### Interactive mode
+
+```bash
+scicli
+scicli -d
+scicli -c /path/to/project
+```
+
+### Non-interactive mode
+
+```bash
+scicli -p "Explain the use of context in Go"
+scicli -p "Summarize the changes in this repository" -f json
+scicli -p "Check whether the tests mention flaky behavior" -q
+```
+
+### Auth commands
+
+```bash
+scicli auth login
+scicli auth status
+scicli auth logout
+```
+
+### MCP inspection and direct calls
+
+```bash
+scicli mcp list-tools
+scicli mcp call rdkit_describe_molecule "{\"smiles\":\"Cn1c(=O)n(C)c2ncn(C)c2c1=O\"}"
+```
+
+### Run management
+
+```bash
+scicli runs start
+scicli runs last
+scicli runs log
+scicli runs artifacts list
+```
+
+## Key Features
+
+### Terminal UI
+
+- Session sidebar with persistent conversation history
+- Model/provider switcher from inside the UI
+- Permission prompts for tool execution
+- Logs view for debugging and tool inspection
+- External editor support for composing long prompts
+- Expand/collapse tool results with `Ctrl+G`
+
+### Agent Tooling
+
+Built-in local tools include:
+
+- `bash`
+- `glob`
+- `grep`
+- `ls`
+- `view`
+- `write`
+- `edit`
+- `patch`
+- `fetch`
+- `diagnostics`
+- `sourcegraph`
+- `agent` for delegated sub-tasks
+
+Remote MCP tools are loaded dynamically from configured servers and appear to the agent alongside built-in tools.
+
+### Context Management
+
+SciCLI includes two complementary protections against context blowups:
+
+- `autoCompact`: summarizes long sessions before they exceed the model context window
+- MCP tool result compaction: large remote-tool outputs are summarized before being sent back to the model, while the UI can still show the complete raw payload
+
+This is especially important for tools that can return bulky JSON, molecular blocks, coordinates, or large generated documents.
+
+### SciMate Integration
+
+By default, SciCLI is prepared to work with SciMate services:
+
+- `cae-agent` MCP server
+- `origin` MCP server
+- `rdkit` MCP server
+- Supabase-backed SciMate authentication
+
+These defaults can be overridden through configuration or environment variables.
+
+### Project Context Files
+
+SciCLI automatically looks for these files and directories to enrich the system context:
+
+- `.github/copilot-instructions.md`
+- `.cursorrules`
+- `.cursor/rules/`
+- `CLAUDE.md`
+- `CLAUDE.local.md`
+- `SCICLI.md`
+- `SCICLI.local.md`
+- `scicli.md`
+- `scicli.local.md`
+- `SciCLI.md`
+- `SciCLI.local.md`
+
+This makes it easier to keep project-specific instructions in-repo instead of repeating them in every chat.
+
 ## Configuration
 
-SciCLI looks for configuration in the following locations:
+SciCLI reads configuration from:
 
 - `$HOME/.scicli.json`
 - `$XDG_CONFIG_HOME/scicli/.scicli.json`
-- `./.scicli.json` (local directory)
+- `./.scicli.json`
 
-### Auto Compact Feature
-
-SciCLI includes an auto compact feature that automatically summarizes your conversation when it approaches the model's context window limit. When enabled (default setting), this feature:
-
-- Monitors token usage during your conversation
-- Automatically triggers summarization when usage reaches 95% of the model's context window
-- Creates a new session with the summary, allowing you to continue your work without losing context
-- Helps prevent "out of context" errors that can occur with long conversations
-
-You can enable or disable this feature in your configuration file:
-
-```json
-{
-  "autoCompact": true // default is true
-}
-```
-
-### Environment Variables
-
-You can configure SciCLI using environment variables:
-
-| Environment Variable       | Purpose                                                                          |
-| -------------------------- | -------------------------------------------------------------------------------- |
-| `ANTHROPIC_API_KEY`        | For Claude models                                                                |
-| `OPENAI_API_KEY`           | For OpenAI models                                                                |
-| `GEMINI_API_KEY`           | For Google Gemini models                                                         |
-| `GITHUB_TOKEN`             | For Github Copilot models (see [Using Github Copilot](#using-github-copilot))    |
-| `VERTEXAI_PROJECT`         | For Google Cloud VertexAI (Gemini)                                               |
-| `VERTEXAI_LOCATION`        | For Google Cloud VertexAI (Gemini)                                               |
-| `GROQ_API_KEY`             | For Groq models                                                                  |
-| `AWS_ACCESS_KEY_ID`        | For AWS Bedrock (Claude)                                                         |
-| `AWS_SECRET_ACCESS_KEY`    | For AWS Bedrock (Claude)                                                         |
-| `AWS_REGION`               | For AWS Bedrock (Claude)                                                         |
-| `AZURE_OPENAI_ENDPOINT`    | For Azure OpenAI models                                                          |
-| `AZURE_OPENAI_API_KEY`     | For Azure OpenAI models (optional when using Entra ID)                           |
-| `AZURE_OPENAI_API_VERSION` | For Azure OpenAI models                                                          |
-| `LOCAL_ENDPOINT`           | For self-hosted models                                                           |
-| `SHELL`                    | Default shell to use (if not specified in config)                                |
-
-### Shell Configuration
-
-SciCLI allows you to configure the shell used by the bash tool. By default, it uses the shell specified in the `SHELL` environment variable, or falls back to `/bin/bash` if not set.
-
-You can override this in your configuration file:
-
-```json
-{
-  "shell": {
-    "path": "/bin/zsh",
-    "args": ["-l"]
-  }
-}
-```
-
-This is useful if you want to use a different shell than your default system shell, or if you need to pass specific arguments to the shell.
-
-### Configuration File Structure
+### Example configuration
 
 ```json
 {
   "data": {
-    "directory": ".opencode"
+    "directory": ".scicli"
   },
   "providers": {
+    "gemini": {
+      "apiKey": "your-api-key",
+      "disabled": false
+    },
     "openai": {
       "apiKey": "your-api-key",
       "disabled": false
@@ -149,29 +222,28 @@ This is useful if you want to use a different shell than your default system she
       "apiKey": "your-api-key",
       "disabled": false
     },
-    "copilot": {
-      "disabled": false
-    },
-    "groq": {
-      "apiKey": "your-api-key",
-      "disabled": false
-    },
-    "openrouter": {
-      "apiKey": "your-api-key",
+    "openai-compatible": {
+      "apiKey": "optional-api-key",
+      "baseUrl": "https://your-compatible-endpoint/v1",
+      "model": "your-upstream-model-id",
       "disabled": false
     }
   },
   "agents": {
     "coder": {
-      "model": "claude-3.7-sonnet",
+      "model": "gemini-3.1-pro-preview",
       "maxTokens": 5000
     },
     "task": {
-      "model": "claude-3.7-sonnet",
+      "model": "gemini-3.1-flash-lite-preview",
+      "maxTokens": 5000
+    },
+    "summarizer": {
+      "model": "gemini-3.1-pro-preview",
       "maxTokens": 5000
     },
     "title": {
-      "model": "claude-3.7-sonnet",
+      "model": "gemini-3.1-flash-lite-preview",
       "maxTokens": 80
     }
   },
@@ -180,10 +252,17 @@ This is useful if you want to use a different shell than your default system she
     "args": ["-l"]
   },
   "mcpServers": {
-    "example": {
+    "cae-agent": {
+      "type": "sse",
+      "url": "https://your-cae-agent/sse"
+    },
+    "rdkit": {
+      "type": "streamable-http",
+      "url": "https://your-rdkit-server/mcp"
+    },
+    "local-toolbox": {
       "type": "stdio",
       "command": "path/to/mcp-server",
-      "env": [],
       "args": []
     }
   },
@@ -193,389 +272,57 @@ This is useful if you want to use a different shell than your default system she
       "command": "gopls"
     }
   },
+  "tui": {
+    "theme": "scicli"
+  },
+  "autoCompact": true,
   "debug": false,
-  "debugLSP": false,
-  "autoCompact": true
+  "debugLSP": false
 }
 ```
 
-## Supported AI Models
-
-SciCLI supports a variety of AI models from different providers:
-
-### OpenAI
-
-- GPT-4.1 family (gpt-4.1, gpt-4.1-mini, gpt-4.1-nano)
-- GPT-4.5 Preview
-- GPT-4o family (gpt-4o, gpt-4o-mini)
-- O1 family (o1, o1-pro, o1-mini)
-- O3 family (o3, o3-mini)
-- O4 Mini
-
-### Anthropic
-
-- Claude 4 Sonnet
-- Claude 4 Opus
-- Claude 3.5 Sonnet
-- Claude 3.5 Haiku
-- Claude 3.7 Sonnet
-- Claude 3 Haiku
-- Claude 3 Opus
-
-### GitHub Copilot
-
-- GPT-3.5 Turbo
-- GPT-4
-- GPT-4o
-- GPT-4o Mini
-- GPT-4.1
-- Claude 3.5 Sonnet
-- Claude 3.7 Sonnet
-- Claude 3.7 Sonnet Thinking
-- Claude Sonnet 4
-- O1
-- O3 Mini
-- O4 Mini
-- Gemini 2.0 Flash
-- Gemini 2.5 Pro
-
-### Google
-
-- Gemini 2.5
-- Gemini 2.5 Flash
-- Gemini 2.0 Flash
-- Gemini 2.0 Flash Lite
-
-### AWS Bedrock
-
-- Claude 3.7 Sonnet
-
-### Groq
-
-- Llama 4 Maverick (17b-128e-instruct)
-- Llama 4 Scout (17b-16e-instruct)
-- QWEN QWQ-32b
-- Deepseek R1 distill Llama 70b
-- Llama 3.3 70b Versatile
-
-### Azure OpenAI
-
-- GPT-4.1 family (gpt-4.1, gpt-4.1-mini, gpt-4.1-nano)
-- GPT-4.5 Preview
-- GPT-4o family (gpt-4o, gpt-4o-mini)
-- O1 family (o1, o1-mini)
-- O3 family (o3, o3-mini)
-- O4 Mini
-
-### Google Cloud VertexAI
-
-- Gemini 2.5
-- Gemini 2.5 Flash
-
-## Usage
-
-```bash
-# Start OpenCode
-opencode
-
-# Start with debug logging
-opencode -d
-
-# Start with a specific working directory
-opencode -c /path/to/project
-```
-
-## Non-interactive Prompt Mode
-
-You can run OpenCode in non-interactive mode by passing a prompt directly as a command-line argument. This is useful for scripting, automation, or when you want a quick answer without launching the full TUI.
-
-```bash
-# Run a single prompt and print the AI's response to the terminal
-opencode -p "Explain the use of context in Go"
-
-# Get response in JSON format
-opencode -p "Explain the use of context in Go" -f json
-
-# Run without showing the spinner (useful for scripts)
-opencode -p "Explain the use of context in Go" -q
-```
-
-In this mode, OpenCode will process your prompt, print the result to standard output, and then exit. All permissions are auto-approved for the session.
-
-By default, a spinner animation is displayed while the model is processing your query. You can disable this spinner with the `-q` or `--quiet` flag, which is particularly useful when running OpenCode from scripts or automated workflows.
-
-### Output Formats
-
-SciCLI supports the following output formats in non-interactive mode:
-
-| Format | Description                     |
-| ------ | ------------------------------- |
-| `text` | Plain text output (default)     |
-| `json` | Output wrapped in a JSON object |
-
-The output format is implemented as a strongly-typed `OutputFormat` in the codebase, ensuring type safety and validation when processing outputs.
-
-## Command-line Flags
-
-| Flag              | Short | Description                                         |
-| ----------------- | ----- | --------------------------------------------------- |
-| `--help`          | `-h`  | Display help information                            |
-| `--debug`         | `-d`  | Enable debug mode                                   |
-| `--cwd`           | `-c`  | Set current working directory                       |
-| `--prompt`        | `-p`  | Run a single prompt in non-interactive mode         |
-| `--output-format` | `-f`  | Output format for non-interactive mode (text, json) |
-| `--quiet`         | `-q`  | Hide spinner in non-interactive mode                |
-
-## Keyboard Shortcuts
-
-### Global Shortcuts
-
-| Shortcut | Action                                                  |
-| -------- | ------------------------------------------------------- |
-| `Ctrl+C` | Quit application                                        |
-| `Ctrl+?` | Toggle help dialog                                      |
-| `?`      | Toggle help dialog (when not in editing mode)           |
-| `Ctrl+L` | View logs                                               |
-| `Ctrl+A` | Switch session                                          |
-| `Ctrl+K` | Command dialog                                          |
-| `Ctrl+O` | Toggle model selection dialog                           |
-| `Esc`    | Close current overlay/dialog or return to previous mode |
-
-### Chat Page Shortcuts
-
-| Shortcut | Action                                  |
-| -------- | --------------------------------------- |
-| `Ctrl+N` | Create new session                      |
-| `Ctrl+X` | Cancel current operation/generation     |
-| `i`      | Focus editor (when not in writing mode) |
-| `Esc`    | Exit writing mode and focus messages    |
-
-### Editor Shortcuts
-
-| Shortcut            | Action                                    |
-| ------------------- | ----------------------------------------- |
-| `Ctrl+S`            | Send message (when editor is focused)     |
-| `Enter` or `Ctrl+S` | Send message (when editor is not focused) |
-| `Ctrl+E`            | Open external editor                      |
-| `Esc`               | Blur editor and focus messages            |
-
-### Session Dialog Shortcuts
-
-| Shortcut   | Action           |
-| ---------- | ---------------- |
-| `↑` or `k` | Previous session |
-| `↓` or `j` | Next session     |
-| `Enter`    | Select session   |
-| `Esc`      | Close dialog     |
-
-### Model Dialog Shortcuts
-
-| Shortcut   | Action            |
-| ---------- | ----------------- |
-| `↑` or `k` | Move up           |
-| `↓` or `j` | Move down         |
-| `←` or `h` | Previous provider |
-| `→` or `l` | Next provider     |
-| `Esc`      | Close dialog      |
-
-### Permission Dialog Shortcuts
-
-| Shortcut                | Action                       |
-| ----------------------- | ---------------------------- |
-| `←` or `left`           | Switch options left          |
-| `→` or `right` or `tab` | Switch options right         |
-| `Enter` or `space`      | Confirm selection            |
-| `a`                     | Allow permission             |
-| `A`                     | Allow permission for session |
-| `d`                     | Deny permission              |
-
-### Logs Page Shortcuts
-
-| Shortcut           | Action              |
-| ------------------ | ------------------- |
-| `Backspace` or `q` | Return to chat page |
-
-## AI Assistant Tools
-
-OpenCode's AI assistant has access to various tools to help with coding tasks:
-
-### File and Code Tools
-
-| Tool          | Description                 | Parameters                                                                               |
-| ------------- | --------------------------- | ---------------------------------------------------------------------------------------- |
-| `glob`        | Find files by pattern       | `pattern` (required), `path` (optional)                                                  |
-| `grep`        | Search file contents        | `pattern` (required), `path` (optional), `include` (optional), `literal_text` (optional) |
-| `ls`          | List directory contents     | `path` (optional), `ignore` (optional array of patterns)                                 |
-| `view`        | View file contents          | `file_path` (required), `offset` (optional), `limit` (optional)                          |
-| `write`       | Write to files              | `file_path` (required), `content` (required)                                             |
-| `edit`        | Edit files                  | Various parameters for file editing                                                      |
-| `patch`       | Apply patches to files      | `file_path` (required), `diff` (required)                                                |
-| `diagnostics` | Get diagnostics information | `file_path` (optional)                                                                   |
-
-### Other Tools
-
-| Tool          | Description                            | Parameters                                                                                |
-| ------------- | -------------------------------------- | ----------------------------------------------------------------------------------------- |
-| `bash`        | Execute shell commands                 | `command` (required), `timeout` (optional)                                                |
-| `fetch`       | Fetch data from URLs                   | `url` (required), `format` (required), `timeout` (optional)                               |
-| `sourcegraph` | Search code across public repositories | `query` (required), `count` (optional), `context_window` (optional), `timeout` (optional) |
-| `agent`       | Run sub-tasks with the AI agent        | `prompt` (required)                                                                       |
-
-## Architecture
-
-OpenCode is built with a modular architecture:
-
-- **cmd**: Command-line interface using Cobra
-- **internal/app**: Core application services
-- **internal/config**: Configuration management
-- **internal/db**: Database operations and migrations
-- **internal/llm**: LLM providers and tools integration
-- **internal/tui**: Terminal UI components and layouts
-- **internal/logging**: Logging infrastructure
-- **internal/message**: Message handling
-- **internal/session**: Session management
-- **internal/lsp**: Language Server Protocol integration
-
-## Custom Commands
-
-SciCLI supports custom commands that can be created by users to quickly send predefined prompts to the AI assistant.
-
-### Creating Custom Commands
-
-Custom commands are predefined prompts stored as Markdown files in one of three locations:
-
-1. **User Commands** (prefixed with `user:`):
-
-   ```
-   $XDG_CONFIG_HOME/scicli/commands/
-   ```
-
-   (typically `~/.config/scicli/commands/` on Linux/macOS)
-
-   or
-
-   ```
-   $HOME/.scicli/commands/
-   ```
-
-2. **Project Commands** (prefixed with `project:`):
-
-   ```
-   <PROJECT DIR>/.scicli/commands/
-   ```
-
-Each `.md` file in these directories becomes a custom command. The file name (without extension) becomes the command ID.
-
-For example, creating a file at `~/.config/scicli/commands/prime-context.md` with content:
-
-```markdown
-RUN git ls-files
-READ README.md
-```
-
-This creates a command called `user:prime-context`.
-
-### Command Arguments
-
-SciCLI supports named arguments in custom commands using placeholders in the format `$NAME` (where NAME consists of uppercase letters, numbers, and underscores, and must start with a letter).
-
-For example:
-
-```markdown
-# Fetch Context for Issue $ISSUE_NUMBER
-
-RUN gh issue view $ISSUE_NUMBER --json title,body,comments
-RUN git grep --author="$AUTHOR_NAME" -n .
-RUN grep -R "$SEARCH_PATTERN" $DIRECTORY
-```
-
-When you run a command with arguments, SciCLI will prompt you to enter values for each unique placeholder. Named arguments provide several benefits:
-
-- Clear identification of what each argument represents
-- Ability to use the same argument multiple times
-- Better organization for commands with multiple inputs
-
-### Organizing Commands
-
-You can organize commands in subdirectories:
-
-```
-~/.config/scicli/commands/git/commit.md
-```
-
-This creates a command with ID `user:git:commit`.
-
-### Using Custom Commands
-
-1. Press `Ctrl+K` to open the command dialog
-2. Select your custom command (prefixed with either `user:` or `project:`)
-3. Press Enter to execute the command
-
-The content of the command file will be sent as a message to the AI assistant.
-
-### Built-in Commands
-
-SciCLI includes several built-in commands:
-
-| Command            | Description                                                                                         |
-| ------------------ | --------------------------------------------------------------------------------------------------- |
-| Initialize Project | Creates or updates the SCICLI.md memory file with project-specific information                      |
-| Compact Session    | Manually triggers the summarization of the current session, creating a new session with the summary |
-
-## MCP (Model Context Protocol)
-
-SciCLI implements the Model Context Protocol (MCP) to extend its capabilities through external tools. MCP provides a standardized way for the AI assistant to interact with external services and tools.
-
-### MCP Features
-
-- **External Tool Integration**: Connect to external tools and services via a standardized protocol
-- **Tool Discovery**: Automatically discover available tools from MCP servers
-- **Multiple Connection Types**:
-  - **Stdio**: Communicate with tools via standard input/output
-  - **SSE**: Communicate with tools via Server-Sent Events
-- **Security**: Permission system for controlling access to MCP tools
-
-### Configuring MCP Servers
-
-MCP servers are defined in the configuration file under the `mcpServers` section:
-
-```json
-{
-  "mcpServers": {
-    "example": {
-      "type": "stdio",
-      "command": "path/to/mcp-server",
-      "env": [],
-      "args": []
-    },
-    "web-example": {
-      "type": "sse",
-      "url": "https://example.com/mcp",
-      "headers": {
-        "Authorization": "Bearer token"
-      }
-    }
-  }
-}
-```
-
-### MCP Tool Usage
-
-Once configured, MCP tools are automatically available to the AI assistant alongside built-in tools. They follow the same permission model as other tools, requiring user approval before execution.
-
-## LSP (Language Server Protocol)
-
-OpenCode integrates with Language Server Protocol to provide code intelligence features across multiple programming languages.
-
-### LSP Features
-
-- **Multi-language Support**: Connect to language servers for different programming languages
-- **Diagnostics**: Receive error checking and linting information
-- **File Watching**: Automatically notify language servers of file changes
-
-### Configuring LSP
-
-Language servers are configured in the configuration file under the `lsp` section:
+### Useful environment variables
+
+| Variable | Purpose |
+| --- | --- |
+| `ANTHROPIC_API_KEY` | Enable Anthropic models |
+| `OPENAI_API_KEY` | Enable OpenAI models |
+| `GEMINI_API_KEY` | Enable Gemini models |
+| `OPENROUTER_API_KEY` | Enable OpenRouter models |
+| `GROQ_API_KEY` | Enable Groq models |
+| `XAI_API_KEY` | Enable xAI models |
+| `GITHUB_TOKEN` | Enable GitHub Copilot if token-based auth is used |
+| `LOCAL_ENDPOINT` | Use a local OpenAI-compatible endpoint |
+| `OPENAI_COMPATIBLE_API_KEY` | API key for a custom OpenAI-compatible endpoint |
+| `SCICLI_MCP_CAE_AGENT_URL` | Override default `cae-agent` MCP endpoint |
+| `SCICLI_MCP_ORIGIN_URL` | Override default `origin` MCP endpoint |
+| `SCICLI_MCP_RDKIT_URL` | Override default `rdkit` MCP endpoint |
+| `SCICLI_SUPABASE_URL` | Override SciMate auth backend URL |
+| `SCICLI_SUPABASE_ANON_KEY` | Override SciMate auth anon key |
+| `SHELL` | Default shell path used by the `bash` tool |
+
+## MCP Support
+
+SciCLI supports three MCP transport types:
+
+- `stdio`
+- `sse`
+- `streamable-http`
+
+Once configured, MCP tools are auto-discovered and exposed to the coding agent. They go through the same permission system as built-in tools.
+
+SciCLI's MCP implementation also includes practical behavior for real-world agent use:
+
+- automatic startup of MCP clients when needed
+- remote auth token injection for tools that request `access_token`
+- support for long-running remote servers
+- tool-result compaction so large payloads do not overwhelm model context
+
+## LSP Integration
+
+SciCLI can connect to local language servers and currently exposes diagnostics to the agent. This allows the assistant to inspect compile-time or lint-time issues while editing code.
+
+Typical setup:
 
 ```json
 {
@@ -593,104 +340,92 @@ Language servers are configured in the configuration file under the `lsp` sectio
 }
 ```
 
-### LSP Integration with AI
+## Custom Commands
 
-The AI assistant can access LSP features through the `diagnostics` tool, allowing it to:
+Custom commands let you store reusable prompt templates as Markdown files.
 
-- Check for errors in your code
-- Suggest fixes based on diagnostics
+Supported locations:
 
-While the LSP client implementation supports the full LSP protocol (including completions, hover, definition, etc.), currently only diagnostics are exposed to the AI assistant.
+- `$XDG_CONFIG_HOME/scicli/commands/`
+- `$HOME/.scicli/commands/`
+- `<project>/.scicli/commands/`
 
-## Using Github Copilot
+Each `.md` file becomes a command in the UI command palette. Named placeholders like `$ISSUE_NUMBER` or `$AUTHOR_NAME` are supported and will prompt for values at execution time.
 
-_Copilot support is currently experimental._
+Example:
 
-### Requirements
-- [Copilot chat in the IDE](https://github.com/settings/copilot) enabled in GitHub settings
-- One of:
-  - VSCode Github Copilot chat extension
-  - Github `gh` CLI
-  - Neovim Github Copilot plugin (`copilot.vim` or `copilot.lua`)
-  - Github token with copilot permissions
+```markdown
+# Review issue $ISSUE_NUMBER
 
-If using one of the above plugins or cli tools, make sure you use the authenticate
-the tool with your github account. This should create a github token at one of the following locations:
-- ~/.config/github-copilot/[hosts,apps].json
-- $XDG_CONFIG_HOME/github-copilot/[hosts,apps].json
-
-If using an explicit github token, you may either set the $GITHUB_TOKEN environment variable or add it to the `.scicli.json` config file at `providers.copilot.apiKey`.
-
-## Using a self-hosted model provider
-
-SciCLI can also load and use models from a self-hosted (OpenAI-like) provider.
-This is useful for developers who want to experiment with custom models.
-
-### Configuring a self-hosted provider
-
-You can use a self-hosted model by setting the `LOCAL_ENDPOINT` environment variable.
-This will cause SciCLI to load and use the models from the specified endpoint.
-
-```bash
-LOCAL_ENDPOINT=http://localhost:1235/v1
+RUN gh issue view $ISSUE_NUMBER --json title,body,comments
+RUN git grep "$SEARCH_TERM"
 ```
 
-### Configuring a self-hosted model
+## Keyboard Shortcuts
 
-You can also configure a self-hosted model in the configuration file under the `agents` section:
+Common shortcuts:
 
-```json
-{
-  "agents": {
-    "coder": {
-      "model": "local.granite-3.3-2b-instruct@q8_0",
-      "reasoningEffort": "high"
-    }
-  }
-}
-```
+- `Ctrl+C`: quit
+- `Ctrl+L`: open logs
+- `Ctrl+A`: switch sessions
+- `Ctrl+K`: open command dialog
+- `Ctrl+O`: switch model
+- `Ctrl+N`: create new session
+- `Ctrl+X`: cancel current generation
+- `Ctrl+E`: open external editor
+- `Ctrl+G`: toggle tool output expansion
+- `Esc`: close current overlay or leave editor focus
+
+The in-app help dialog shows the current complete keymap.
 
 ## Development
 
 ### Prerequisites
 
-- Go 1.24.0 or higher
+- Go 1.24 or newer
 
-### Building from Source
+### Build
 
 ```bash
-# Clone the repository
-git clone https://github.com/SciMate-AI/scicli.git
-cd scicli
-
-# Build
-go build -o opencode
-
-# Run
-./opencode
+go build ./...
 ```
+
+### Test
+
+```bash
+go test ./...
+```
+
+### Release automation
+
+Tag-based GitHub Actions publish:
+
+- GitHub release artifacts
+- the npm package `@scimate/scicli`
+
+Repository setup details live in [docs/release-setup.md](docs/release-setup.md).
+
+## Architecture
+
+Key packages:
+
+- `cmd`: Cobra CLI entrypoints
+- `internal/app`: application wiring and lifecycle
+- `internal/config`: config loading, defaults, validation, onboarding
+- `internal/llm`: providers, prompts, agents, and tools
+- `internal/mcpclient`: MCP client implementations
+- `internal/tui`: Bubble Tea terminal UI
+- `internal/message`: message and content-part model
+- `internal/session`: persistent session management
+- `internal/db`: SQLite storage and migrations
+- `internal/lsp`: language-server integration
 
 ## Acknowledgments
 
-OpenCode gratefully acknowledges the contributions and support from these key individuals:
-
-- [@isaacphi](https://github.com/isaacphi) - For the [mcp-language-server](https://github.com/isaacphi/mcp-language-server) project which provided the foundation for our LSP client implementation
-- [@adamdottv](https://github.com/adamdottv) - For the design direction and UI/UX architecture
-
-Special thanks to the broader open source community whose tools and libraries have made this project possible.
+- [@isaacphi](https://github.com/isaacphi) for the [mcp-language-server](https://github.com/isaacphi/mcp-language-server) work that influenced the LSP integration
+- [@adamdottv](https://github.com/adamdottv) for design direction and UI ideas
+- the broader open source ecosystem around Bubble Tea, Cobra, SQLite, and MCP
 
 ## License
 
-OpenCode is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
-
-## Contributing
-
-Contributions are welcome! Here's how you can contribute:
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add some amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
-Please make sure to update tests as appropriate and follow the existing code style.
+SciCLI is licensed under the MIT License. See [LICENSE](LICENSE).

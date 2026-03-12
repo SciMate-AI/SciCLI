@@ -8,8 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
-	"github.com/charmbracelet/x/ansi"
 	"github.com/SciMate-AI/scicli/internal/config"
 	"github.com/SciMate-AI/scicli/internal/diff"
 	"github.com/SciMate-AI/scicli/internal/llm/agent"
@@ -18,6 +16,8 @@ import (
 	"github.com/SciMate-AI/scicli/internal/message"
 	"github.com/SciMate-AI/scicli/internal/tui/styles"
 	"github.com/SciMate-AI/scicli/internal/tui/theme"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 type uiMessageType int
@@ -121,6 +121,7 @@ func renderAssistantMessage(
 	messagesService message.Service, // We need this to get the task tool messages
 	focusedUIMessageId string,
 	isSummary bool,
+	expandTools bool,
 	width int,
 	position int,
 ) []uiMessage {
@@ -194,6 +195,7 @@ func renderAssistantMessage(
 			allMessages,
 			messagesService,
 			focusedUIMessageId,
+			expandTools,
 			false,
 			width,
 			i+1,
@@ -438,7 +440,43 @@ func truncateHeight(content string, height int) string {
 	return content
 }
 
-func renderToolResponse(toolCall message.ToolCall, response message.ToolResult, width int) string {
+func truncateToolContent(content string, expanded bool) (string, int) {
+	lines := strings.Split(content, "\n")
+	if expanded || len(lines) <= maxResultHeight {
+		return content, 0
+	}
+	return strings.Join(lines[:maxResultHeight], "\n"), len(lines) - maxResultHeight
+}
+
+func renderDefaultToolContent(response message.ToolResult, expanded bool) (string, int) {
+	var metadata agent.MCPToolResponseMetadata
+	if err := json.Unmarshal([]byte(response.Metadata), &metadata); err == nil && strings.TrimSpace(metadata.RawContent) != "" {
+		if expanded {
+			return metadata.RawContent, 0
+		}
+		content, _ := truncateToolContent(response.Content, false)
+		rawLines := strings.Count(metadata.RawContent, "\n") + 1
+		contentLines := strings.Count(content, "\n") + 1
+		hiddenLines := 0
+		if rawLines > contentLines {
+			hiddenLines = rawLines - contentLines
+		}
+		return content, hiddenLines
+	}
+	return truncateToolContent(response.Content, expanded)
+}
+
+func renderToolCollapseHint(width int, hiddenLines int) string {
+	if hiddenLines <= 0 {
+		return ""
+	}
+	return styles.BaseStyle().
+		Width(width).
+		Foreground(theme.CurrentTheme().TextMuted()).
+		Render(fmt.Sprintf("... [%d more lines hidden, press %s to expand]", hiddenLines, toggleToolResultsKey.Help().Key))
+}
+
+func renderToolResponse(toolCall message.ToolCall, response message.ToolResult, width int, expanded bool) (string, int) {
 	t := theme.CurrentTheme()
 	baseStyle := styles.BaseStyle()
 
@@ -448,28 +486,28 @@ func renderToolResponse(toolCall message.ToolCall, response message.ToolResult, 
 		return baseStyle.
 			Width(width).
 			Foreground(t.Error()).
-			Render(errContent)
+			Render(errContent), 0
 	}
 
-	resultContent := truncateHeight(response.Content, maxResultHeight)
+	resultContent, hiddenLines := renderDefaultToolContent(response, expanded)
 	switch toolCall.Name {
 	case agent.AgentToolName:
 		return styles.ForceReplaceBackgroundWithLipgloss(
 			toMarkdown(resultContent, false, width),
 			t.Background(),
-		)
+		), hiddenLines
 	case tools.BashToolName:
 		resultContent = fmt.Sprintf("```bash\n%s\n```", resultContent)
 		return styles.ForceReplaceBackgroundWithLipgloss(
 			toMarkdown(resultContent, true, width),
 			t.Background(),
-		)
+		), hiddenLines
 	case tools.EditToolName:
 		metadata := tools.EditResponseMetadata{}
 		json.Unmarshal([]byte(response.Metadata), &metadata)
-		truncDiff := truncateHeight(metadata.Diff, maxResultHeight)
+		truncDiff, diffHiddenLines := truncateToolContent(metadata.Diff, expanded)
 		formattedDiff, _ := diff.FormatDiff(truncDiff, diff.WithTotalWidth(width))
-		return formattedDiff
+		return formattedDiff, diffHiddenLines
 	case tools.FetchToolName:
 		var params tools.FetchParams
 		json.Unmarshal([]byte(toolCall.Input), &params)
@@ -484,15 +522,15 @@ func renderToolResponse(toolCall message.ToolCall, response message.ToolResult, 
 		return styles.ForceReplaceBackgroundWithLipgloss(
 			toMarkdown(resultContent, true, width),
 			t.Background(),
-		)
+		), hiddenLines
 	case tools.GlobToolName:
-		return baseStyle.Width(width).Foreground(t.TextMuted()).Render(resultContent)
+		return baseStyle.Width(width).Foreground(t.TextMuted()).Render(resultContent), hiddenLines
 	case tools.GrepToolName:
-		return baseStyle.Width(width).Foreground(t.TextMuted()).Render(resultContent)
+		return baseStyle.Width(width).Foreground(t.TextMuted()).Render(resultContent), hiddenLines
 	case tools.LSToolName:
-		return baseStyle.Width(width).Foreground(t.TextMuted()).Render(resultContent)
+		return baseStyle.Width(width).Foreground(t.TextMuted()).Render(resultContent), hiddenLines
 	case tools.SourcegraphToolName:
-		return baseStyle.Width(width).Foreground(t.TextMuted()).Render(resultContent)
+		return baseStyle.Width(width).Foreground(t.TextMuted()).Render(resultContent), hiddenLines
 	case tools.ViewToolName:
 		metadata := tools.ViewResponseMetadata{}
 		json.Unmarshal([]byte(response.Metadata), &metadata)
@@ -502,11 +540,12 @@ func renderToolResponse(toolCall message.ToolCall, response message.ToolResult, 
 		} else {
 			ext = strings.ToLower(ext[1:])
 		}
-		resultContent = fmt.Sprintf("```%s\n%s\n```", ext, truncateHeight(metadata.Content, maxResultHeight))
+		viewContent, viewHiddenLines := truncateToolContent(metadata.Content, expanded)
+		resultContent = fmt.Sprintf("```%s\n%s\n```", ext, viewContent)
 		return styles.ForceReplaceBackgroundWithLipgloss(
 			toMarkdown(resultContent, true, width),
 			t.Background(),
-		)
+		), viewHiddenLines
 	case tools.WriteToolName:
 		params := tools.WriteParams{}
 		json.Unmarshal([]byte(toolCall.Input), &params)
@@ -518,17 +557,18 @@ func renderToolResponse(toolCall message.ToolCall, response message.ToolResult, 
 		} else {
 			ext = strings.ToLower(ext[1:])
 		}
-		resultContent = fmt.Sprintf("```%s\n%s\n```", ext, truncateHeight(params.Content, maxResultHeight))
+		writeContent, writeHiddenLines := truncateToolContent(params.Content, expanded)
+		resultContent = fmt.Sprintf("```%s\n%s\n```", ext, writeContent)
 		return styles.ForceReplaceBackgroundWithLipgloss(
 			toMarkdown(resultContent, true, width),
 			t.Background(),
-		)
+		), writeHiddenLines
 	default:
 		resultContent = fmt.Sprintf("```text\n%s\n```", resultContent)
 		return styles.ForceReplaceBackgroundWithLipgloss(
 			toMarkdown(resultContent, true, width),
 			t.Background(),
-		)
+		), hiddenLines
 	}
 }
 
@@ -537,6 +577,7 @@ func renderToolMessage(
 	allMessages []message.Message,
 	messagesService message.Service,
 	focusedUIMessageId string,
+	expandTools bool,
 	nested bool,
 	width int,
 	position int,
@@ -580,8 +621,9 @@ func renderToolMessage(
 
 	params := renderToolParams(width-2-lipgloss.Width(toolNameText), toolCall)
 	responseContent := ""
+	hiddenLines := 0
 	if response != nil {
-		responseContent = renderToolResponse(toolCall, *response, width-2)
+		responseContent, hiddenLines = renderToolResponse(toolCall, *response, width-2, expandTools)
 		responseContent = strings.TrimSuffix(responseContent, "\n")
 	} else {
 		responseContent = baseStyle.
@@ -617,12 +659,15 @@ func renderToolMessage(
 			toolCalls = append(toolCalls, v.ToolCalls()...)
 		}
 		for _, call := range toolCalls {
-			rendered := renderToolMessage(call, []message.Message{}, messagesService, focusedUIMessageId, true, width, 0)
+			rendered := renderToolMessage(call, []message.Message{}, messagesService, focusedUIMessageId, expandTools, true, width, 0)
 			parts = append(parts, rendered.content)
 		}
 	}
 	if responseContent != "" && !nested {
 		parts = append(parts, responseContent)
+		if hint := renderToolCollapseHint(width-2, hiddenLines); hint != "" {
+			parts = append(parts, hint)
+		}
 	}
 
 	content := style.Render(

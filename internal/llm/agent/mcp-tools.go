@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/SciMate-AI/scicli/internal/auth"
@@ -16,6 +17,22 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 )
+
+const (
+	maxMCPContextChars     = 4000
+	maxMCPContextLines     = 120
+	maxMCPJSONItems        = 24
+	maxMCPJSONStringChars  = 320
+	maxMCPJSONNestedDepth  = 6
+	maxMCPPreviewLineChars = 240
+)
+
+type MCPToolResponseMetadata struct {
+	RawContent    string `json:"raw_content,omitempty"`
+	OriginalChars int    `json:"original_chars,omitempty"`
+	OriginalLines int    `json:"original_lines,omitempty"`
+	Compacted     bool   `json:"compacted,omitempty"`
+}
 
 type mcpTool struct {
 	mcpName     string
@@ -109,19 +126,230 @@ func runTool(ctx context.Context, c MCPClient, tool mcp.Tool, input string) (too
 		return tools.NewTextErrorResponse(err.Error()), nil
 	}
 
-	output := ""
+	parts := make([]string, 0, len(result.Content))
 	for _, v := range result.Content {
 		switch item := v.(type) {
 		case mcp.TextContent:
-			output = item.Text
+			parts = append(parts, item.Text)
 		case *mcp.TextContent:
-			output = item.Text
+			parts = append(parts, item.Text)
 		default:
-			output = fmt.Sprintf("%v", v)
+			parts = append(parts, fmt.Sprintf("%v", v))
 		}
 	}
+	output := strings.TrimSpace(strings.Join(parts, "\n\n"))
 
-	return tools.NewTextResponse(output), nil
+	return compactMCPToolResponse(tool.Name, output), nil
+}
+
+func compactMCPToolResponse(toolName, output string) tools.ToolResponse {
+	output = strings.TrimSpace(output)
+	if output == "" {
+		return tools.NewTextResponse(output)
+	}
+
+	lines := strings.Count(output, "\n") + 1
+	summary := summarizeMCPOutput(toolName, output)
+	if summary == output {
+		return tools.NewTextResponse(output)
+	}
+
+	return tools.WithResponseMetadata(
+		tools.NewTextResponse(summary),
+		MCPToolResponseMetadata{
+			RawContent:    output,
+			OriginalChars: len(output),
+			OriginalLines: lines,
+			Compacted:     true,
+		},
+	)
+}
+
+func summarizeMCPOutput(toolName, output string) string {
+	trimmed := strings.TrimSpace(output)
+	if trimmed == "" {
+		return trimmed
+	}
+	if len(trimmed) <= maxMCPContextChars && lineCount(trimmed) <= maxMCPContextLines {
+		return trimmed
+	}
+
+	if summarized, ok := summarizeMCPJSON(trimmed); ok {
+		return truncateMCPText(
+			fmt.Sprintf(
+				"[MCP tool output compacted for model context from %s: %s]\n%s",
+				toolName,
+				mcpSummaryStats(trimmed),
+				summarized,
+			),
+			trimmed,
+		)
+	}
+
+	preview := truncatePreviewLines(trimmed, maxMCPContextLines/3)
+	return truncateMCPText(
+		fmt.Sprintf(
+			"[MCP tool output compacted for model context from %s: %s]\n%s",
+			toolName,
+			mcpSummaryStats(trimmed),
+			preview,
+		),
+		trimmed,
+	)
+}
+
+func summarizeMCPJSON(output string) (string, bool) {
+	var value any
+	if err := json.Unmarshal([]byte(output), &value); err != nil {
+		return "", false
+	}
+	compact := sanitizeMCPJSONValue("", value, 0)
+	data, err := json.MarshalIndent(compact, "", "  ")
+	if err != nil {
+		return "", false
+	}
+	return string(data), true
+}
+
+func sanitizeMCPJSONValue(path string, value any, depth int) any {
+	if depth >= maxMCPJSONNestedDepth {
+		return fmt.Sprintf("[omitted nested data at %s]", pathLabel(path))
+	}
+
+	switch item := value.(type) {
+	case map[string]any:
+		keys := make([]string, 0, len(item))
+		for key := range item {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+
+		out := make(map[string]any, len(item))
+		for _, key := range keys {
+			nextPath := key
+			if path != "" {
+				nextPath = path + "." + key
+			}
+			out[key] = sanitizeMCPJSONValue(nextPath, item[key], depth+1)
+		}
+		return out
+	case []any:
+		if len(item) > maxMCPJSONItems {
+			items := make([]any, 0, maxMCPJSONItems+1)
+			for i := 0; i < maxMCPJSONItems; i++ {
+				nextPath := fmt.Sprintf("%s[%d]", pathLabel(path), i)
+				items = append(items, sanitizeMCPJSONValue(nextPath, item[i], depth+1))
+			}
+			items = append(items, fmt.Sprintf("[omitted %d more items]", len(item)-maxMCPJSONItems))
+			return items
+		}
+		items := make([]any, 0, len(item))
+		for i, v := range item {
+			nextPath := fmt.Sprintf("%s[%d]", pathLabel(path), i)
+			items = append(items, sanitizeMCPJSONValue(nextPath, v, depth+1))
+		}
+		return items
+	case string:
+		return sanitizeMCPJSONString(path, item)
+	default:
+		return value
+	}
+}
+
+func sanitizeMCPJSONString(path, value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return value
+	}
+	if isBulkyMCPField(path) || len(trimmed) > maxMCPJSONStringChars || lineCount(trimmed) > 12 {
+		return fmt.Sprintf("[omitted %d chars at %s]", len(value), pathLabel(path))
+	}
+	return trimLineLength(trimmed, maxMCPPreviewLineChars)
+}
+
+func isBulkyMCPField(path string) bool {
+	path = strings.ToLower(path)
+	bulkyFields := []string{
+		"mol_block",
+		"molblock",
+		"pdb",
+		"sdf",
+		"xyz",
+		"svg",
+		"conformer",
+		"coordinate",
+		"coords",
+		"base64",
+		"binary",
+		"image",
+	}
+	for _, field := range bulkyFields {
+		if strings.Contains(path, field) {
+			return true
+		}
+	}
+	return false
+}
+
+func truncateMCPText(summary, original string) string {
+	summary = trimTextByLines(summary, maxMCPContextLines)
+	if len(summary) > maxMCPContextChars {
+		summary = strings.TrimSpace(summary[:maxMCPContextChars])
+	}
+	if summary == strings.TrimSpace(original) {
+		return summary
+	}
+	return strings.TrimSpace(summary) + fmt.Sprintf(
+		"\n\n[full MCP output omitted from model context: %s]",
+		mcpSummaryStats(original),
+	)
+}
+
+func truncatePreviewLines(content string, maxLines int) string {
+	if maxLines <= 0 {
+		return ""
+	}
+	lines := strings.Split(content, "\n")
+	if len(lines) > maxLines {
+		lines = lines[:maxLines]
+	}
+	for i, line := range lines {
+		lines[i] = trimLineLength(line, maxMCPPreviewLineChars)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func trimTextByLines(content string, maxLines int) string {
+	lines := strings.Split(content, "\n")
+	if len(lines) <= maxLines {
+		return strings.TrimSpace(content)
+	}
+	return strings.TrimSpace(strings.Join(lines[:maxLines], "\n"))
+}
+
+func trimLineLength(line string, maxChars int) string {
+	if maxChars <= 0 || len(line) <= maxChars {
+		return line
+	}
+	return strings.TrimSpace(line[:maxChars]) + " ..."
+}
+
+func mcpSummaryStats(content string) string {
+	return fmt.Sprintf("%d chars, %d lines", len(content), lineCount(content))
+}
+
+func lineCount(content string) int {
+	if content == "" {
+		return 0
+	}
+	return strings.Count(content, "\n") + 1
+}
+
+func pathLabel(path string) string {
+	if strings.TrimSpace(path) == "" {
+		return "root"
+	}
+	return path
 }
 
 func isAuthError(err error) bool {
