@@ -725,18 +725,31 @@ func createAgentProvider(agentName config.AgentName) (provider.Provider, error) 
 	if agentConfig.MaxTokens > 0 {
 		maxTokens = agentConfig.MaxTokens
 	}
+
+	if model.Provider == models.ProviderOpenAICompatible {
+		model.APIModel = providerCfg.Model
+		if strings.TrimSpace(providerCfg.Model) != "" {
+			model.Name = "OpenAI-compatible: " + providerCfg.Model
+		}
+	}
+
 	opts := []provider.ProviderClientOption{
 		provider.WithAPIKey(providerCfg.APIKey),
 		provider.WithModel(model),
 		provider.WithSystemMessage(prompt.GetAgentPrompt(agentName, model.Provider)),
 		provider.WithMaxTokens(maxTokens),
 	}
-	if model.Provider == models.ProviderOpenAI || model.Provider == models.ProviderLocal && model.CanReason {
+	if model.Provider == models.ProviderOpenAI || model.Provider == models.ProviderLocal || model.Provider == models.ProviderOpenAICompatible {
+		openAIOptions := []provider.OpenAIOption{}
+		if strings.TrimSpace(providerCfg.BaseURL) != "" {
+			openAIOptions = append(openAIOptions, provider.WithOpenAIBaseURL(providerCfg.BaseURL))
+		}
+		if model.CanReason {
+			openAIOptions = append(openAIOptions, provider.WithReasoningEffort(agentConfig.ReasoningEffort))
+		}
 		opts = append(
 			opts,
-			provider.WithOpenAIOptions(
-				provider.WithReasoningEffort(agentConfig.ReasoningEffort),
-			),
+			provider.WithOpenAIOptions(openAIOptions...),
 		)
 	} else if model.Provider == models.ProviderAnthropic && model.CanReason && agentName == config.AgentCoder {
 		opts = append(

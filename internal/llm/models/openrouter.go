@@ -3,6 +3,12 @@ package models
 const (
 	ProviderOpenRouter ModelProvider = "openrouter"
 
+	OpenRouterGPT54          ModelID = "openrouter.gpt-5.4"
+	OpenRouterGPT54Pro       ModelID = "openrouter.gpt-5.4-pro"
+	OpenRouterGPT5Mini       ModelID = "openrouter.gpt-5-mini"
+	OpenRouterGemini31Pro    ModelID = "openrouter.gemini-3.1-pro-preview"
+	OpenRouterClaudeSonnet45 ModelID = "openrouter.claude-sonnet-4.5"
+	OpenRouterGrokCodeFast1  ModelID = "openrouter.grok-code-fast-1"
 	OpenRouterGPT41          ModelID = "openrouter.gpt-4.1"
 	OpenRouterGPT41Mini      ModelID = "openrouter.gpt-4.1-mini"
 	OpenRouterGPT41Nano      ModelID = "openrouter.gpt-4.1-nano"
@@ -26,6 +32,82 @@ const (
 )
 
 var OpenRouterModels = map[ModelID]Model{
+	OpenRouterGPT54: {
+		ID:                 OpenRouterGPT54,
+		Name:               "OpenRouter 鈥?GPT 5.4",
+		Provider:           ProviderOpenRouter,
+		APIModel:           "openai/gpt-5.4",
+		CostPer1MIn:        OpenAIModels[GPT54].CostPer1MIn,
+		CostPer1MInCached:  OpenAIModels[GPT54].CostPer1MInCached,
+		CostPer1MOut:       OpenAIModels[GPT54].CostPer1MOut,
+		CostPer1MOutCached: OpenAIModels[GPT54].CostPer1MOutCached,
+		ContextWindow:      OpenAIModels[GPT54].ContextWindow,
+		DefaultMaxTokens:   OpenAIModels[GPT54].DefaultMaxTokens,
+		CanReason:          OpenAIModels[GPT54].CanReason,
+	},
+	OpenRouterGPT54Pro: {
+		ID:                 OpenRouterGPT54Pro,
+		Name:               "OpenRouter 鈥?GPT 5.4 Pro",
+		Provider:           ProviderOpenRouter,
+		APIModel:           "openai/gpt-5.4-pro",
+		CostPer1MIn:        OpenAIModels[GPT54Pro].CostPer1MIn,
+		CostPer1MInCached:  OpenAIModels[GPT54Pro].CostPer1MInCached,
+		CostPer1MOut:       OpenAIModels[GPT54Pro].CostPer1MOut,
+		CostPer1MOutCached: OpenAIModels[GPT54Pro].CostPer1MOutCached,
+		ContextWindow:      OpenAIModels[GPT54Pro].ContextWindow,
+		DefaultMaxTokens:   OpenAIModels[GPT54Pro].DefaultMaxTokens,
+		CanReason:          OpenAIModels[GPT54Pro].CanReason,
+	},
+	OpenRouterGPT5Mini: {
+		ID:                 OpenRouterGPT5Mini,
+		Name:               "OpenRouter 鈥?GPT 5 mini",
+		Provider:           ProviderOpenRouter,
+		APIModel:           "openai/gpt-5-mini",
+		CostPer1MIn:        OpenAIModels[GPT5Mini].CostPer1MIn,
+		CostPer1MInCached:  OpenAIModels[GPT5Mini].CostPer1MInCached,
+		CostPer1MOut:       OpenAIModels[GPT5Mini].CostPer1MOut,
+		CostPer1MOutCached: OpenAIModels[GPT5Mini].CostPer1MOutCached,
+		ContextWindow:      OpenAIModels[GPT5Mini].ContextWindow,
+		DefaultMaxTokens:   OpenAIModels[GPT5Mini].DefaultMaxTokens,
+		CanReason:          OpenAIModels[GPT5Mini].CanReason,
+	},
+	OpenRouterGemini31Pro: {
+		ID:                 OpenRouterGemini31Pro,
+		Name:               "OpenRouter 鈥?Gemini 3.1 Pro Preview",
+		Provider:           ProviderOpenRouter,
+		APIModel:           "google/gemini-3.1-pro-preview",
+		CostPer1MIn:        GeminiModels[Gemini31ProPreview].CostPer1MIn,
+		CostPer1MInCached:  GeminiModels[Gemini31ProPreview].CostPer1MInCached,
+		CostPer1MOut:       GeminiModels[Gemini31ProPreview].CostPer1MOut,
+		CostPer1MOutCached: GeminiModels[Gemini31ProPreview].CostPer1MOutCached,
+		ContextWindow:      GeminiModels[Gemini31ProPreview].ContextWindow,
+		DefaultMaxTokens:   GeminiModels[Gemini31ProPreview].DefaultMaxTokens,
+	},
+	OpenRouterClaudeSonnet45: {
+		ID:                 OpenRouterClaudeSonnet45,
+		Name:               "OpenRouter 鈥?Claude Sonnet 4.5",
+		Provider:           ProviderOpenRouter,
+		APIModel:           "anthropic/claude-sonnet-4.5",
+		CostPer1MIn:        AnthropicModels[Claude4Sonnet].CostPer1MIn,
+		CostPer1MInCached:  AnthropicModels[Claude4Sonnet].CostPer1MInCached,
+		CostPer1MOut:       AnthropicModels[Claude4Sonnet].CostPer1MOut,
+		CostPer1MOutCached: AnthropicModels[Claude4Sonnet].CostPer1MOutCached,
+		ContextWindow:      AnthropicModels[Claude4Sonnet].ContextWindow,
+		DefaultMaxTokens:   AnthropicModels[Claude4Sonnet].DefaultMaxTokens,
+		CanReason:          AnthropicModels[Claude4Sonnet].CanReason,
+	},
+	OpenRouterGrokCodeFast1: {
+		ID:                 OpenRouterGrokCodeFast1,
+		Name:               "OpenRouter 鈥?Grok Code Fast 1",
+		Provider:           ProviderOpenRouter,
+		APIModel:           "x-ai/grok-code-fast-1",
+		CostPer1MIn:        XAIModels[XAIGrokCodeFast1].CostPer1MIn,
+		CostPer1MInCached:  XAIModels[XAIGrokCodeFast1].CostPer1MInCached,
+		CostPer1MOut:       XAIModels[XAIGrokCodeFast1].CostPer1MOut,
+		CostPer1MOutCached: XAIModels[XAIGrokCodeFast1].CostPer1MOutCached,
+		ContextWindow:      XAIModels[XAIGrokCodeFast1].ContextWindow,
+		DefaultMaxTokens:   XAIModels[XAIGrokCodeFast1].DefaultMaxTokens,
+	},
 	OpenRouterGPT41: {
 		ID:                 OpenRouterGPT41,
 		Name:               "OpenRouter – GPT 4.1",
@@ -179,7 +261,7 @@ var OpenRouterModels = map[ModelID]Model{
 		ID:                 OpenRouterGemini25Flash,
 		Name:               "OpenRouter – Gemini 2.5 Flash",
 		Provider:           ProviderOpenRouter,
-		APIModel:           "google/gemini-2.5-flash-preview:thinking",
+		APIModel:           "google/gemini-2.5-flash",
 		CostPer1MIn:        GeminiModels[Gemini25Flash].CostPer1MIn,
 		CostPer1MInCached:  GeminiModels[Gemini25Flash].CostPer1MInCached,
 		CostPer1MOut:       GeminiModels[Gemini25Flash].CostPer1MOut,
@@ -191,7 +273,7 @@ var OpenRouterModels = map[ModelID]Model{
 		ID:                 OpenRouterGemini25,
 		Name:               "OpenRouter – Gemini 2.5 Pro",
 		Provider:           ProviderOpenRouter,
-		APIModel:           "google/gemini-2.5-pro-preview-03-25",
+		APIModel:           "google/gemini-2.5-pro",
 		CostPer1MIn:        GeminiModels[Gemini25].CostPer1MIn,
 		CostPer1MInCached:  GeminiModels[Gemini25].CostPer1MInCached,
 		CostPer1MOut:       GeminiModels[Gemini25].CostPer1MOut,

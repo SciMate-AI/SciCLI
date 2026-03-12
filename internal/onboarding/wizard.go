@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/SciMate-AI/scicli/internal/auth"
 	"github.com/SciMate-AI/scicli/internal/config"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -11,11 +12,19 @@ import (
 )
 
 type step int
+type authMode int
 
 const (
-	stepProvider step = iota
+	stepAuth step = iota
+	stepAuthForm
+	stepProvider
 	stepCredential
 	stepModel
+)
+
+const (
+	authModeLogin authMode = iota
+	authModeRegister
 )
 
 type wizardModel struct {
@@ -24,22 +33,33 @@ type wizardModel struct {
 
 	step step
 
+	authService *auth.Service
+	session     *auth.Session
+	authMode    authMode
+	authInputs  []textinput.Model
+	authFocus   int
+	authNotice  string
+
 	providers         []config.OnboardingProvider
 	selectedProvider  int
 	selectedModel     int
 	modelScrollOffset int
 
 	useDetectedCredential bool
-	apiKeyInput           textinput.Model
+	credentialInputs      []textinput.Model
+	credentialFocus       int
 
 	err       error
 	cancelled bool
 }
 
 func Run() error {
-	model := newWizardModel()
-	program := tea.NewProgram(model, tea.WithAltScreen())
+	model, err := newWizardModel()
+	if err != nil {
+		return err
+	}
 
+	program := tea.NewProgram(model, tea.WithAltScreen())
 	result, err := program.Run()
 	if err != nil {
 		return err
@@ -55,23 +75,32 @@ func Run() error {
 	return finished.err
 }
 
-func newWizardModel() *wizardModel {
-	apiKeyInput := textinput.New()
-	apiKeyInput.Placeholder = "Paste API key and press Enter"
-	apiKeyInput.Prompt = "> "
-	apiKeyInput.CharLimit = 512
-	apiKeyInput.Width = 56
-	apiKeyInput.EchoMode = textinput.EchoPassword
-	apiKeyInput.EchoCharacter = '*'
+func newWizardModel() (*wizardModel, error) {
+	authService, err := auth.NewService()
+	if err != nil {
+		return nil, err
+	}
+	session, err := authService.Status()
+	if err != nil {
+		return nil, err
+	}
 
 	model := &wizardModel{
-		step:        stepProvider,
+		authService: authService,
+		session:     session,
+		authMode:    authModeLogin,
 		providers:   config.OnboardingProviders(),
-		apiKeyInput: apiKeyInput,
 	}
+	model.initAuthInputs()
+	model.initCredentialInputs()
 	model.resetCredentialState()
 	model.resetModels()
-	return model
+	if session != nil {
+		model.step = stepProvider
+	} else {
+		model.step = stepAuth
+	}
+	return model, nil
 }
 
 func (m *wizardModel) Init() tea.Cmd {
@@ -87,16 +116,20 @@ func (m *wizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+c", "esc":
-			if m.step == stepProvider {
+			if m.step == stepAuth || m.step == stepProvider {
 				m.cancelled = true
 				return m, tea.Quit
 			}
 			m.prevStep()
-			return m, nil
+			return m, m.currentFocusCmd()
 		}
 	}
 
 	switch m.step {
+	case stepAuth:
+		return m.updateAuthStep(msg)
+	case stepAuthForm:
+		return m.updateAuthFormStep(msg)
 	case stepProvider:
 		return m.updateProviderStep(msg)
 	case stepCredential:
@@ -106,6 +139,82 @@ func (m *wizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	default:
 		return m, nil
 	}
+}
+
+func (m *wizardModel) updateAuthStep(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.session != nil {
+		if keyMsg, ok := msg.(tea.KeyMsg); ok && keyMsg.String() == "enter" {
+			m.step = stepProvider
+		}
+		return m, nil
+	}
+
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "up", "k", "down", "j", "tab":
+			if m.authMode == authModeLogin {
+				m.authMode = authModeRegister
+			} else {
+				m.authMode = authModeLogin
+			}
+		case "enter":
+			m.step = stepAuthForm
+			return m, m.focusAuthInput(0)
+		}
+	}
+
+	return m, nil
+}
+
+func (m *wizardModel) updateAuthFormStep(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "up", "shift+tab":
+			return m, m.focusAuthInput((m.authFocus + len(m.authInputs) - 1) % len(m.authInputs))
+		case "down", "tab":
+			return m, m.focusAuthInput((m.authFocus + 1) % len(m.authInputs))
+		case "enter":
+			if m.authFocus < len(m.authInputs)-1 {
+				return m, m.focusAuthInput(m.authFocus + 1)
+			}
+			email := strings.TrimSpace(m.authInputs[0].Value())
+			password := m.authInputs[1].Value()
+			if email == "" || password == "" {
+				return m, nil
+			}
+			if m.authMode == authModeRegister {
+				session, needsConfirmation, err := m.authService.Register(email, password)
+				if err != nil {
+					m.authNotice = err.Error()
+					return m, nil
+				}
+				if needsConfirmation {
+					m.authNotice = "Registration succeeded. Confirm your email, then log in."
+					m.authMode = authModeLogin
+					m.authInputs[1].SetValue("")
+					m.step = stepAuth
+					return m, nil
+				}
+				m.session = session
+			} else {
+				session, err := m.authService.Login(email, password)
+				if err != nil {
+					m.authNotice = err.Error()
+					return m, nil
+				}
+				m.session = session
+			}
+			m.authNotice = ""
+			m.step = stepProvider
+			return m, nil
+		}
+	}
+
+	var cmd tea.Cmd
+	m.authInputs[m.authFocus], cmd = m.authInputs[m.authFocus].Update(msg)
+	return m, cmd
 }
 
 func (m *wizardModel) updateProviderStep(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -130,10 +239,7 @@ func (m *wizardModel) updateProviderStep(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.resetModels()
 		case "enter":
 			m.step = stepCredential
-			if m.shouldFocusAPIInput() {
-				return m, m.apiKeyInput.Focus()
-			}
-			m.apiKeyInput.Blur()
+			return m, m.currentFocusCmd()
 		}
 	}
 
@@ -146,37 +252,33 @@ func (m *wizardModel) updateCredentialStep(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
-		case "left", "right", "tab":
+		case "left", "right":
 			if current.SupportsManualAPIKey && current.DetectedCredential {
 				m.useDetectedCredential = !m.useDetectedCredential
-				if m.useDetectedCredential {
-					m.apiKeyInput.Blur()
-				} else {
-					return m, m.apiKeyInput.Focus()
-				}
+				return m, m.currentFocusCmd()
 			}
-			return m, nil
+		case "up", "shift+tab":
+			if m.shouldFocusCredentialInputs() {
+				return m, m.focusCredentialInput((m.credentialFocus + len(m.activeCredentialInputs()) - 1) % len(m.activeCredentialInputs()))
+			}
+		case "down", "tab":
+			if m.shouldFocusCredentialInputs() {
+				return m, m.focusCredentialInput((m.credentialFocus + 1) % len(m.activeCredentialInputs()))
+			}
 		case "enter":
-			if current.SupportsManualAPIKey {
-				if m.useDetectedCredential {
-					m.step = stepModel
-					m.apiKeyInput.Blur()
-					return m, nil
-				}
-				if strings.TrimSpace(m.apiKeyInput.Value()) == "" {
-					return m, nil
-				}
+			if !m.validateCredentialStep() {
+				return m, nil
 			}
-
 			m.step = stepModel
-			m.apiKeyInput.Blur()
 			return m, nil
 		}
 	}
 
-	if m.shouldFocusAPIInput() {
+	if m.shouldFocusCredentialInputs() {
+		active := m.activeCredentialInputs()
 		var cmd tea.Cmd
-		m.apiKeyInput, cmd = m.apiKeyInput.Update(msg)
+		active[m.credentialFocus], cmd = active[m.credentialFocus].Update(msg)
+		m.syncCredentialInputs(active)
 		return m, cmd
 	}
 
@@ -207,14 +309,16 @@ func (m *wizardModel) updateModelStep(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.keepModelSelectionVisible(len(modelsForProvider))
 		case "enter":
-			apiKey := strings.TrimSpace(m.apiKeyInput.Value())
-			persistAPIKey := m.currentProvider().SupportsManualAPIKey && !m.useDetectedCredential && apiKey != ""
-			m.err = config.SaveOnboardingSelection(
-				m.currentProvider().Provider,
-				apiKey,
-				persistAPIKey,
-				modelsForProvider[m.selectedModel].ID,
-			)
+			apiKey := strings.TrimSpace(m.credentialInputValue("apiKey"))
+			selection := config.OnboardingSelection{
+				Provider:      m.currentProvider().Provider,
+				APIKey:        apiKey,
+				PersistAPIKey: apiKey != "" && (!m.currentProvider().DetectedCredential || !m.useDetectedCredential),
+				ModelID:       modelsForProvider[m.selectedModel].ID,
+				BaseURL:       strings.TrimSpace(m.credentialInputValue("baseURL")),
+				CustomModel:   strings.TrimSpace(m.credentialInputValue("model")),
+			}
+			m.err = config.SaveOnboardingSelection(selection)
 			return m, tea.Quit
 		}
 	}
@@ -228,19 +332,23 @@ func (m *wizardModel) View() string {
 	}
 
 	container := lipgloss.NewStyle().
-		Width(minInt(88, m.width-4)).
+		Width(minInt(92, m.width-4)).
 		Padding(1, 2).
 		Border(lipgloss.RoundedBorder())
 
 	parts := []string{
 		lipgloss.NewStyle().Bold(true).Render("SciCLI first-run setup"),
-		"Configure an AI provider and default model before opening the main UI.",
+		"Register or log in first, then configure your AI provider and default model.",
 		"",
 		m.stepIndicator(),
 		"",
 	}
 
 	switch m.step {
+	case stepAuth:
+		parts = append(parts, m.renderAuthStep()...)
+	case stepAuthForm:
+		parts = append(parts, m.renderAuthFormStep()...)
 	case stepProvider:
 		parts = append(parts, m.renderProviderStep()...)
 	case stepCredential:
@@ -249,10 +357,11 @@ func (m *wizardModel) View() string {
 		parts = append(parts, m.renderModelStep()...)
 	}
 
-	parts = append(parts,
-		"",
-		lipgloss.NewStyle().Faint(true).Render("Config file: "+config.ConfigFilePath()),
-	)
+	if strings.TrimSpace(m.authNotice) != "" {
+		parts = append(parts, "", lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Render(m.authNotice))
+	}
+
+	parts = append(parts, "", lipgloss.NewStyle().Faint(true).Render("Config file: "+config.ConfigFilePath()))
 
 	return lipgloss.Place(
 		m.width,
@@ -263,9 +372,49 @@ func (m *wizardModel) View() string {
 	)
 }
 
+func (m *wizardModel) renderAuthStep() []string {
+	if m.session != nil {
+		return []string{
+			"Step 1/4: SciMate account",
+			"Current session: " + strings.TrimSpace(m.session.Email),
+			"Press Enter to continue to provider setup.",
+		}
+	}
+
+	current := "Login"
+	other := "Register"
+	if m.authMode == authModeRegister {
+		current = "Register"
+		other = "Login"
+	}
+
+	return []string{
+		"Step 1/4: SciMate account",
+		"Up/Down to switch mode, Enter to continue.",
+		"",
+		"> " + current,
+		"  " + other,
+	}
+}
+
+func (m *wizardModel) renderAuthFormStep() []string {
+	title := "Step 1/4: Login"
+	if m.authMode == authModeRegister {
+		title = "Step 1/4: Register"
+	}
+
+	return []string{
+		title,
+		"Tab to move between fields, Enter on password to submit.",
+		"",
+		m.authInputs[0].View(),
+		m.authInputs[1].View(),
+	}
+}
+
 func (m *wizardModel) renderProviderStep() []string {
 	lines := []string{
-		"Step 1/3: Choose a provider",
+		"Step 2/4: Choose a provider",
 		"Up/Down to move, Enter to continue.",
 		"",
 	}
@@ -290,39 +439,36 @@ func (m *wizardModel) renderProviderStep() []string {
 func (m *wizardModel) renderCredentialStep() []string {
 	current := m.currentProvider()
 	lines := []string{
-		"Step 2/3: Provide credentials for " + current.Label,
+		"Step 3/4: Configure " + current.Label,
 		"",
 	}
 
-	if current.SupportsManualAPIKey {
-		if current.DetectedCredential {
-			modeLabel := "Use detected credential"
-			if !m.useDetectedCredential {
-				modeLabel = "Enter API key manually"
-			}
-			lines = append(lines,
-				"Tab to switch mode. Current mode: "+modeLabel,
-				"Detected source: "+current.CredentialHint,
-				"",
-			)
-		} else {
-			lines = append(lines,
-				"Enter your API key. It will be saved to the global config file.",
-				"Expected source: "+current.CredentialHint,
-				"",
-			)
+	if current.DetectedCredential && current.SupportsManualAPIKey {
+		modeLabel := "Use detected credential"
+		if !m.useDetectedCredential {
+			modeLabel = "Enter API key manually"
 		}
+		lines = append(lines, "Left/Right to switch mode. Current mode: "+modeLabel, "")
+	}
 
-		if m.shouldFocusAPIInput() {
-			lines = append(lines, m.apiKeyInput.View())
-		} else {
-			lines = append(lines, "Using detected credential. Press Enter to continue.")
-		}
-	} else {
-		lines = append(lines,
-			"Detected credential source: "+current.CredentialHint,
-			"Press Enter to continue.",
-		)
+	if current.RequiresBaseURL {
+		lines = append(lines, "Base URL: "+current.BaseURLHint)
+	}
+	if current.RequiresModel {
+		lines = append(lines, "Model: "+current.ModelHint)
+	}
+	if current.CredentialHint != "" {
+		lines = append(lines, "Credential: "+current.CredentialHint)
+	}
+	lines = append(lines, "")
+
+	if !m.shouldFocusCredentialInputs() {
+		lines = append(lines, "Using detected credential. Press Enter to continue.")
+		return lines
+	}
+
+	for _, input := range m.activeCredentialInputs() {
+		lines = append(lines, input.View())
 	}
 
 	return lines
@@ -331,7 +477,7 @@ func (m *wizardModel) renderCredentialStep() []string {
 func (m *wizardModel) renderModelStep() []string {
 	modelsForProvider := config.OnboardingModels(m.currentProvider().Provider)
 	lines := []string{
-		"Step 3/3: Choose the default coder model",
+		"Step 4/4: Choose the default coder model",
 		"Up/Down to move, Enter to save and continue.",
 		"",
 	}
@@ -355,10 +501,22 @@ func (m *wizardModel) renderModelStep() []string {
 }
 
 func (m *wizardModel) stepIndicator() string {
-	labels := []string{"Provider", "Credential", "Model"}
+	labels := []string{"Auth", "Provider", "Credential", "Model"}
+	current := 0
+	switch m.step {
+	case stepProvider:
+		current = 1
+	case stepCredential:
+		current = 2
+	case stepModel:
+		current = 3
+	default:
+		current = 0
+	}
+
 	out := make([]string, 0, len(labels))
 	for idx, label := range labels {
-		if idx == int(m.step) {
+		if idx == current {
 			out = append(out, "["+label+"]")
 			continue
 		}
@@ -369,13 +527,16 @@ func (m *wizardModel) stepIndicator() string {
 
 func (m *wizardModel) prevStep() {
 	switch m.step {
+	case stepAuthForm:
+		m.step = stepAuth
+	case stepProvider:
+		if m.session == nil {
+			m.step = stepAuth
+		}
 	case stepCredential:
 		m.step = stepProvider
 	case stepModel:
 		m.step = stepCredential
-		if m.shouldFocusAPIInput() {
-			m.apiKeyInput.Focus()
-		}
 	}
 }
 
@@ -383,26 +544,156 @@ func (m *wizardModel) currentProvider() config.OnboardingProvider {
 	return m.providers[m.selectedProvider]
 }
 
-func (m *wizardModel) shouldFocusAPIInput() bool {
+func (m *wizardModel) initAuthInputs() {
+	email := textinput.New()
+	email.Placeholder = "Email"
+	email.Prompt = "> "
+	email.Width = 56
+
+	password := textinput.New()
+	password.Placeholder = "Password"
+	password.Prompt = "> "
+	password.Width = 56
+	password.EchoMode = textinput.EchoPassword
+	password.EchoCharacter = '*'
+
+	m.authInputs = []textinput.Model{email, password}
+}
+
+func (m *wizardModel) initCredentialInputs() {
+	baseURL := textinput.New()
+	baseURL.Placeholder = "Base URL"
+	baseURL.Prompt = "> "
+	baseURL.Width = 56
+
+	apiKey := textinput.New()
+	apiKey.Placeholder = "API key"
+	apiKey.Prompt = "> "
+	apiKey.Width = 56
+	apiKey.EchoMode = textinput.EchoPassword
+	apiKey.EchoCharacter = '*'
+
+	model := textinput.New()
+	model.Placeholder = "Model"
+	model.Prompt = "> "
+	model.Width = 56
+
+	m.credentialInputs = []textinput.Model{baseURL, apiKey, model}
+}
+
+func (m *wizardModel) currentFocusCmd() tea.Cmd {
+	switch m.step {
+	case stepAuthForm:
+		return m.focusAuthInput(m.authFocus)
+	case stepCredential:
+		if m.shouldFocusCredentialInputs() {
+			return m.focusCredentialInput(m.credentialFocus)
+		}
+	}
+	return nil
+}
+
+func (m *wizardModel) focusAuthInput(index int) tea.Cmd {
+	m.authFocus = index
+	for i := range m.authInputs {
+		m.authInputs[i].Blur()
+	}
+	return m.authInputs[index].Focus()
+}
+
+func (m *wizardModel) activeCredentialInputs() []textinput.Model {
 	current := m.currentProvider()
-	if !current.SupportsManualAPIKey {
+	active := make([]textinput.Model, 0, 3)
+	if current.RequiresBaseURL {
+		active = append(active, m.credentialInputs[0])
+	}
+	if current.SupportsManualAPIKey && (!current.DetectedCredential || !m.useDetectedCredential) {
+		active = append(active, m.credentialInputs[1])
+	}
+	if current.RequiresModel {
+		active = append(active, m.credentialInputs[2])
+	}
+	return active
+}
+
+func (m *wizardModel) syncCredentialInputs(active []textinput.Model) {
+	current := m.currentProvider()
+	cursor := 0
+	if current.RequiresBaseURL {
+		m.credentialInputs[0] = active[cursor]
+		cursor++
+	}
+	if current.SupportsManualAPIKey && (!current.DetectedCredential || !m.useDetectedCredential) {
+		m.credentialInputs[1] = active[cursor]
+		cursor++
+	}
+	if current.RequiresModel {
+		m.credentialInputs[2] = active[cursor]
+	}
+}
+
+func (m *wizardModel) focusCredentialInput(index int) tea.Cmd {
+	active := m.activeCredentialInputs()
+	if len(active) == 0 {
+		return nil
+	}
+	if index >= len(active) {
+		index = 0
+	}
+	m.credentialFocus = index
+	for i := range active {
+		if i == index {
+			active[i].Focus()
+		} else {
+			active[i].Blur()
+		}
+	}
+	m.syncCredentialInputs(active)
+	return nil
+}
+
+func (m *wizardModel) shouldFocusCredentialInputs() bool {
+	return len(m.activeCredentialInputs()) > 0
+}
+
+func (m *wizardModel) credentialInputValue(name string) string {
+	switch name {
+	case "baseURL":
+		return m.credentialInputs[0].Value()
+	case "apiKey":
+		return m.credentialInputs[1].Value()
+	case "model":
+		return m.credentialInputs[2].Value()
+	default:
+		return ""
+	}
+}
+
+func (m *wizardModel) validateCredentialStep() bool {
+	current := m.currentProvider()
+	if current.RequiresBaseURL && strings.TrimSpace(m.credentialInputValue("baseURL")) == "" {
 		return false
 	}
-	if current.DetectedCredential {
-		return !m.useDetectedCredential
+	if current.RequiresModel && strings.TrimSpace(m.credentialInputValue("model")) == "" {
+		return false
+	}
+	if current.SupportsManualAPIKey && !current.OptionalAPIKey && !current.DetectedCredential && strings.TrimSpace(m.credentialInputValue("apiKey")) == "" {
+		return false
+	}
+	if current.SupportsManualAPIKey && !current.OptionalAPIKey && current.DetectedCredential && !m.useDetectedCredential && strings.TrimSpace(m.credentialInputValue("apiKey")) == "" {
+		return false
 	}
 	return true
 }
 
 func (m *wizardModel) resetCredentialState() {
-	current := m.currentProvider()
-	m.apiKeyInput.SetValue("")
-	m.useDetectedCredential = current.DetectedCredential
-	if m.shouldFocusAPIInput() {
-		m.apiKeyInput.Focus()
-	} else {
-		m.apiKeyInput.Blur()
+	for i := range m.credentialInputs {
+		m.credentialInputs[i].SetValue("")
+		m.credentialInputs[i].Blur()
 	}
+	current := m.currentProvider()
+	m.useDetectedCredential = current.DetectedCredential
+	m.credentialFocus = 0
 }
 
 func (m *wizardModel) resetModels() {

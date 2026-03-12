@@ -3,6 +3,10 @@ package models
 const ProviderAzure ModelProvider = "azure"
 
 const (
+	AzureGPT54        ModelID = "azure.gpt-5.4"
+	AzureGPT54Pro     ModelID = "azure.gpt-5.4-pro"
+	AzureGPT5Mini     ModelID = "azure.gpt-5-mini"
+	AzureGPT5Nano     ModelID = "azure.gpt-5-nano"
 	AzureGPT41        ModelID = "azure.gpt-4.1"
 	AzureGPT41Mini    ModelID = "azure.gpt-4.1-mini"
 	AzureGPT41Nano    ModelID = "azure.gpt-4.1-nano"
@@ -17,6 +21,62 @@ const (
 )
 
 var AzureModels = map[ModelID]Model{
+	AzureGPT54: {
+		ID:                  AzureGPT54,
+		Name:                "Azure OpenAI 鈥?GPT 5.4",
+		Provider:            ProviderAzure,
+		APIModel:            "gpt-5.4",
+		CostPer1MIn:         OpenAIModels[GPT54].CostPer1MIn,
+		CostPer1MInCached:   OpenAIModels[GPT54].CostPer1MInCached,
+		CostPer1MOut:        OpenAIModels[GPT54].CostPer1MOut,
+		CostPer1MOutCached:  OpenAIModels[GPT54].CostPer1MOutCached,
+		ContextWindow:       OpenAIModels[GPT54].ContextWindow,
+		DefaultMaxTokens:    OpenAIModels[GPT54].DefaultMaxTokens,
+		CanReason:           OpenAIModels[GPT54].CanReason,
+		SupportsAttachments: true,
+	},
+	AzureGPT54Pro: {
+		ID:                  AzureGPT54Pro,
+		Name:                "Azure OpenAI 鈥?GPT 5.4 Pro",
+		Provider:            ProviderAzure,
+		APIModel:            "gpt-5.4-pro",
+		CostPer1MIn:         OpenAIModels[GPT54Pro].CostPer1MIn,
+		CostPer1MInCached:   OpenAIModels[GPT54Pro].CostPer1MInCached,
+		CostPer1MOut:        OpenAIModels[GPT54Pro].CostPer1MOut,
+		CostPer1MOutCached:  OpenAIModels[GPT54Pro].CostPer1MOutCached,
+		ContextWindow:       OpenAIModels[GPT54Pro].ContextWindow,
+		DefaultMaxTokens:    OpenAIModels[GPT54Pro].DefaultMaxTokens,
+		CanReason:           OpenAIModels[GPT54Pro].CanReason,
+		SupportsAttachments: true,
+	},
+	AzureGPT5Mini: {
+		ID:                  AzureGPT5Mini,
+		Name:                "Azure OpenAI 鈥?GPT 5 mini",
+		Provider:            ProviderAzure,
+		APIModel:            "gpt-5-mini",
+		CostPer1MIn:         OpenAIModels[GPT5Mini].CostPer1MIn,
+		CostPer1MInCached:   OpenAIModels[GPT5Mini].CostPer1MInCached,
+		CostPer1MOut:        OpenAIModels[GPT5Mini].CostPer1MOut,
+		CostPer1MOutCached:  OpenAIModels[GPT5Mini].CostPer1MOutCached,
+		ContextWindow:       OpenAIModels[GPT5Mini].ContextWindow,
+		DefaultMaxTokens:    OpenAIModels[GPT5Mini].DefaultMaxTokens,
+		CanReason:           OpenAIModels[GPT5Mini].CanReason,
+		SupportsAttachments: true,
+	},
+	AzureGPT5Nano: {
+		ID:                  AzureGPT5Nano,
+		Name:                "Azure OpenAI 鈥?GPT 5 nano",
+		Provider:            ProviderAzure,
+		APIModel:            "gpt-5-nano",
+		CostPer1MIn:         OpenAIModels[GPT5Nano].CostPer1MIn,
+		CostPer1MInCached:   OpenAIModels[GPT5Nano].CostPer1MInCached,
+		CostPer1MOut:        OpenAIModels[GPT5Nano].CostPer1MOut,
+		CostPer1MOutCached:  OpenAIModels[GPT5Nano].CostPer1MOutCached,
+		ContextWindow:       OpenAIModels[GPT5Nano].ContextWindow,
+		DefaultMaxTokens:    OpenAIModels[GPT5Nano].DefaultMaxTokens,
+		CanReason:           OpenAIModels[GPT5Nano].CanReason,
+		SupportsAttachments: true,
+	},
 	AzureGPT41: {
 		ID:                  AzureGPT41,
 		Name:                "Azure OpenAI – GPT 4.1",

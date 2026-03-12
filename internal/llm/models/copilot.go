@@ -4,6 +4,12 @@ const (
 	ProviderCopilot ModelProvider = "copilot"
 
 	// GitHub Copilot models
+	CopilotGPT54           ModelID = "copilot.gpt-5.4"
+	CopilotGPT5Mini        ModelID = "copilot.gpt-5-mini"
+	CopilotClaudeOpus41    ModelID = "copilot.claude-opus-4.1"
+	CopilotClaudeSonnet45  ModelID = "copilot.claude-sonnet-4.5"
+	CopilotGemini31Pro     ModelID = "copilot.gemini-3.1-pro-preview"
+	CopilotGrokCodeFast1   ModelID = "copilot.grok-code-fast-1"
 	CopilotGTP35Turbo      ModelID = "copilot.gpt-3.5-turbo"
 	CopilotGPT4o           ModelID = "copilot.gpt-4o"
 	CopilotGPT4oMini       ModelID = "copilot.gpt-4o-mini"
@@ -25,10 +31,94 @@ var CopilotAnthropicModels = []ModelID{
 	CopilotClaude37,
 	CopilotClaude37Thought,
 	CopilotClaude4,
+	CopilotClaudeOpus41,
+	CopilotClaudeSonnet45,
 }
 
 // GitHub Copilot models available through GitHub's API
 var CopilotModels = map[ModelID]Model{
+	CopilotGPT54: {
+		ID:                  CopilotGPT54,
+		Name:                "GitHub Copilot GPT-5.4",
+		Provider:            ProviderCopilot,
+		APIModel:            "gpt-5.4",
+		CostPer1MIn:         0.0,
+		CostPer1MInCached:   0.0,
+		CostPer1MOutCached:  0.0,
+		CostPer1MOut:        0.0,
+		ContextWindow:       400_000,
+		DefaultMaxTokens:    16384,
+		CanReason:           true,
+		SupportsAttachments: true,
+	},
+	CopilotGPT5Mini: {
+		ID:                  CopilotGPT5Mini,
+		Name:                "GitHub Copilot GPT-5 mini",
+		Provider:            ProviderCopilot,
+		APIModel:            "gpt-5-mini",
+		CostPer1MIn:         0.0,
+		CostPer1MInCached:   0.0,
+		CostPer1MOutCached:  0.0,
+		CostPer1MOut:        0.0,
+		ContextWindow:       400_000,
+		DefaultMaxTokens:    8192,
+		CanReason:           true,
+		SupportsAttachments: true,
+	},
+	CopilotClaudeOpus41: {
+		ID:                  CopilotClaudeOpus41,
+		Name:                "GitHub Copilot Claude Opus 4.1",
+		Provider:            ProviderCopilot,
+		APIModel:            "claude-opus-4.1",
+		CostPer1MIn:         0.0,
+		CostPer1MInCached:   0.0,
+		CostPer1MOutCached:  0.0,
+		CostPer1MOut:        0.0,
+		ContextWindow:       200_000,
+		DefaultMaxTokens:    16000,
+		CanReason:           true,
+		SupportsAttachments: true,
+	},
+	CopilotClaudeSonnet45: {
+		ID:                  CopilotClaudeSonnet45,
+		Name:                "GitHub Copilot Claude Sonnet 4.5",
+		Provider:            ProviderCopilot,
+		APIModel:            "claude-sonnet-4.5",
+		CostPer1MIn:         0.0,
+		CostPer1MInCached:   0.0,
+		CostPer1MOutCached:  0.0,
+		CostPer1MOut:        0.0,
+		ContextWindow:       200_000,
+		DefaultMaxTokens:    16000,
+		CanReason:           true,
+		SupportsAttachments: true,
+	},
+	CopilotGemini31Pro: {
+		ID:                  CopilotGemini31Pro,
+		Name:                "GitHub Copilot Gemini 3.1 Pro Preview",
+		Provider:            ProviderCopilot,
+		APIModel:            "gemini-3.1-pro-preview",
+		CostPer1MIn:         0.0,
+		CostPer1MInCached:   0.0,
+		CostPer1MOutCached:  0.0,
+		CostPer1MOut:        0.0,
+		ContextWindow:       1_000_000,
+		DefaultMaxTokens:    16000,
+		SupportsAttachments: true,
+	},
+	CopilotGrokCodeFast1: {
+		ID:                  CopilotGrokCodeFast1,
+		Name:                "GitHub Copilot Grok Code Fast 1",
+		Provider:            ProviderCopilot,
+		APIModel:            "grok-code-fast-1",
+		CostPer1MIn:         0.0,
+		CostPer1MInCached:   0.0,
+		CostPer1MOutCached:  0.0,
+		CostPer1MOut:        0.0,
+		ContextWindow:       256_000,
+		DefaultMaxTokens:    16000,
+		SupportsAttachments: true,
+	},
 	CopilotGTP35Turbo: {
 		ID:                  CopilotGTP35Turbo,
 		Name:                "GitHub Copilot GPT-3.5-turbo",

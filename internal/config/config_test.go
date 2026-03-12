@@ -55,21 +55,60 @@ func TestSaveOnboardingSelectionPersistsGlobalConfig(t *testing.T) {
 		MCPServers: make(map[string]MCPServer),
 	}
 
-	err := SaveOnboardingSelection(models.ProviderOpenAI, "test-key", true, models.GPT41)
+	err := SaveOnboardingSelection(OnboardingSelection{
+		Provider:      models.ProviderOpenAI,
+		APIKey:        "test-key",
+		PersistAPIKey: true,
+		ModelID:       models.GPT54,
+	})
 	require.NoError(t, err)
 
 	assert.False(t, NeedsOnboarding())
 	assert.Equal(t, "test-key", cfg.Providers[models.ProviderOpenAI].APIKey)
-	assert.Equal(t, models.GPT41, cfg.Agents[AgentCoder].Model)
-	assert.Equal(t, models.GPT41, cfg.Agents[AgentSummarizer].Model)
-	assert.Equal(t, models.GPT41Mini, cfg.Agents[AgentTask].Model)
-	assert.Equal(t, models.GPT41Mini, cfg.Agents[AgentTitle].Model)
+	assert.Equal(t, models.GPT54, cfg.Agents[AgentCoder].Model)
+	assert.Equal(t, models.GPT54, cfg.Agents[AgentSummarizer].Model)
+	assert.Equal(t, models.GPT5Mini, cfg.Agents[AgentTask].Model)
+	assert.Equal(t, models.GPT5Mini, cfg.Agents[AgentTitle].Model)
 
 	savedConfig, err := os.ReadFile(configFile)
 	require.NoError(t, err)
 	assert.Contains(t, string(savedConfig), `"openai"`)
 	assert.Contains(t, string(savedConfig), `"test-key"`)
-	assert.Contains(t, string(savedConfig), `"gpt-4.1"`)
+	assert.Contains(t, string(savedConfig), `"gpt-5.4"`)
+}
+
+func TestSaveOnboardingSelectionPersistsOpenAICompatibleProvider(t *testing.T) {
+	resetConfigTestState()
+
+	tmpDir := t.TempDir()
+	configFile := filepath.Join(tmpDir, ".scicli.json")
+	require.NoError(t, os.WriteFile(configFile, []byte("{}"), 0o644))
+
+	viper.SetConfigFile(configFile)
+	require.NoError(t, viper.ReadInConfig())
+
+	cfg = &Config{
+		Providers:  make(map[models.ModelProvider]Provider),
+		Agents:     make(map[AgentName]Agent),
+		LSP:        make(map[string]LSPConfig),
+		MCPServers: make(map[string]MCPServer),
+	}
+
+	err := SaveOnboardingSelection(OnboardingSelection{
+		Provider:      models.ProviderOpenAICompatible,
+		APIKey:        "compat-key",
+		PersistAPIKey: true,
+		ModelID:       models.OpenAICompatibleCustom,
+		BaseURL:       "https://example.test/v1",
+		CustomModel:   "gpt-5.4",
+	})
+	require.NoError(t, err)
+
+	assert.False(t, NeedsOnboarding())
+	assert.Equal(t, "compat-key", cfg.Providers[models.ProviderOpenAICompatible].APIKey)
+	assert.Equal(t, "https://example.test/v1", cfg.Providers[models.ProviderOpenAICompatible].BaseURL)
+	assert.Equal(t, "gpt-5.4", cfg.Providers[models.ProviderOpenAICompatible].Model)
+	assert.Equal(t, models.OpenAICompatibleCustom, cfg.Agents[AgentCoder].Model)
 }
 
 func resetConfigTestState() {

@@ -4,7 +4,10 @@ const (
 	ProviderGROQ ModelProvider = "groq"
 
 	// GROQ
-	QWENQwq ModelID = "qwen-qwq"
+	GPTOSS120B ModelID = "openai/gpt-oss-120b"
+	GPTOSS20B  ModelID = "openai/gpt-oss-20b"
+	Qwen3_32B  ModelID = "qwen/qwen3-32b"
+	QWENQwq    ModelID = "qwen-qwq"
 
 	// GROQ preview models
 	Llama4Scout               ModelID = "meta-llama/llama-4-scout-17b-16e-instruct"
@@ -14,6 +17,48 @@ const (
 )
 
 var GroqModels = map[ModelID]Model{
+	GPTOSS120B: {
+		ID:                  GPTOSS120B,
+		Name:                "GPT OSS 120B",
+		Provider:            ProviderGROQ,
+		APIModel:            "openai/gpt-oss-120b",
+		CostPer1MIn:         0,
+		CostPer1MInCached:   0,
+		CostPer1MOutCached:  0,
+		CostPer1MOut:        0,
+		ContextWindow:       128_000,
+		DefaultMaxTokens:    50000,
+		CanReason:           true,
+		SupportsAttachments: false,
+	},
+	GPTOSS20B: {
+		ID:                  GPTOSS20B,
+		Name:                "GPT OSS 20B",
+		Provider:            ProviderGROQ,
+		APIModel:            "openai/gpt-oss-20b",
+		CostPer1MIn:         0,
+		CostPer1MInCached:   0,
+		CostPer1MOutCached:  0,
+		CostPer1MOut:        0,
+		ContextWindow:       128_000,
+		DefaultMaxTokens:    50000,
+		CanReason:           true,
+		SupportsAttachments: false,
+	},
+	Qwen3_32B: {
+		ID:                  Qwen3_32B,
+		Name:                "Qwen3 32B",
+		Provider:            ProviderGROQ,
+		APIModel:            "qwen/qwen3-32b",
+		CostPer1MIn:         0,
+		CostPer1MInCached:   0,
+		CostPer1MOutCached:  0,
+		CostPer1MOut:        0,
+		ContextWindow:       128_000,
+		DefaultMaxTokens:    50000,
+		CanReason:           true,
+		SupportsAttachments: false,
+	},
 	//
 	// GROQ
 	QWENQwq: {

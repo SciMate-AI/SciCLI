@@ -8,47 +8,142 @@ import (
 	"github.com/SciMate-AI/scicli/internal/llm/models"
 )
 
+type OnboardingSelection struct {
+	Provider      models.ModelProvider
+	APIKey        string
+	PersistAPIKey bool
+	ModelID       models.ModelID
+	BaseURL       string
+	CustomModel   string
+}
+
+var curatedOnboardingModels = map[models.ModelProvider][]models.ModelID{
+	models.ProviderCopilot: {
+		models.CopilotGPT54,
+		models.CopilotGPT5Mini,
+		models.CopilotClaudeOpus41,
+		models.CopilotClaudeSonnet45,
+		models.CopilotGemini31Pro,
+		models.CopilotGrokCodeFast1,
+	},
+	models.ProviderAnthropic: {
+		models.Claude4Sonnet,
+		models.Claude4Opus,
+		models.Claude37Sonnet,
+		models.Claude35Sonnet,
+		models.Claude35Haiku,
+		models.Claude3Haiku,
+	},
+	models.ProviderOpenAI: {
+		models.GPT54,
+		models.GPT54Pro,
+		models.GPT52,
+		models.GPT52Pro,
+		models.GPT5Mini,
+		models.GPT5Nano,
+	},
+	models.ProviderGemini: {
+		models.Gemini31ProPreview,
+		models.Gemini31FlashLitePreview,
+		models.Gemini3ProPreview,
+		models.Gemini3FlashPreview,
+		models.Gemini25,
+		models.Gemini25Flash,
+	},
+	models.ProviderOpenRouter: {
+		models.OpenRouterGPT54,
+		models.OpenRouterGPT54Pro,
+		models.OpenRouterGPT5Mini,
+		models.OpenRouterGemini31Pro,
+		models.OpenRouterClaudeSonnet45,
+		models.OpenRouterGrokCodeFast1,
+	},
+	models.ProviderGROQ: {
+		models.GPTOSS120B,
+		models.GPTOSS20B,
+		models.Qwen3_32B,
+		models.Llama4Maverick,
+		models.Llama4Scout,
+		models.DeepseekR1DistillLlama70b,
+	},
+	models.ProviderXAI: {
+		models.XAIGrok4,
+		models.XAIGrok41FastReasoning,
+		models.XAIGrok41FastChat,
+		models.XAIGrok4FastReasoning,
+		models.XAIGrok4FastChat,
+		models.XAIGrokCodeFast1,
+	},
+	models.ProviderBedrock: {
+		models.BedrockClaude37Sonnet,
+	},
+	models.ProviderVertexAI: {
+		models.VertexAIGemini31ProPreview,
+		models.VertexAIGemini31FlashLitePreview,
+		models.VertexAIGemini3ProPreview,
+		models.VertexAIGemini3FlashPreview,
+		models.VertexAIGemini25,
+		models.VertexAIGemini25Flash,
+	},
+	models.ProviderOpenAICompatible: {
+		models.OpenAICompatibleCustom,
+	},
+}
+
 func OnboardingModels(provider models.ModelProvider) []models.Model {
-	var providerModels []models.Model
-	for _, model := range models.SupportedModels {
-		if model.Provider == provider {
-			providerModels = append(providerModels, model)
+	curatedIDs, hasCurated := curatedOnboardingModels[provider]
+	if !hasCurated {
+		var providerModels []models.Model
+		for _, model := range models.SupportedModels {
+			if model.Provider == provider {
+				providerModels = append(providerModels, model)
+			}
 		}
+
+		slices.SortFunc(providerModels, func(a, b models.Model) int {
+			if a.Name == b.Name {
+				return 0
+			}
+			if a.Name > b.Name {
+				return -1
+			}
+			return 1
+		})
+		return providerModels
 	}
 
-	slices.SortFunc(providerModels, func(a, b models.Model) int {
-		if a.Name == b.Name {
-			return 0
+	curated := make([]models.Model, 0, len(curatedIDs))
+	for _, id := range curatedIDs {
+		model, ok := models.SupportedModels[id]
+		if ok && model.Provider == provider {
+			curated = append(curated, model)
 		}
-		if a.Name > b.Name {
-			return -1
-		}
-		return 1
-	})
-
-	return providerModels
+	}
+	return curated
 }
 
 func DefaultOnboardingModel(provider models.ModelProvider) models.ModelID {
 	switch provider {
 	case models.ProviderCopilot:
-		return models.CopilotGPT4o
+		return models.CopilotGPT54
 	case models.ProviderAnthropic:
 		return models.Claude4Sonnet
 	case models.ProviderOpenAI:
-		return models.GPT41
+		return models.GPT54
 	case models.ProviderGemini:
-		return models.Gemini25
+		return models.Gemini31ProPreview
 	case models.ProviderGROQ:
-		return models.QWENQwq
+		return models.GPTOSS120B
 	case models.ProviderOpenRouter:
-		return models.OpenRouterClaude37Sonnet
+		return models.OpenRouterGPT54
 	case models.ProviderXAI:
-		return models.XAIGrok3Beta
+		return models.XAIGrok4
 	case models.ProviderBedrock:
 		return models.BedrockClaude37Sonnet
 	case models.ProviderVertexAI:
-		return models.VertexAIGemini25
+		return models.VertexAIGemini31ProPreview
+	case models.ProviderOpenAICompatible:
+		return models.OpenAICompatibleCustom
 	default:
 		modelsForProvider := OnboardingModels(provider)
 		if len(modelsForProvider) == 0 {
@@ -58,17 +153,26 @@ func DefaultOnboardingModel(provider models.ModelProvider) models.ModelID {
 	}
 }
 
-func SaveOnboardingSelection(provider models.ModelProvider, apiKey string, persistAPIKey bool, modelID models.ModelID) error {
+func SaveOnboardingSelection(selection OnboardingSelection) error {
 	if cfg == nil {
 		return fmt.Errorf("config not loaded")
 	}
 
-	model, ok := models.SupportedModels[modelID]
+	model, ok := models.SupportedModels[selection.ModelID]
 	if !ok {
-		return fmt.Errorf("model %s not supported", modelID)
+		return fmt.Errorf("model %s not supported", selection.ModelID)
 	}
-	if model.Provider != provider {
-		return fmt.Errorf("model %s does not belong to provider %s", modelID, provider)
+	if model.Provider != selection.Provider {
+		return fmt.Errorf("model %s does not belong to provider %s", selection.ModelID, selection.Provider)
+	}
+
+	if selection.Provider == models.ProviderOpenAICompatible {
+		if strings.TrimSpace(selection.BaseURL) == "" {
+			return fmt.Errorf("base url is required for %s", selection.Provider)
+		}
+		if strings.TrimSpace(selection.CustomModel) == "" {
+			return fmt.Errorf("model is required for %s", selection.Provider)
+		}
 	}
 
 	if cfg.Providers == nil {
@@ -79,16 +183,19 @@ func SaveOnboardingSelection(provider models.ModelProvider, apiKey string, persi
 	}
 
 	storedAPIKey := ""
-	if persistAPIKey {
-		storedAPIKey = strings.TrimSpace(apiKey)
+	if selection.PersistAPIKey {
+		storedAPIKey = strings.TrimSpace(selection.APIKey)
 	}
 
-	cfg.Providers[provider] = Provider{
+	providerCfg := Provider{
 		APIKey:   storedAPIKey,
+		BaseURL:  strings.TrimSpace(selection.BaseURL),
+		Model:    strings.TrimSpace(selection.CustomModel),
 		Disabled: false,
 	}
+	cfg.Providers[selection.Provider] = providerCfg
 
-	agents, err := buildOnboardingAgents(provider, modelID)
+	agents, err := buildOnboardingAgents(selection.Provider, selection.ModelID)
 	if err != nil {
 		return err
 	}
@@ -109,10 +216,7 @@ func SaveOnboardingSelection(provider models.ModelProvider, apiKey string, persi
 			fileCfg.Agents = make(map[AgentName]Agent)
 		}
 
-		fileCfg.Providers[provider] = Provider{
-			APIKey:   storedAPIKey,
-			Disabled: false,
-		}
+		fileCfg.Providers[selection.Provider] = providerCfg
 		for name, agent := range agents {
 			fileCfg.Agents[name] = agent
 		}
@@ -158,7 +262,7 @@ func newDefaultAgentConfig(agentName AgentName, modelID models.ModelID) Agent {
 		Model:     modelID,
 		MaxTokens: maxTokens,
 	}
-	if model.CanReason && (model.Provider == models.ProviderOpenAI || model.Provider == models.ProviderLocal) {
+	if model.CanReason && (model.Provider == models.ProviderOpenAI || model.Provider == models.ProviderLocal || model.Provider == models.ProviderOpenAICompatible) {
 		agent.ReasoningEffort = "medium"
 	}
 	return agent
@@ -167,15 +271,15 @@ func newDefaultAgentConfig(agentName AgentName, modelID models.ModelID) Agent {
 func defaultTaskModel(provider models.ModelProvider) models.ModelID {
 	switch provider {
 	case models.ProviderOpenAI:
-		return models.GPT41Mini
+		return models.GPT5Mini
 	case models.ProviderGemini:
-		return models.Gemini25Flash
+		return models.Gemini3FlashPreview
 	case models.ProviderOpenRouter:
-		return models.OpenRouterClaude37Sonnet
+		return models.OpenRouterGPT5Mini
 	case models.ProviderXAI:
-		return models.XAIGrok3Beta
+		return models.XAIGrokCodeFast1
 	case models.ProviderVertexAI:
-		return models.VertexAIGemini25Flash
+		return models.VertexAIGemini31FlashLitePreview
 	default:
 		return DefaultOnboardingModel(provider)
 	}
@@ -184,17 +288,17 @@ func defaultTaskModel(provider models.ModelProvider) models.ModelID {
 func defaultTitleModel(provider models.ModelProvider) models.ModelID {
 	switch provider {
 	case models.ProviderOpenAI:
-		return models.GPT41Mini
+		return models.GPT5Mini
 	case models.ProviderAnthropic:
 		return models.Claude4Sonnet
 	case models.ProviderGemini:
 		return models.Gemini25Flash
 	case models.ProviderOpenRouter:
-		return models.OpenRouterClaude35Haiku
+		return models.OpenRouterGPT5Mini
 	case models.ProviderXAI:
-		return models.XAiGrok3MiniFastBeta
+		return models.XAIGrok41FastChat
 	case models.ProviderVertexAI:
-		return models.VertexAIGemini25Flash
+		return models.VertexAIGemini31FlashLitePreview
 	default:
 		return DefaultOnboardingModel(provider)
 	}

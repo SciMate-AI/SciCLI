@@ -3,6 +3,13 @@ package models
 const (
 	ProviderOpenAI ModelProvider = "openai"
 
+	GPT54        ModelID = "gpt-5.4"
+	GPT54Pro     ModelID = "gpt-5.4-pro"
+	GPT52        ModelID = "gpt-5.2"
+	GPT52Pro     ModelID = "gpt-5.2-pro"
+	GPT5         ModelID = "gpt-5"
+	GPT5Mini     ModelID = "gpt-5-mini"
+	GPT5Nano     ModelID = "gpt-5-nano"
 	GPT41        ModelID = "gpt-4.1"
 	GPT41Mini    ModelID = "gpt-4.1-mini"
 	GPT41Nano    ModelID = "gpt-4.1-nano"
@@ -18,6 +25,104 @@ const (
 )
 
 var OpenAIModels = map[ModelID]Model{
+	GPT54: {
+		ID:                  GPT54,
+		Name:                "GPT 5.4",
+		Provider:            ProviderOpenAI,
+		APIModel:            "gpt-5.4",
+		CostPer1MIn:         1.25,
+		CostPer1MInCached:   0.125,
+		CostPer1MOutCached:  0.0,
+		CostPer1MOut:        10.0,
+		ContextWindow:       400_000,
+		DefaultMaxTokens:    32000,
+		CanReason:           true,
+		SupportsAttachments: true,
+	},
+	GPT54Pro: {
+		ID:                  GPT54Pro,
+		Name:                "GPT 5.4 Pro",
+		Provider:            ProviderOpenAI,
+		APIModel:            "gpt-5.4-pro",
+		CostPer1MIn:         15.0,
+		CostPer1MInCached:   0.0,
+		CostPer1MOutCached:  0.0,
+		CostPer1MOut:        120.0,
+		ContextWindow:       400_000,
+		DefaultMaxTokens:    32000,
+		CanReason:           true,
+		SupportsAttachments: true,
+	},
+	GPT52: {
+		ID:                  GPT52,
+		Name:                "GPT 5.2",
+		Provider:            ProviderOpenAI,
+		APIModel:            "gpt-5.2",
+		CostPer1MIn:         1.25,
+		CostPer1MInCached:   0.125,
+		CostPer1MOutCached:  0.0,
+		CostPer1MOut:        10.0,
+		ContextWindow:       400_000,
+		DefaultMaxTokens:    32000,
+		CanReason:           true,
+		SupportsAttachments: true,
+	},
+	GPT52Pro: {
+		ID:                  GPT52Pro,
+		Name:                "GPT 5.2 Pro",
+		Provider:            ProviderOpenAI,
+		APIModel:            "gpt-5.2-pro",
+		CostPer1MIn:         15.0,
+		CostPer1MInCached:   0.0,
+		CostPer1MOutCached:  0.0,
+		CostPer1MOut:        120.0,
+		ContextWindow:       400_000,
+		DefaultMaxTokens:    32000,
+		CanReason:           true,
+		SupportsAttachments: true,
+	},
+	GPT5: {
+		ID:                  GPT5,
+		Name:                "GPT 5",
+		Provider:            ProviderOpenAI,
+		APIModel:            "gpt-5",
+		CostPer1MIn:         1.25,
+		CostPer1MInCached:   0.125,
+		CostPer1MOutCached:  0.0,
+		CostPer1MOut:        10.0,
+		ContextWindow:       400_000,
+		DefaultMaxTokens:    32000,
+		CanReason:           true,
+		SupportsAttachments: true,
+	},
+	GPT5Mini: {
+		ID:                  GPT5Mini,
+		Name:                "GPT 5 mini",
+		Provider:            ProviderOpenAI,
+		APIModel:            "gpt-5-mini",
+		CostPer1MIn:         0.25,
+		CostPer1MInCached:   0.025,
+		CostPer1MOutCached:  0.0,
+		CostPer1MOut:        2.0,
+		ContextWindow:       400_000,
+		DefaultMaxTokens:    32000,
+		CanReason:           true,
+		SupportsAttachments: true,
+	},
+	GPT5Nano: {
+		ID:                  GPT5Nano,
+		Name:                "GPT 5 nano",
+		Provider:            ProviderOpenAI,
+		APIModel:            "gpt-5-nano",
+		CostPer1MIn:         0.05,
+		CostPer1MInCached:   0.005,
+		CostPer1MOutCached:  0.0,
+		CostPer1MOut:        0.4,
+		ContextWindow:       400_000,
+		DefaultMaxTokens:    32000,
+		CanReason:           true,
+		SupportsAttachments: true,
+	},
 	GPT41: {
 		ID:                  GPT41,
 		Name:                "GPT 4.1",
@@ -35,7 +140,7 @@ var OpenAIModels = map[ModelID]Model{
 		ID:                  GPT41Mini,
 		Name:                "GPT 4.1 mini",
 		Provider:            ProviderOpenAI,
-		APIModel:            "gpt-4.1",
+		APIModel:            "gpt-4.1-mini",
 		CostPer1MIn:         0.40,
 		CostPer1MInCached:   0.10,
 		CostPer1MOutCached:  0.0,

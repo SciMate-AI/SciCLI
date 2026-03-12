@@ -55,6 +55,8 @@ type Agent struct {
 // Provider defines configuration for an LLM provider.
 type Provider struct {
 	APIKey   string `json:"apiKey"`
+	BaseURL  string `json:"baseUrl,omitempty"`
+	Model    string `json:"model,omitempty"`
 	Disabled bool   `json:"disabled"`
 }
 
@@ -344,10 +346,10 @@ func setProviderDefaults() {
 
 	// copilot configuration
 	if key := viper.GetString("providers.copilot.apiKey"); strings.TrimSpace(key) != "" {
-		viper.SetDefault("agents.coder.model", models.CopilotGPT4o)
-		viper.SetDefault("agents.summarizer.model", models.CopilotGPT4o)
-		viper.SetDefault("agents.task.model", models.CopilotGPT4o)
-		viper.SetDefault("agents.title.model", models.CopilotGPT4o)
+		viper.SetDefault("agents.coder.model", models.CopilotGPT54)
+		viper.SetDefault("agents.summarizer.model", models.CopilotGPT54)
+		viper.SetDefault("agents.task.model", models.CopilotGPT5Mini)
+		viper.SetDefault("agents.title.model", models.CopilotGPT5Mini)
 		return
 	}
 
@@ -362,10 +364,10 @@ func setProviderDefaults() {
 
 	// OpenAI configuration
 	if key := viper.GetString("providers.openai.apiKey"); strings.TrimSpace(key) != "" {
-		viper.SetDefault("agents.coder.model", models.GPT41)
-		viper.SetDefault("agents.summarizer.model", models.GPT41)
-		viper.SetDefault("agents.task.model", models.GPT41Mini)
-		viper.SetDefault("agents.title.model", models.GPT41Mini)
+		viper.SetDefault("agents.coder.model", models.GPT54)
+		viper.SetDefault("agents.summarizer.model", models.GPT54)
+		viper.SetDefault("agents.task.model", models.GPT5Mini)
+		viper.SetDefault("agents.title.model", models.GPT5Mini)
 		return
 	}
 
@@ -380,28 +382,28 @@ func setProviderDefaults() {
 
 	// Groq configuration
 	if key := viper.GetString("providers.groq.apiKey"); strings.TrimSpace(key) != "" {
-		viper.SetDefault("agents.coder.model", models.QWENQwq)
-		viper.SetDefault("agents.summarizer.model", models.QWENQwq)
-		viper.SetDefault("agents.task.model", models.QWENQwq)
-		viper.SetDefault("agents.title.model", models.QWENQwq)
+		viper.SetDefault("agents.coder.model", models.GPTOSS120B)
+		viper.SetDefault("agents.summarizer.model", models.GPTOSS120B)
+		viper.SetDefault("agents.task.model", models.GPTOSS20B)
+		viper.SetDefault("agents.title.model", models.GPTOSS20B)
 		return
 	}
 
 	// OpenRouter configuration
 	if key := viper.GetString("providers.openrouter.apiKey"); strings.TrimSpace(key) != "" {
-		viper.SetDefault("agents.coder.model", models.OpenRouterClaude37Sonnet)
-		viper.SetDefault("agents.summarizer.model", models.OpenRouterClaude37Sonnet)
-		viper.SetDefault("agents.task.model", models.OpenRouterClaude37Sonnet)
-		viper.SetDefault("agents.title.model", models.OpenRouterClaude35Haiku)
+		viper.SetDefault("agents.coder.model", models.OpenRouterGPT54)
+		viper.SetDefault("agents.summarizer.model", models.OpenRouterGPT54)
+		viper.SetDefault("agents.task.model", models.OpenRouterGPT5Mini)
+		viper.SetDefault("agents.title.model", models.OpenRouterGPT5Mini)
 		return
 	}
 
 	// XAI configuration
 	if key := viper.GetString("providers.xai.apiKey"); strings.TrimSpace(key) != "" {
-		viper.SetDefault("agents.coder.model", models.XAIGrok3Beta)
-		viper.SetDefault("agents.summarizer.model", models.XAIGrok3Beta)
-		viper.SetDefault("agents.task.model", models.XAIGrok3Beta)
-		viper.SetDefault("agents.title.model", models.XAiGrok3MiniFastBeta)
+		viper.SetDefault("agents.coder.model", models.XAIGrok4)
+		viper.SetDefault("agents.summarizer.model", models.XAIGrok4)
+		viper.SetDefault("agents.task.model", models.XAIGrokCodeFast1)
+		viper.SetDefault("agents.title.model", models.XAIGrok41FastChat)
 		return
 	}
 
@@ -416,19 +418,19 @@ func setProviderDefaults() {
 
 	// Azure OpenAI configuration
 	if os.Getenv("AZURE_OPENAI_ENDPOINT") != "" {
-		viper.SetDefault("agents.coder.model", models.AzureGPT41)
-		viper.SetDefault("agents.summarizer.model", models.AzureGPT41)
-		viper.SetDefault("agents.task.model", models.AzureGPT41Mini)
-		viper.SetDefault("agents.title.model", models.AzureGPT41Mini)
+		viper.SetDefault("agents.coder.model", models.AzureGPT54)
+		viper.SetDefault("agents.summarizer.model", models.AzureGPT54)
+		viper.SetDefault("agents.task.model", models.AzureGPT5Mini)
+		viper.SetDefault("agents.title.model", models.AzureGPT5Mini)
 		return
 	}
 
 	// Google Cloud VertexAI configuration
 	if hasVertexAICredentials() {
-		viper.SetDefault("agents.coder.model", models.VertexAIGemini25)
-		viper.SetDefault("agents.summarizer.model", models.VertexAIGemini25)
-		viper.SetDefault("agents.task.model", models.VertexAIGemini25Flash)
-		viper.SetDefault("agents.title.model", models.VertexAIGemini25Flash)
+		viper.SetDefault("agents.coder.model", models.VertexAIGemini31ProPreview)
+		viper.SetDefault("agents.summarizer.model", models.VertexAIGemini31ProPreview)
+		viper.SetDefault("agents.task.model", models.VertexAIGemini31FlashLitePreview)
+		viper.SetDefault("agents.title.model", models.VertexAIGemini31FlashLitePreview)
 		return
 	}
 }
@@ -566,7 +568,7 @@ func validateAgent(cfg *Config, name AgentName, agent Agent) error {
 			logging.Info("added provider from environment", "provider", provider)
 		}
 	} else if providerCfg.Disabled || providerCfg.APIKey == "" {
-		if !providerCfg.Disabled && providerCfg.APIKey == "" {
+		if !providerCfg.Disabled && providerCfg.APIKey == "" && provider != models.ProviderOpenAICompatible {
 			if apiKey := getProviderAPIKey(provider); apiKey != "" {
 				providerCfg.APIKey = apiKey
 				cfg.Providers[provider] = providerCfg
@@ -575,8 +577,12 @@ func validateAgent(cfg *Config, name AgentName, agent Agent) error {
 			}
 		}
 
+		if !providerCfg.Disabled && providerConfigReady(provider, providerCfg) {
+			goto validateMaxTokens
+		}
+
 		// Provider is disabled or has no API key
-		logging.Warn("provider is disabled or has no API key, reverting to default",
+		logging.Warn("provider is disabled or incomplete, reverting to default",
 			"agent", name,
 			"model", agent.Model,
 			"provider", provider)
@@ -620,7 +626,7 @@ validateMaxTokens:
 	}
 
 	// Validate reasoning effort for models that support reasoning
-	if model.CanReason && provider == models.ProviderOpenAI || provider == models.ProviderLocal {
+	if model.CanReason && (provider == models.ProviderOpenAI || provider == models.ProviderLocal || provider == models.ProviderOpenAICompatible) {
 		if agent.ReasoningEffort == "" {
 			// Set default reasoning effort for models that support it
 			logging.Info("setting default reasoning effort for model that supports reasoning",
@@ -677,16 +683,18 @@ func Validate() error {
 
 	// Validate providers
 	for provider, providerCfg := range cfg.Providers {
-		if providerCfg.APIKey == "" && !providerCfg.Disabled {
+		if providerCfg.Disabled {
+			continue
+		}
+		if providerCfg.APIKey == "" {
 			if apiKey := getProviderAPIKey(provider); apiKey != "" {
 				providerCfg.APIKey = apiKey
 				cfg.Providers[provider] = providerCfg
 				logging.Info("added provider from environment", "provider", provider)
-				continue
 			}
-
-			fmt.Printf("provider has no API key, marking as disabled %s", provider)
-			logging.Warn("provider has no API key, marking as disabled", "provider", provider)
+		}
+		if !providerConfigReady(provider, providerCfg) {
+			logging.Warn("provider config is incomplete, marking as disabled", "provider", provider)
 			providerCfg.Disabled = true
 			cfg.Providers[provider] = providerCfg
 		}
@@ -736,8 +744,26 @@ func getProviderAPIKey(provider models.ModelProvider) string {
 		if os.Getenv("LOCAL_ENDPOINT") != "" {
 			return "dummy"
 		}
+	case models.ProviderOpenAICompatible:
+		return os.Getenv("OPENAI_COMPATIBLE_API_KEY")
 	}
 	return ""
+}
+
+func providerConfigReady(provider models.ModelProvider, providerCfg Provider) bool {
+	switch provider {
+	case models.ProviderBedrock:
+		return hasAWSCredentials()
+	case models.ProviderVertexAI:
+		return hasVertexAICredentials()
+	case models.ProviderLocal:
+		return strings.TrimSpace(providerCfg.BaseURL) != "" || strings.TrimSpace(os.Getenv("LOCAL_ENDPOINT")) != ""
+	case models.ProviderOpenAICompatible:
+		return strings.TrimSpace(providerCfg.BaseURL) != "" &&
+			strings.TrimSpace(providerCfg.Model) != ""
+	default:
+		return strings.TrimSpace(providerCfg.APIKey) != "" || strings.TrimSpace(getProviderAPIKey(provider)) != ""
+	}
 }
 
 // setDefaultModelForAgent sets a default model for an agent based on available providers
@@ -749,7 +775,7 @@ func setDefaultModelForAgent(agent AgentName) bool {
 		}
 
 		cfg.Agents[agent] = Agent{
-			Model:     models.CopilotGPT4o,
+			Model:     models.CopilotGPT54,
 			MaxTokens: maxTokens,
 		}
 		return true
@@ -774,12 +800,12 @@ func setDefaultModelForAgent(agent AgentName) bool {
 
 		switch agent {
 		case AgentTitle:
-			model = models.GPT41Mini
+			model = models.GPT5Mini
 			maxTokens = 80
 		case AgentTask:
-			model = models.GPT41Mini
+			model = models.GPT5Mini
 		default:
-			model = models.GPT41
+			model = models.GPT54
 		}
 
 		// Check if model supports reasoning
@@ -802,12 +828,12 @@ func setDefaultModelForAgent(agent AgentName) bool {
 
 		switch agent {
 		case AgentTitle:
-			model = models.OpenRouterClaude35Haiku
+			model = models.OpenRouterGPT5Mini
 			maxTokens = 80
 		case AgentTask:
-			model = models.OpenRouterClaude37Sonnet
+			model = models.OpenRouterGPT5Mini
 		default:
-			model = models.OpenRouterClaude37Sonnet
+			model = models.OpenRouterGPT54
 		}
 
 		// Check if model supports reasoning
@@ -830,8 +856,10 @@ func setDefaultModelForAgent(agent AgentName) bool {
 		if agent == AgentTitle {
 			model = models.Gemini25Flash
 			maxTokens = 80
+		} else if agent == AgentTask {
+			model = models.Gemini3FlashPreview
 		} else {
-			model = models.Gemini25
+			model = models.Gemini31ProPreview
 		}
 
 		cfg.Agents[agent] = Agent{
@@ -848,7 +876,7 @@ func setDefaultModelForAgent(agent AgentName) bool {
 		}
 
 		cfg.Agents[agent] = Agent{
-			Model:     models.QWENQwq,
+			Model:     models.GPTOSS120B,
 			MaxTokens: maxTokens,
 		}
 		return true
@@ -873,10 +901,10 @@ func setDefaultModelForAgent(agent AgentName) bool {
 		maxTokens := int64(5000)
 
 		if agent == AgentTitle {
-			model = models.VertexAIGemini25Flash
+			model = models.VertexAIGemini31FlashLitePreview
 			maxTokens = 80
 		} else {
-			model = models.VertexAIGemini25
+			model = models.VertexAIGemini31ProPreview
 		}
 
 		cfg.Agents[agent] = Agent{
@@ -987,25 +1015,27 @@ func NeedsOnboarding() bool {
 	}
 
 	providerCfg, ok := cfg.Providers[model.Provider]
-	if ok {
-		if providerCfg.Disabled {
-			return true
-		}
-		if strings.TrimSpace(providerCfg.APIKey) != "" {
-			return false
-		}
+	if !ok {
+		return strings.TrimSpace(getProviderAPIKey(model.Provider)) == ""
 	}
-
-	return strings.TrimSpace(getProviderAPIKey(model.Provider)) == ""
+	if providerCfg.Disabled {
+		return true
+	}
+	return !providerConfigReady(model.Provider, providerCfg)
 }
 
 type OnboardingProvider struct {
 	Provider             models.ModelProvider
 	Label                string
 	CredentialHint       string
+	BaseURLHint          string
+	ModelHint            string
 	DetectedCredential   bool
 	DetectedCredentialID string
 	SupportsManualAPIKey bool
+	OptionalAPIKey       bool
+	RequiresBaseURL      bool
+	RequiresModel        bool
 }
 
 func OnboardingProviders() []OnboardingProvider {
@@ -1057,6 +1087,19 @@ func OnboardingProviders() []OnboardingProvider {
 			DetectedCredential:   strings.TrimSpace(getProviderAPIKey(models.ProviderXAI)) != "",
 			DetectedCredentialID: "environment",
 			SupportsManualAPIKey: true,
+		},
+		{
+			Provider:             models.ProviderOpenAICompatible,
+			Label:                "OpenAI-compatible API",
+			CredentialHint:       "Optional API key for your compatible endpoint",
+			BaseURLHint:          "https://your-host/v1",
+			ModelHint:            "gpt-5.4 or your custom upstream model id",
+			DetectedCredential:   false,
+			DetectedCredentialID: "",
+			SupportsManualAPIKey: true,
+			OptionalAPIKey:       true,
+			RequiresBaseURL:      true,
+			RequiresModel:        true,
 		},
 	}
 
