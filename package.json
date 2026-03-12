@@ -8,7 +8,8 @@
   },
   "scripts": {
     "postinstall": "node ./npm/postinstall.mjs",
-    "release:sync-version": "node ./npm/sync-version.mjs"
+    "release:sync-version": "node ./npm/sync-version.mjs",
+    "release:verify-package": "node ./scripts/verify-npm-package.mjs"
   },
   "engines": {
     "node": ">=18"

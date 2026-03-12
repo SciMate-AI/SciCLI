@@ -47,6 +47,9 @@ jobs:
       - name: Sync npm package version from git tag
         run: npm run release:sync-version -- "${GITHUB_REF_NAME#v}"
 
+      - name: Verify npm package contents
+        run: npm run release:verify-package
+
       - name: Publish npm package
         run: npm publish --access public --provenance
         env:

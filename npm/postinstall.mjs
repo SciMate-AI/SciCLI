@@ -13,6 +13,7 @@ const packageJson = JSON.parse(
 const binaryName = process.platform === "win32" ? "scicli-real.exe" : "scicli-real";
 const extractedBinaryName = process.platform === "win32" ? "scicli.exe" : "scicli";
 const binaryPath = path.join(rootDir, "bin", binaryName);
+const launcherPath = path.join(rootDir, "bin", "scicli.js");
 const tempDir = path.join(rootDir, ".tmp-npm-install");
 
 function log(message) {
@@ -30,6 +31,115 @@ function ensureDir(dirPath) {
 
 function cleanTemp() {
   fs.rmSync(tempDir, { recursive: true, force: true });
+}
+
+function ensureLauncherScript() {
+  if (fs.existsSync(launcherPath)) {
+    return;
+  }
+
+  ensureDir(path.dirname(launcherPath));
+  fs.writeFileSync(
+    launcherPath,
+    `#!/usr/bin/env node
+
+const fs = require("node:fs");
+const path = require("node:path");
+const { spawn } = require("node:child_process");
+
+const binaryName = process.platform === "win32" ? "scicli-real.exe" : "scicli-real";
+const binaryPath = path.join(__dirname, binaryName);
+
+if (!fs.existsSync(binaryPath)) {
+  console.error(
+    "SciCLI binary is missing. Reinstall the package or run \`npm rebuild @scimate/scicli\`.",
+  );
+  process.exit(1);
+}
+
+const child = spawn(binaryPath, process.argv.slice(2), {
+  stdio: "inherit",
+});
+
+child.on("error", (error) => {
+  console.error(\`Failed to start SciCLI: \${error.message}\`);
+  process.exit(1);
+});
+
+child.on("exit", (code, signal) => {
+  if (signal) {
+    process.kill(process.pid, signal);
+    return;
+  }
+  process.exit(code ?? 1);
+});
+`,
+    "ascii",
+  );
+
+  if (process.platform !== "win32") {
+    fs.chmodSync(launcherPath, 0o755);
+  }
+}
+
+function uniquePaths(paths) {
+  return [...new Set(paths.filter(Boolean).map((entry) => path.resolve(entry)))];
+}
+
+function resolveWindowsShimDirs() {
+  if (process.platform !== "win32") {
+    return [];
+  }
+
+  const scopeDir = path.dirname(rootDir);
+  const nodeModulesDir = path.dirname(scopeDir);
+  if (path.basename(nodeModulesDir).toLowerCase() !== "node_modules") {
+    return [];
+  }
+
+  const prefixDir =
+    process.env.npm_config_prefix ||
+    (process.env.npm_config_global === "true" ? path.dirname(nodeModulesDir) : "");
+
+  return uniquePaths([
+    path.join(nodeModulesDir, ".bin"),
+    process.env.npm_config_global === "true" ? prefixDir : "",
+  ]);
+}
+
+function writeWindowsCmdShim(shimDir) {
+  const relativeBinaryPath = path.relative(shimDir, binaryPath).replace(/\//g, "\\");
+  const shimPath = path.join(shimDir, "scicli.cmd");
+  const shimContents = `@ECHO OFF
+"%~dp0${relativeBinaryPath}" %*
+`;
+
+  fs.writeFileSync(shimPath, shimContents, "ascii");
+}
+
+function writeWindowsPowerShellShim(shimDir) {
+  const relativeBinaryPath = path.relative(shimDir, binaryPath).replace(/\//g, "\\");
+  const normalizedRelativePath = relativeBinaryPath.replace(/\\/g, "\\\\");
+  const shimPath = path.join(shimDir, "scicli.ps1");
+  const shimContents = `$exe = Join-Path $PSScriptRoot "${normalizedRelativePath}"
+& $exe @args
+exit $LASTEXITCODE
+`;
+
+  fs.writeFileSync(shimPath, shimContents, "ascii");
+}
+
+function ensureWindowsShims() {
+  if (process.platform !== "win32" || !fs.existsSync(binaryPath)) {
+    return;
+  }
+
+  const shimDirs = resolveWindowsShimDirs();
+  for (const shimDir of shimDirs) {
+    ensureDir(shimDir);
+    writeWindowsCmdShim(shimDir);
+    writeWindowsPowerShellShim(shimDir);
+  }
 }
 
 function platformSegment() {
@@ -168,9 +278,17 @@ async function installFromRelease() {
 function installFromSource() {
   ensureDir(path.dirname(binaryPath));
 
+  const goCacheDir = process.env.GOCACHE || path.join(rootDir, ".tmp-npm-go-cache");
+  const goModCacheDir =
+    process.env.GOMODCACHE || path.join(rootDir, ".tmp-npm-go-modcache");
+
+  ensureDir(goCacheDir);
+  ensureDir(goModCacheDir);
+
   const env = {
     ...process.env,
-    GOCACHE: process.env.GOCACHE || path.join(rootDir, ".tmp-npm-go-cache"),
+    GOCACHE: goCacheDir,
+    GOMODCACHE: goModCacheDir,
   };
 
   log("Falling back to `go build` from source");
@@ -191,17 +309,22 @@ async function main() {
   }
 
   try {
+    ensureLauncherScript();
+
     const localBinary = process.env.SCICLI_LOCAL_BINARY;
     if (localBinary) {
       installFromLocalBinary(localBinary);
+      ensureWindowsShims();
       return;
     }
 
     await installFromRelease();
+    ensureWindowsShims();
   } catch (downloadError) {
     log(`Prebuilt install unavailable: ${downloadError.message}`);
     try {
       installFromSource();
+      ensureWindowsShims();
     } catch (buildError) {
       fail(
         `Unable to install SciCLI. Download failed and source build failed.\n${buildError.message}`,
