@@ -2,19 +2,21 @@ package page
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/key"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/SciMate-AI/scicli/internal/app"
 	"github.com/SciMate-AI/scicli/internal/completions"
+	"github.com/SciMate-AI/scicli/internal/config"
 	"github.com/SciMate-AI/scicli/internal/message"
 	"github.com/SciMate-AI/scicli/internal/session"
 	"github.com/SciMate-AI/scicli/internal/tui/components/chat"
 	"github.com/SciMate-AI/scicli/internal/tui/components/dialog"
 	"github.com/SciMate-AI/scicli/internal/tui/layout"
 	"github.com/SciMate-AI/scicli/internal/tui/util"
+	"github.com/charmbracelet/bubbles/key"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 var ChatPage PageID = "chat"
@@ -27,12 +29,14 @@ type chatPage struct {
 	session              session.Session
 	completionDialog     dialog.CompletionDialog
 	showCompletionDialog bool
+	inspectorFocused     bool
 }
 
 type ChatKeyMap struct {
 	ShowCompletionDialog key.Binding
 	NewSession           key.Binding
 	Cancel               key.Binding
+	FocusInspector       key.Binding
 }
 
 var keyMap = ChatKeyMap{
@@ -47,6 +51,10 @@ var keyMap = ChatKeyMap{
 	Cancel: key.NewBinding(
 		key.WithKeys("esc"),
 		key.WithHelp("esc", "cancel"),
+	),
+	FocusInspector: key.NewBinding(
+		key.WithKeys("ctrl+i"),
+		key.WithHelp("ctrl+i", "focus inspector"),
 	),
 }
 
@@ -76,7 +84,7 @@ func (p *chatPage) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if p.app.CoderAgent.IsBusy() {
 			return p, util.ReportWarn("Agent is busy, please wait before executing a command...")
 		}
-		
+
 		// Process the command content with arguments if any
 		content := msg.Content
 		if msg.Args != nil {
@@ -86,21 +94,33 @@ func (p *chatPage) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				content = strings.ReplaceAll(content, placeholder, value)
 			}
 		}
-		
+
 		// Handle custom command execution
 		cmd := p.sendMessage(content, nil)
 		if cmd != nil {
 			return p, cmd
 		}
 	case chat.SessionSelectedMsg:
-		if p.session.ID == "" {
-			cmd := p.setSidebar()
-			if cmd != nil {
-				cmds = append(cmds, cmd)
+		p.session = msg
+	case chat.InspectorFocusMsg:
+		p.inspectorFocused = msg.Focused
+		u, cmd := p.layout.Update(msg)
+		p.layout = u.(layout.SplitPaneLayout)
+		return p, cmd
+	case tea.KeyMsg:
+		if p.inspectorFocused {
+			switch {
+			case key.Matches(msg, keyMap.FocusInspector):
+				p.inspectorFocused = false
+				u, cmd := p.layout.Update(chat.InspectorFocusMsg{Focused: false})
+				p.layout = u.(layout.SplitPaneLayout)
+				return p, cmd
+			default:
+				u, cmd := p.layout.Update(chat.InspectorKeyMsg{Key: msg})
+				p.layout = u.(layout.SplitPaneLayout)
+				return p, cmd
 			}
 		}
-		p.session = msg
-	case tea.KeyMsg:
 		switch {
 		case key.Matches(msg, keyMap.ShowCompletionDialog):
 			p.showCompletionDialog = true
@@ -118,7 +138,27 @@ func (p *chatPage) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				p.app.CoderAgent.Cancel(p.session.ID)
 				return p, nil
 			}
+		case key.Matches(msg, keyMap.FocusInspector):
+			p.inspectorFocused = !p.inspectorFocused
+			u, cmd := p.layout.Update(chat.InspectorFocusMsg{Focused: p.inspectorFocused})
+			p.layout = u.(layout.SplitPaneLayout)
+			return p, cmd
 		}
+	case chat.InspectorOpenTaskMsg:
+		selectedSession, err := p.app.Sessions.Get(context.Background(), msg.SessionID)
+		if err != nil {
+			return p, util.ReportError(err)
+		}
+		p.session = selectedSession
+		p.inspectorFocused = false
+		u, cmd := p.layout.Update(chat.InspectorFocusMsg{Focused: false})
+		p.layout = u.(layout.SplitPaneLayout)
+		return p, tea.Batch(cmd, util.CmdHandler(chat.SessionSelectedMsg(selectedSession)))
+	case chat.InspectorStopTaskMsg:
+		if err := p.app.TaskRuns.Cancel(msg.SessionID); err != nil {
+			return p, util.ReportError(err)
+		}
+		return p, util.ReportInfo("Stop signal sent to delegated task")
 	}
 	if p.showCompletionDialog {
 		context, contextCmd := p.completionDialog.Update(msg)
@@ -141,18 +181,17 @@ func (p *chatPage) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (p *chatPage) setSidebar() tea.Cmd {
-	sidebarContainer := layout.NewContainer(
-		chat.NewSidebarCmp(p.session, p.app.History),
-		layout.WithPadding(1, 1, 1, 1),
-	)
-	return tea.Batch(p.layout.SetRightPanel(sidebarContainer), sidebarContainer.Init())
+	return nil
 }
 
 func (p *chatPage) clearSidebar() tea.Cmd {
-	return p.layout.ClearRightPanel()
+	return nil
 }
 
 func (p *chatPage) sendMessage(text string, attachments []message.Attachment) tea.Cmd {
+	if strings.HasPrefix(strings.TrimSpace(text), "/") && len(attachments) == 0 {
+		return p.handleSlashCommand(text)
+	}
 	var cmds []tea.Cmd
 	if p.session.ID == "" {
 		session, err := p.app.Sessions.Create(context.Background(), "New Session")
@@ -167,12 +206,75 @@ func (p *chatPage) sendMessage(text string, attachments []message.Attachment) te
 		}
 		cmds = append(cmds, util.CmdHandler(chat.SessionSelectedMsg(session)))
 	}
+	if config.Get().Automation.WorkMode == config.WorkModeUltrawork {
+		p.app.Permissions.AutoApproveSession(p.session.ID)
+	}
 
 	_, err := p.app.CoderAgent.Run(context.Background(), p.session.ID, text, attachments...)
 	if err != nil {
 		return util.ReportError(err)
 	}
 	return tea.Batch(cmds...)
+}
+
+func (p *chatPage) handleSlashCommand(text string) tea.Cmd {
+	fields := strings.Fields(strings.TrimSpace(text))
+	if len(fields) == 0 {
+		return nil
+	}
+
+	switch fields[0] {
+	case "/new":
+		p.session = session.Session{}
+		return tea.Batch(p.clearSidebar(), util.CmdHandler(chat.SessionClearedMsg{}))
+	case "/compact":
+		return util.CmdHandler(dialog.StartCompactSessionMsg{})
+	case "/skills":
+		return util.CmdHandler(dialog.ShowSkillDialogMsg{})
+	case "/tasks":
+		return util.CmdHandler(dialog.ShowTaskDialogMsg{})
+	case "/install-skill":
+		if len(fields) < 2 {
+			return util.ReportWarn("Usage: /install-skill <local-path-or-github-tree-url>")
+		}
+		skill, err := p.app.Skills.Install(context.Background(), fields[1])
+		if err != nil {
+			return util.ReportError(err)
+		}
+		return util.ReportInfo(fmt.Sprintf("Installed skill %s", skill.ID))
+	case "/ultrawork":
+		mode := config.WorkModeUltrawork
+		if len(fields) > 1 {
+			switch strings.ToLower(fields[1]) {
+			case "off", "interactive":
+				mode = config.WorkModeInteractive
+			case "auto":
+				mode = config.WorkModeAuto
+			case "on", "ultrawork":
+				mode = config.WorkModeUltrawork
+			default:
+				return util.ReportWarn("Usage: /ultrawork [on|off|auto]")
+			}
+		}
+		if err := config.SetWorkMode(mode, false); err != nil {
+			return util.ReportError(err)
+		}
+		return util.ReportInfo("Work mode set to " + string(mode))
+	case "/parent":
+		if p.session.ParentSessionID == "" {
+			return util.ReportWarn("Current session has no parent")
+		}
+		parentSession, err := p.app.Sessions.Get(context.Background(), p.session.ParentSessionID)
+		if err != nil {
+			return util.ReportError(err)
+		}
+		p.session = parentSession
+		return util.CmdHandler(chat.SessionSelectedMsg(parentSession))
+	case "/help":
+		return util.ReportInfo("Ctrl+K opens the searchable command palette. /skills opens the skill browser. /tasks shows delegated sessions. /parent jumps back to the parent chat.")
+	default:
+		return util.ReportWarn("Unknown slash command")
+	}
 }
 
 func (p *chatPage) SetSize(width, height int) tea.Cmd {
@@ -220,6 +322,23 @@ func NewChatPage(app *app.App) tea.Model {
 		chat.NewMessagesCmp(app),
 		layout.WithPadding(1, 1, 0, 1),
 	)
+	navContainer := layout.NewContainer(
+		chat.NewWorkbenchNavCmp(app),
+		layout.WithPadding(1, 1, 1, 1),
+		layout.WithBorder(false, true, false, false),
+	)
+	centerWorkbench := layout.NewContainer(
+		layout.NewSplitPane(
+			layout.WithLeftPanel(navContainer),
+			layout.WithRightPanel(messagesContainer),
+			layout.WithRatio(0.28),
+		),
+	)
+	inspectorContainer := layout.NewContainer(
+		chat.NewInspectorCmp(app),
+		layout.WithPadding(1, 1, 1, 1),
+		layout.WithBorder(false, false, false, true),
+	)
 	editorContainer := layout.NewContainer(
 		chat.NewEditorCmp(app),
 		layout.WithBorder(true, false, false, false),
@@ -230,8 +349,11 @@ func NewChatPage(app *app.App) tea.Model {
 		messages:         messagesContainer,
 		completionDialog: completionDialog,
 		layout: layout.NewSplitPane(
-			layout.WithLeftPanel(messagesContainer),
+			layout.WithLeftPanel(centerWorkbench),
+			layout.WithRightPanel(inspectorContainer),
+			layout.WithRatio(0.74),
 			layout.WithBottomPanel(editorContainer),
+			layout.WithVerticalRatio(0.84),
 		),
 	}
 }

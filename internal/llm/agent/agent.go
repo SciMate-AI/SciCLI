@@ -18,6 +18,8 @@ import (
 	"github.com/SciMate-AI/scicli/internal/permission"
 	"github.com/SciMate-AI/scicli/internal/pubsub"
 	"github.com/SciMate-AI/scicli/internal/session"
+	"github.com/SciMate-AI/scicli/internal/skills"
+	"github.com/SciMate-AI/scicli/internal/taskrun"
 )
 
 // Common errors
@@ -35,9 +37,10 @@ const (
 )
 
 type AgentEvent struct {
-	Type    AgentEventType
-	Message message.Message
-	Error   error
+	Type            AgentEventType
+	Message         message.Message
+	Error           error
+	TaskRunMetadata *taskrun.EventMetadata
 
 	// When summarizing
 	SessionID string
@@ -64,8 +67,10 @@ type agent struct {
 	sessions session.Service
 	messages message.Service
 
-	tools    []tools.BaseTool
-	provider provider.Provider
+	tools     []tools.BaseTool
+	provider  provider.Provider
+	skillsSvc skills.Service
+	taskRuns  taskrun.Service
 
 	titleProvider     provider.Provider
 	summarizeProvider provider.Provider
@@ -78,6 +83,8 @@ func NewAgent(
 	sessions session.Service,
 	messages message.Service,
 	agentTools []tools.BaseTool,
+	skillsSvc skills.Service,
+	taskRuns taskrun.Service,
 ) (Service, error) {
 	agentProvider, err := createAgentProvider(agentName)
 	if err != nil {
@@ -107,6 +114,8 @@ func NewAgent(
 		messages:          messages,
 		sessions:          sessions,
 		tools:             agentTools,
+		skillsSvc:         skillsSvc,
+		taskRuns:          taskRuns,
 		titleProvider:     titleProvider,
 		summarizeProvider: summarizeProvider,
 		activeRequests:    sync.Map{},
@@ -208,15 +217,28 @@ func (a *agent) Run(ctx context.Context, sessionID string, content string, attac
 	if a.IsSessionBusy(sessionID) {
 		return nil, ErrSessionBusy
 	}
+	sess, err := a.sessions.Get(ctx, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get session: %w", err)
+	}
 
 	genCtx, cancel := context.WithCancel(ctx)
 
 	a.activeRequests.Store(sessionID, cancel)
+	if a.taskRuns != nil && sess.ParentSessionID != "" {
+		a.taskRuns.Start(sess)
+		a.taskRuns.RegisterCancel(sessionID, cancel)
+	}
 	go func() {
 		logging.Debug("Request started", "sessionID", sessionID)
 		defer logging.RecoverPanic("agent.Run", func() {
 			events <- a.err(fmt.Errorf("panic while running the agent"))
 		})
+		defer func() {
+			if a.taskRuns != nil {
+				a.taskRuns.ClearCancel(sessionID)
+			}
+		}()
 		var attachmentParts []message.ContentPart
 		for _, attachment := range attachments {
 			attachmentParts = append(attachmentParts, message.BinaryContent{Path: attachment.FilePath, MIMEType: attachment.MimeType, Data: attachment.Content})
@@ -225,6 +247,7 @@ func (a *agent) Run(ctx context.Context, sessionID string, content string, attac
 		if result.Error != nil && !errors.Is(result.Error, ErrRequestCancelled) && !errors.Is(result.Error, context.Canceled) {
 			logging.ErrorPersist(result.Error.Error())
 		}
+		a.publishTaskRunResult(sess, result)
 		logging.Debug("Request completed", "sessionID", sessionID)
 		a.activeRequests.Delete(sessionID)
 		cancel()
@@ -233,6 +256,44 @@ func (a *agent) Run(ctx context.Context, sessionID string, content string, attac
 		close(events)
 	}()
 	return events, nil
+}
+
+func (a *agent) publishTaskRunResult(sess session.Session, result AgentEvent) {
+	if a.taskRuns == nil || sess.ParentSessionID == "" {
+		return
+	}
+	if result.Error != nil {
+		metadata := result.TaskRunMetadata
+		switch {
+		case errors.Is(result.Error, ErrRequestCancelled), errors.Is(result.Error, context.Canceled):
+			if metadata == nil {
+				metadata = &taskrun.EventMetadata{FinishReason: string(message.FinishReasonCanceled)}
+			}
+			a.taskRuns.Finish(sess.ID, taskrun.StatusCanceled, "Canceled", metadata)
+		default:
+			if metadata == nil {
+				metadata = &taskrun.EventMetadata{FinishReason: string(message.FinishReasonError)}
+			}
+			a.taskRuns.Finish(sess.ID, taskrun.StatusFailed, truncateTaskDetail(result.Error.Error()), metadata)
+		}
+		return
+	}
+
+	metadata := result.TaskRunMetadata
+	switch result.Message.FinishReason() {
+	case message.FinishReasonPermissionDenied:
+		a.taskRuns.Finish(sess.ID, taskrun.StatusBlocked, "Waiting on permission", metadata)
+	case message.FinishReasonCanceled:
+		a.taskRuns.Finish(sess.ID, taskrun.StatusCanceled, "Canceled", metadata)
+	case message.FinishReasonError:
+		a.taskRuns.Finish(sess.ID, taskrun.StatusFailed, "Failed", metadata)
+	default:
+		detail := result.Message.Content().String()
+		if strings.TrimSpace(detail) == "" {
+			detail = "Finished successfully"
+		}
+		a.taskRuns.Finish(sess.ID, taskrun.StatusComplete, truncateTaskDetail(detail), metadata)
+	}
 }
 
 func (a *agent) processGeneration(ctx context.Context, sessionID, content string, attachmentParts []message.ContentPart) AgentEvent {
@@ -341,9 +402,10 @@ func (a *agent) processGeneration(ctx context.Context, sessionID, content string
 		}
 
 		return AgentEvent{
-			Type:    AgentEventTypeResponse,
-			Message: agentMessage,
-			Done:    true,
+			Type:            AgentEventTypeResponse,
+			Message:         agentMessage,
+			TaskRunMetadata: buildTaskRunMetadata(agentMessage),
+			Done:            true,
 		}
 	}
 }
@@ -491,12 +553,21 @@ func (a *agent) processEvent(ctx context.Context, sessionID string, assistantMsg
 
 	switch event.Type {
 	case provider.EventThinkingDelta:
+		a.publishTaskProgress(sessionID, "Reasoning", "", nil)
 		assistantMsg.AppendReasoningContent(event.Content)
 		return a.messages.Update(ctx, *assistantMsg)
 	case provider.EventContentDelta:
+		a.publishTaskProgress(sessionID, "Generating response", "", nil)
 		assistantMsg.AppendContent(event.Content)
 		return a.messages.Update(ctx, *assistantMsg)
 	case provider.EventToolUseStart:
+		toolName := toolNameForTask(event.ToolCall.Name)
+		a.publishTaskProgress(
+			sessionID,
+			"Running tool "+toolName,
+			toolName,
+			&taskrun.EventMetadata{ToolInputPreview: previewTaskToolInput(event.ToolCall.Input)},
+		)
 		assistantMsg.AddToolCall(*event.ToolCall)
 		return a.messages.Update(ctx, *assistantMsg)
 	// TODO: see how to handle this
@@ -531,6 +602,78 @@ func (a *agent) processEvent(ctx context.Context, sessionID string, assistantMsg
 	}
 
 	return nil
+}
+
+func (a *agent) publishTaskProgress(sessionID, detail, toolName string, metadata *taskrun.EventMetadata) {
+	if a.taskRuns == nil {
+		return
+	}
+	if run, ok := a.taskRuns.Get(sessionID); ok && run.ParentSessionID != "" {
+		a.taskRuns.UpdateDetail(sessionID, truncateTaskDetail(detail), toolName, metadata)
+	}
+}
+
+func truncateTaskDetail(detail string) string {
+	detail = strings.TrimSpace(strings.ReplaceAll(detail, "\n", " "))
+	if len(detail) <= 120 {
+		return detail
+	}
+	return detail[:117] + "..."
+}
+
+func toolNameForTask(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "tool"
+	}
+	return name
+}
+
+func previewTaskToolInput(input string) string {
+	input = strings.TrimSpace(strings.ReplaceAll(input, "\n", " "))
+	if input == "" {
+		return ""
+	}
+	return truncateTaskDetail(input)
+}
+
+func buildTaskRunMetadata(msg message.Message) *taskrun.EventMetadata {
+	reason := strings.TrimSpace(string(msg.FinishReason()))
+	if reason == "" {
+		return nil
+	}
+
+	metadata := taskrun.EventMetadata{
+		FinishReason: reason,
+	}
+	if msg.FinishReason() == message.FinishReasonPermissionDenied {
+		if toolCall, ok := latestToolCall(msg); ok {
+			metadata.ToolInputPreview = previewTaskToolInput(toolCall.Input)
+			metadata.PermissionReason = permissionReasonForTask(toolCall.Name)
+		} else {
+			metadata.PermissionReason = "Tool execution requires permission approval"
+		}
+	}
+	if metadata.IsZero() {
+		return nil
+	}
+	return &metadata
+}
+
+func latestToolCall(msg message.Message) (message.ToolCall, bool) {
+	toolCalls := msg.ToolCalls()
+	if len(toolCalls) == 0 {
+		return message.ToolCall{}, false
+	}
+	return toolCalls[len(toolCalls)-1], true
+}
+
+func permissionReasonForTask(toolName string) string {
+	toolName = strings.TrimSpace(toolName)
+	if toolName == "" {
+		return "Tool execution requires permission approval"
+	}
+	return "Permission approval required before running " + toolName
 }
 
 func (a *agent) TrackUsage(ctx context.Context, sessionID string, model models.Model, usage provider.TokenUsage) error {

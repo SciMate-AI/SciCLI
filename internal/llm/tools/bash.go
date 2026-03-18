@@ -279,6 +279,7 @@ func (b *bashTool) Run(ctx context.Context, call ToolCall) (ToolResponse, error)
 				Path:        config.WorkingDirectory(),
 				ToolName:    BashToolName,
 				Action:      "execute",
+				Command:     params.Command,
 				Description: fmt.Sprintf("Execute command: %s", params.Command),
 				Params: BashPermissionsParams{
 					Command: params.Command,

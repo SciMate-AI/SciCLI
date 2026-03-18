@@ -84,6 +84,28 @@ type ShellConfig struct {
 	Args []string `json:"args,omitempty"`
 }
 
+type WorkMode string
+
+const (
+	WorkModeInteractive WorkMode = "interactive"
+	WorkModeAuto        WorkMode = "auto"
+	WorkModeUltrawork   WorkMode = "ultrawork"
+)
+
+type AutomationConfig struct {
+	WorkMode WorkMode `json:"workMode,omitempty"`
+}
+
+type PermissionsConfig struct {
+	AutoApprove          bool     `json:"autoApprove,omitempty"`
+	AllowCommandPrefixes []string `json:"allowCommandPrefixes,omitempty"`
+}
+
+type SkillsConfig struct {
+	Paths    []string `json:"paths,omitempty"`
+	Disabled []string `json:"disabled,omitempty"`
+}
+
 type SupabaseConfig struct {
 	URL     string `json:"url,omitempty"`
 	AnonKey string `json:"anonKey,omitempty"`
@@ -107,6 +129,9 @@ type Config struct {
 	ContextPaths []string                          `json:"contextPaths,omitempty"`
 	TUI          TUIConfig                         `json:"tui"`
 	Shell        ShellConfig                       `json:"shell,omitempty"`
+	Automation   AutomationConfig                  `json:"automation,omitempty"`
+	Permissions  PermissionsConfig                 `json:"permissions,omitempty"`
+	Skills       SkillsConfig                      `json:"skills,omitempty"`
 	AutoCompact  bool                              `json:"autoCompact,omitempty"`
 }
 
@@ -124,6 +149,8 @@ const (
 	DefaultSciMateMcpSseEndpoint       = "https://cae-agent-service-495426659633.us-central1.run.app/sse"
 	DefaultSciMateOriginMcpSseEndpoint = "https://origin-mcp-server-495426659633.us-central1.run.app/sse"
 	DefaultSciMateRdkitMcpHTTPEndpoint = "https://rdkit-mcp-495426659633.us-central1.run.app/mcp"
+	DefaultArxivMcpCommand             = "uvx"
+	DefaultArxivMcpPackage             = "arxiv-paper-mcp-server"
 	DefaultSupabaseURL                 = "https://ltwikvvzbuuuigzkqggs.supabase.co"
 	DefaultSupabaseAnonKey             = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imx0d2lrdnZ6YnV1dWlnemtxZ2dzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njk1NjU4NDEsImV4cCI6MjA4NTE0MTg0MX0.V4oVqYAjDQ3xeiCvCI1iora-WklFdXJAmbpIOia_Eq4"
 )
@@ -257,6 +284,11 @@ func setDefaults(debug bool) {
 	viper.SetDefault("contextPaths", defaultContextPaths)
 	viper.SetDefault("tui.theme", defaultThemeName)
 	viper.SetDefault("autoCompact", true)
+	viper.SetDefault("automation.workMode", string(WorkModeInteractive))
+	viper.SetDefault("permissions.autoApprove", false)
+	viper.SetDefault("permissions.allowCommandPrefixes", []string{})
+	viper.SetDefault("skills.paths", []string{})
+	viper.SetDefault("skills.disabled", []string{})
 	viper.SetDefault("auth.supabase.url", envOrDefault("SCICLI_SUPABASE_URL", DefaultSupabaseURL))
 	viper.SetDefault("auth.supabase.anonKey", envOrDefault("SCICLI_SUPABASE_ANON_KEY", DefaultSupabaseAnonKey))
 	viper.SetDefault("mcpServers", map[string]any{
@@ -271,6 +303,13 @@ func setDefaults(debug bool) {
 		"rdkit": map[string]any{
 			"type": "streamable-http",
 			"url":  envOrDefault("SCICLI_MCP_RDKIT_URL", DefaultSciMateRdkitMcpHTTPEndpoint),
+		},
+		"arxiv": map[string]any{
+			"type":    "stdio",
+			"command": envOrDefault("SCICLI_MCP_ARXIV_COMMAND", DefaultArxivMcpCommand),
+			"args": []string{
+				envOrDefault("SCICLI_MCP_ARXIV_PACKAGE", DefaultArxivMcpPackage),
+			},
 		},
 	})
 
@@ -535,6 +574,9 @@ func applyDefaultValues() {
 			v.Type = MCPStdio
 			cfg.MCPServers[k] = v
 		}
+	}
+	if cfg.Automation.WorkMode == "" {
+		cfg.Automation.WorkMode = WorkModeInteractive
 	}
 }
 
@@ -1275,6 +1317,100 @@ func UpdateTheme(themeName string) error {
 	// Update the file config
 	return updateCfgFile(func(config *Config) {
 		config.TUI.Theme = themeName
+	})
+}
+
+func SetWorkMode(mode WorkMode, persist bool) error {
+	if cfg == nil {
+		return fmt.Errorf("config not loaded")
+	}
+	if err := validateWorkMode(mode); err != nil {
+		return err
+	}
+
+	cfg.Automation.WorkMode = mode
+	if !persist {
+		return nil
+	}
+
+	return updateCfgFile(func(fileCfg *Config) {
+		fileCfg.Automation.WorkMode = mode
+	})
+}
+
+func ApplyRuntimeOverrides(workMode string, autoApprove bool, allowPrefixes []string) error {
+	if cfg == nil {
+		return fmt.Errorf("config not loaded")
+	}
+
+	if strings.TrimSpace(workMode) != "" {
+		mode := WorkMode(strings.ToLower(strings.TrimSpace(workMode)))
+		if err := validateWorkMode(mode); err != nil {
+			return err
+		}
+		cfg.Automation.WorkMode = mode
+	}
+
+	if autoApprove {
+		cfg.Permissions.AutoApprove = true
+	}
+
+	if len(allowPrefixes) > 0 {
+		cleaned := make([]string, 0, len(allowPrefixes))
+		for _, prefix := range allowPrefixes {
+			prefix = strings.TrimSpace(prefix)
+			if prefix == "" {
+				continue
+			}
+			cleaned = append(cleaned, prefix)
+		}
+		cfg.Permissions.AllowCommandPrefixes = cleaned
+	}
+	return nil
+}
+
+func validateWorkMode(mode WorkMode) error {
+	switch mode {
+	case WorkModeInteractive, WorkModeAuto, WorkModeUltrawork:
+		return nil
+	default:
+		return fmt.Errorf("invalid work mode %q", mode)
+	}
+}
+
+func SetSkillDisabled(skillID string, disabled bool) error {
+	if cfg == nil {
+		return fmt.Errorf("config not loaded")
+	}
+
+	skillID = strings.TrimSpace(skillID)
+	if skillID == "" {
+		return fmt.Errorf("skill ID is required")
+	}
+
+	updateDisabledSkills := func(values []string) []string {
+		out := make([]string, 0, len(values)+1)
+		seen := false
+		for _, value := range values {
+			if !strings.EqualFold(strings.TrimSpace(value), skillID) {
+				out = append(out, value)
+				continue
+			}
+			seen = true
+			if disabled {
+				out = append(out, skillID)
+			}
+		}
+		if disabled && !seen {
+			out = append(out, skillID)
+		}
+		slices.Sort(out)
+		return out
+	}
+
+	cfg.Skills.Disabled = updateDisabledSkills(cfg.Skills.Disabled)
+	return updateCfgFile(func(fileCfg *Config) {
+		fileCfg.Skills.Disabled = updateDisabledSkills(fileCfg.Skills.Disabled)
 	})
 }
 

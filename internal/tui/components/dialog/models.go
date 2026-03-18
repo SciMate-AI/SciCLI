@@ -16,6 +16,8 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+type StartCompactSessionMsg struct{}
+
 const (
 	numVisibleModels = 10
 	maxDialogWidth   = 40

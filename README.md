@@ -11,7 +11,7 @@ Adapted from the original `opencode` code-agent baseline and significantly exten
 
 SciCLI is not just a generic terminal chat wrapper around an LLM. It is designed to be a practical coding and scientific workflow agent with a local-first terminal UX and built-in support for SciMate services.
 
-- **SciMate-native MCP integration**: SciCLI boots with default remote MCP endpoints for `cae-agent`, `origin`, and `rdkit`, so chemistry, CAE, and origin-analysis workflows can be exposed as normal agent tools.
+- **SciMate-native MCP integration**: SciCLI boots with default MCP entries for `cae-agent`, `origin`, `rdkit`, and `arxiv`, so chemistry, CAE, origin-analysis, and literature search workflows can be exposed as normal agent tools.
 - **Built-in SciMate auth flow**: `scicli auth register|login|logout|status` store a persistent local session, and MCP tools that require `access_token` can receive a refreshed token automatically instead of asking the user to paste credentials into prompts.
 - **Context-window protection for long tool outputs**: long MCP tool returns are compacted before being sent back to the model, while the full raw result remains available in metadata for the UI. This reduces 400 errors caused by oversized tool context.
 - **Terminal UI built for tool-heavy sessions**: sessions, permissions, logs, account actions, provider/model switching, file edits, and tool results all live in the TUI. Long histories can be browsed with mouse wheel support, a visible scrollbar, and scroll position hints.
@@ -82,6 +82,7 @@ SciCLI works without these tools, but some features are better with them install
 
 - `rg` / `ripgrep`: faster file search, grep, and project scanning
 - `fzf`: better interactive selection for some terminal workflows
+- `uvx`: enables the bundled local `arxiv` MCP server entry out of the box
 - language servers such as `gopls` or `typescript-language-server`: diagnostics support
 
 ## CLI Usage
@@ -100,6 +101,8 @@ scicli -c /path/to/project
 scicli -p "Explain the use of context in Go"
 scicli -p "Summarize the changes in this repository" -f json
 scicli -p "Check whether the tests mention flaky behavior" -q
+scicli --work-mode ultrawork -p "Investigate and fix the failing tests"
+scicli ultrawork "Ship this refactor end to end"
 ```
 
 ### Auth commands
@@ -131,11 +134,14 @@ scicli runs artifacts list
 
 ### Terminal UI
 
-- Command palette (`Ctrl+K`) for account actions, session switching, and provider/model switching
+- Searchable command palette (`Ctrl+K`) for account actions, session switching, work-mode controls, and provider/model switching
 - Session history browser with persistent saved sessions
 - Scrollable conversation history with mouse wheel support, visible scrollbar, and position indicator
 - Account dialog for register/login/logout/token refresh from inside the UI
 - Model/provider switcher from inside the UI
+- Searchable skill browser (`/skills`) with in-TUI install and uninstall actions
+- Three-column workbench layout with a left navigator, center conversation pane, and right run/task inspector
+- Delegated task browser (`/tasks`) for inspecting child-agent sessions spawned from the current chat
 - Permission prompts for tool execution
 - Logs view for debugging and tool inspection
 - External editor support for composing long prompts
@@ -157,8 +163,30 @@ Built-in local tools include:
 - `diagnostics`
 - `sourcegraph`
 - `agent` for delegated sub-tasks
+- `activate_skill` for `SKILL.md`-based Agent Skills activation
 
 Remote MCP tools are loaded dynamically from configured servers and appear to the agent alongside built-in tools.
+
+### Agent Skills
+
+SciCLI can discover and activate `SKILL.md`-based Agent Skills from skill directories that contain a `SKILL.md` file.
+
+SciCLI also ships with bundled extension skills synced on startup into:
+
+- `$HOME/.scicli/extensions/claude-scientific-skills/skills` from `K-Dense-AI/claude-scientific-skills`
+- `$HOME/.scicli/extensions/hpc-skills/skills` from `SciMate-AI/HPC-Skills`
+
+Discovered roots include:
+
+- `./.scicli/skills`
+- `./.gemini/skills`
+- `./.claude/skills`
+- `$HOME/.scicli/skills`
+- `$HOME/.gemini/skills`
+- `$HOME/.claude/skills`
+- bundled extension skills under `./.scicli/extensions/*/skills`, `./.gemini/extensions/*/skills`, `./.claude/extensions/*/skills`, `$HOME/.scicli/extensions/*/skills`, `$HOME/.gemini/extensions/*/skills`, and `$HOME/.claude/extensions/*/skills`
+
+The agent receives a catalog of recommended skills for the current user request and can call `activate_skill` to inject a skill into the current session context on demand. Relative paths referenced by a skill are resolved from that skill's directory.
 
 ### Context Management
 
@@ -176,6 +204,7 @@ By default, SciCLI is prepared to work with SciMate services:
 - `cae-agent` MCP server
 - `origin` MCP server
 - `rdkit` MCP server
+- `arxiv` MCP server via `uvx arxiv-paper-mcp-server`
 - Supabase-backed SciMate authentication
 
 These defaults can be overridden through configuration or environment variables.
@@ -255,6 +284,10 @@ SciCLI reads configuration from:
     "path": "/bin/bash",
     "args": ["-l"]
   },
+  "skills": {
+    "paths": ["path/to/more/skills"],
+    "disabled": ["example/skill"]
+  },
   "mcpServers": {
     "cae-agent": {
       "type": "sse",
@@ -263,6 +296,11 @@ SciCLI reads configuration from:
     "rdkit": {
       "type": "streamable-http",
       "url": "https://your-rdkit-server/mcp"
+    },
+    "arxiv": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": ["arxiv-paper-mcp-server"]
     },
     "local-toolbox": {
       "type": "stdio",
@@ -301,6 +339,8 @@ SciCLI reads configuration from:
 | `SCICLI_MCP_CAE_AGENT_URL` | Override default `cae-agent` MCP endpoint |
 | `SCICLI_MCP_ORIGIN_URL` | Override default `origin` MCP endpoint |
 | `SCICLI_MCP_RDKIT_URL` | Override default `rdkit` MCP endpoint |
+| `SCICLI_MCP_ARXIV_COMMAND` | Override the default `arxiv` MCP launcher command |
+| `SCICLI_MCP_ARXIV_PACKAGE` | Override the default `arxiv` MCP package passed to the launcher |
 | `SCICLI_SUPABASE_URL` | Override SciMate auth backend URL |
 | `SCICLI_SUPABASE_ANON_KEY` | Override SciMate auth anon key |
 | `SHELL` | Default shell path used by the `bash` tool |
@@ -344,6 +384,46 @@ Typical setup:
 }
 ```
 
+### Skills CLI
+
+- `scicli skills list`
+- `scicli skills recommend "vasp convergence"`
+- `scicli skills install <local-path-or-github-tree-url>`
+- `scicli skills uninstall <skill-id>`
+- `scicli skills disable <skill-id>`
+- `scicli skills enable <skill-id>`
+
+Inside the TUI, slash commands now include:
+
+- `/skills`
+- `/tasks`
+- `/parent`
+- `/install-skill <local-path-or-github-tree-url>`
+- `/compact`
+- `/new`
+- `/ultrawork [on|off|auto]`
+
+The skill browser supports:
+
+- typing to filter skills
+- `Ctrl+I` to install from a local path or GitHub tree URL
+- `Ctrl+X` to uninstall a user-installed skill
+
+The delegated task browser supports:
+
+- browsing child-agent sessions created from the current chat
+- pressing `Enter` to jump into the selected delegated task session
+- using `/parent` or the command palette to jump back to the parent chat
+
+The right-side run/task inspector supports:
+
+- near-real-time task status refresh for delegated child sessions
+- current run state, active skills, delegated task summaries, persisted task event timelines, and tracked file changes in one pane
+- staying visible during normal chat work instead of requiring a modal dialog
+- `Ctrl+I` to focus the inspector, `/` to filter tasks, `.` to filter the run console by tool/detail, `Tab` / `Shift+Tab` to cycle run-console categories, `Enter` to open the selected task, and `Ctrl+X` to stop it
+
+When work mode is set to `ultrawork`, the current TUI session auto-approves tool permissions so autonomous runs are not interrupted by approval prompts. Delegated child-task sessions now inherit that session-level auto-approval as well.
+
 ## Custom Commands
 
 Custom commands let you store reusable prompt templates as Markdown files.
@@ -373,6 +453,7 @@ Common shortcuts:
 - `Ctrl+L`: open logs
 - `Ctrl+S`: switch sessions
 - `Ctrl+K`: open the command palette
+- `Alt+[` / `Alt+]`: rotate the highlighted delegated task in the status bar
 - `Ctrl+O`: switch provider / model
 - `Ctrl+N`: create a new session
 - `Ctrl+E`: open the external editor
@@ -386,8 +467,17 @@ Useful command-palette actions:
 
 - `Account`: open the account panel with current login status
 - `Login` / `Register` / `Logout` / `Refresh Login`
+- `Focus Inspector`
+- `Open Latest Task`
+- `Stop Latest Running Task`
 - `Switch Session`
 - `Switch Provider / Model`
+
+The status bar now mirrors inspector state:
+
+- clicking the `Inspector` chip focuses the right-side inspector
+- clicking the `Task ...` chip opens the currently highlighted delegated task
+- `Alt+[` / `Alt+]` rotate which delegated task is highlighted there
 
 The in-app help dialog shows the current complete keymap.
 

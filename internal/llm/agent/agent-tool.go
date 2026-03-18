@@ -9,13 +9,19 @@ import (
 	"github.com/SciMate-AI/scicli/internal/llm/tools"
 	"github.com/SciMate-AI/scicli/internal/lsp"
 	"github.com/SciMate-AI/scicli/internal/message"
+	"github.com/SciMate-AI/scicli/internal/permission"
 	"github.com/SciMate-AI/scicli/internal/session"
+	"github.com/SciMate-AI/scicli/internal/skills"
+	"github.com/SciMate-AI/scicli/internal/taskrun"
 )
 
 type agentTool struct {
-	sessions   session.Service
-	messages   message.Service
-	lspClients map[string]*lsp.Client
+	permissions permission.Service
+	sessions    session.Service
+	messages    message.Service
+	lspClients  map[string]*lsp.Client
+	skillsSvc   skills.Service
+	taskRuns    taskrun.Service
 }
 
 const (
@@ -54,7 +60,7 @@ func (b *agentTool) Run(ctx context.Context, call tools.ToolCall) (tools.ToolRes
 		return tools.ToolResponse{}, fmt.Errorf("session_id and message_id are required")
 	}
 
-	agent, err := NewAgent(config.AgentTask, b.sessions, b.messages, TaskAgentTools(b.lspClients))
+	agent, err := NewAgent(config.AgentTask, b.sessions, b.messages, TaskAgentTools(b.lspClients, b.skillsSvc), b.skillsSvc, b.taskRuns)
 	if err != nil {
 		return tools.ToolResponse{}, fmt.Errorf("error creating agent: %s", err)
 	}
@@ -62,6 +68,12 @@ func (b *agentTool) Run(ctx context.Context, call tools.ToolCall) (tools.ToolRes
 	session, err := b.sessions.CreateTaskSession(ctx, call.ID, sessionID, "New Agent Session")
 	if err != nil {
 		return tools.ToolResponse{}, fmt.Errorf("error creating session: %s", err)
+	}
+	if b.permissions != nil && (config.Get().Automation.WorkMode == config.WorkModeUltrawork || b.permissions.IsAutoApproved(sessionID)) {
+		b.permissions.AutoApproveSession(session.ID)
+	}
+	if b.taskRuns != nil {
+		b.taskRuns.Queue(session, params.Prompt)
 	}
 
 	done, err := agent.Run(ctx, session.ID, params.Prompt)
@@ -97,13 +109,19 @@ func (b *agentTool) Run(ctx context.Context, call tools.ToolCall) (tools.ToolRes
 }
 
 func NewAgentTool(
+	permissions permission.Service,
 	Sessions session.Service,
 	Messages message.Service,
 	LspClients map[string]*lsp.Client,
+	skillsSvc skills.Service,
+	taskRuns taskrun.Service,
 ) tools.BaseTool {
 	return &agentTool{
-		sessions:   Sessions,
-		messages:   Messages,
-		lspClients: LspClients,
+		permissions: permissions,
+		sessions:    Sessions,
+		messages:    Messages,
+		lspClients:  LspClients,
+		skillsSvc:   skillsSvc,
+		taskRuns:    taskRuns,
 	}
 }

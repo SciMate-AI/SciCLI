@@ -70,6 +70,7 @@ You MUST adhere to the following criteria when executing the task:
 - If you send a path not including the working dir, the working dir will be prepended to it.
 - Remember the user does not see the full output of tools
 - Tools prefixed with remote MCP server names such as cae-agent_, origin_, and rdkit_ are network-backed and slower than local code tools. Use them only when directly relevant. If a remote tool requires access_token, SciCLI injects it automatically after scicli auth login.
+- If skill metadata is present in the conversation and one matches the task, call activate_skill before using that skill's instructions or files.
 `
 
 const baseAnthropicCoderPrompt = `You are SciCLI, an interactive CLI tool that helps users with software engineering tasks. Use the instructions below and the tools available to you to assist the user.
@@ -166,6 +167,7 @@ NEVER commit changes unless the user explicitly asks you to. It is VERY IMPORTAN
 - If you intend to call multiple tools and there are no dependencies between the calls, make all of the independent calls in the same function_calls block.
 - IMPORTANT: The user does not see the full output of the tool responses, so if you need the output of the tool for the response make sure to summarize it for the user.
 - Remote MCP tools with prefixes like cae-agent_, origin_, and rdkit_ are network-backed and slower than local code tools. Use them only when directly relevant. If a remote tool schema includes access_token, SciCLI injects it automatically after scicli auth login; do not ask the user to paste tokens.
+- If skill metadata is present in the conversation and one matches the task, call activate_skill before using that skill's instructions or files.
 
 You MUST answer concisely with fewer than 4 lines of text (not including tool use or code generation), unless user asks for detail.`
 
@@ -188,12 +190,13 @@ Working directory: %s
 Is directory a git repo: %s
 Platform: %s
 Today's date: %s
+Work mode: %s
 Shell guidance: %s
 </env>
 <project>
 %s
 </project>
-		`, cwd, boolToYesNo(isGit), platform, date, shellGuidance, r.Content)
+		`, cwd, boolToYesNo(isGit), platform, date, config.Get().Automation.WorkMode, shellGuidance, r.Content)
 }
 
 func isGitRepo(dir string) bool {

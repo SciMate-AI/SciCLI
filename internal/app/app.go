@@ -19,6 +19,8 @@ import (
 	"github.com/SciMate-AI/scicli/internal/message"
 	"github.com/SciMate-AI/scicli/internal/permission"
 	"github.com/SciMate-AI/scicli/internal/session"
+	"github.com/SciMate-AI/scicli/internal/skills"
+	"github.com/SciMate-AI/scicli/internal/taskrun"
 	"github.com/SciMate-AI/scicli/internal/tui/theme"
 )
 
@@ -31,6 +33,8 @@ type App struct {
 	CoderAgent agent.Service
 
 	LSPClients map[string]*lsp.Client
+	Skills     skills.Service
+	TaskRuns   taskrun.Service
 
 	clientsMutex sync.RWMutex
 
@@ -51,6 +55,8 @@ func New(ctx context.Context, conn *sql.DB) (*App, error) {
 		History:     files,
 		Permissions: permission.NewPermissionService(),
 		LSPClients:  make(map[string]*lsp.Client),
+		Skills:      skills.NewService(),
+		TaskRuns:    taskrun.NewService(conn),
 	}
 
 	// Initialize theme based on configuration
@@ -70,7 +76,11 @@ func New(ctx context.Context, conn *sql.DB) (*App, error) {
 			app.Messages,
 			app.History,
 			app.LSPClients,
+			app.Skills,
+			app.TaskRuns,
 		),
+		app.Skills,
+		app.TaskRuns,
 	)
 	if err != nil {
 		logging.Error("Failed to create coder agent", err)

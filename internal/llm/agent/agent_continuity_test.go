@@ -106,3 +106,30 @@ func TestExecutionLoopStateDefaultsToNoFixedStepLimit(t *testing.T) {
 		t.Fatalf("expected prompt step label to describe unlimited mode, got %q", got)
 	}
 }
+
+func TestBuildTaskRunMetadataIncludesPermissionContext(t *testing.T) {
+	msg := message.Message{
+		Parts: []message.ContentPart{
+			message.ToolCall{
+				ID:    "call-1",
+				Name:  "bash",
+				Input: "{\n  \"command\": \"npm publish --access public\"\n}",
+			},
+			message.Finish{Reason: message.FinishReasonPermissionDenied},
+		},
+	}
+
+	metadata := buildTaskRunMetadata(msg)
+	if metadata == nil {
+		t.Fatal("expected task metadata")
+	}
+	if metadata.FinishReason != string(message.FinishReasonPermissionDenied) {
+		t.Fatalf("expected finish reason metadata, got %q", metadata.FinishReason)
+	}
+	if !strings.Contains(metadata.ToolInputPreview, "npm publish") {
+		t.Fatalf("expected tool input preview, got %q", metadata.ToolInputPreview)
+	}
+	if !strings.Contains(metadata.PermissionReason, "bash") {
+		t.Fatalf("expected permission reason to include tool name, got %q", metadata.PermissionReason)
+	}
+}

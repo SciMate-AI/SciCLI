@@ -117,6 +117,10 @@ Review the work completed so far, including tool results and verification status
 			},
 		}
 	default:
+		completionRule := "Do not give the final user-facing answer in this phase unless the task is already fully complete without more work."
+		if config.Get().Automation.WorkMode == config.WorkModeUltrawork {
+			completionRule = "In ultrawork mode, do not stop after partial progress. Keep executing until the task is actually complete or a hard blocker remains."
+		}
 		return message.Message{
 			Role: message.User,
 			Parts: []message.ContentPart{
@@ -128,9 +132,9 @@ Phase: plan and execute.
 Update your internal plan, choose the single highest-value next action, and execute it now.
 - Use tools immediately when they help.
 - Do not stop just because one command or tool call finished.
-- Do not give the final user-facing answer in this phase unless the task is already fully complete without more work.
+- %s
 - Keep any plain-text in this phase minimal.
-`, state.promptStepLabel()))},
+`, state.promptStepLabel(), completionRule))},
 			},
 		}
 	}
@@ -167,11 +171,69 @@ func (a *agent) prepareHistoryForTurn(ctx context.Context, sessionID string, msg
 	}
 
 	requestHistory := append([]message.Message{}, compactedHistory...)
+	if skillContext := a.buildSkillContextMessage(ctx, sessionID, msgHistory); skillContext != nil {
+		requestHistory = append(requestHistory, *skillContext)
+	}
 	if state.injectControl {
 		requestHistory = append(requestHistory, buildLoopControlMessage(*state))
 		state.injectControl = false
 	}
 	return compactedHistory, requestHistory, nil
+}
+
+func (a *agent) buildSkillContextMessage(ctx context.Context, sessionID string, msgHistory []message.Message) *message.Message {
+	if a.skillsSvc == nil {
+		return nil
+	}
+
+	recommendedSkills, err := a.skillsSvc.Recommend(ctx, latestUserQuery(msgHistory), 12)
+	if err != nil {
+		logging.Warn("failed to recommend skills", "error", err)
+		return nil
+	}
+	activeSkills := a.skillsSvc.Active(sessionID)
+	if len(recommendedSkills) == 0 && len(activeSkills) == 0 {
+		return nil
+	}
+
+	var body strings.Builder
+	body.WriteString("Internal skill context for this session.\n")
+	if len(recommendedSkills) > 0 {
+		body.WriteString("If a task matches one of these skills, call activate_skill before following the skill instructions.\n")
+		body.WriteString("<recommended_skills>\n")
+		for _, skill := range recommendedSkills {
+			fmt.Fprintf(&body, "- %s: %s\n", skill.ID, skill.Description)
+		}
+		body.WriteString("</recommended_skills>\n")
+	}
+	if len(activeSkills) > 0 {
+		body.WriteString("<active_skills>\n")
+		for _, skill := range activeSkills {
+			fmt.Fprintf(&body, "<skill id=%q dir=%q scope=%q>\n", skill.ID, skill.Dir, skill.Scope)
+			body.WriteString("Resolve relative paths in this skill from the dir above.\n")
+			body.WriteString(strings.TrimSpace(skill.Content))
+			body.WriteString("\n</skill>\n")
+		}
+		body.WriteString("</active_skills>")
+	}
+
+	return &message.Message{
+		Role:  message.User,
+		Parts: []message.ContentPart{message.TextContent{Text: body.String()}},
+	}
+}
+
+func latestUserQuery(history []message.Message) string {
+	for i := len(history) - 1; i >= 0; i-- {
+		if history[i].Role != message.User {
+			continue
+		}
+		text := strings.TrimSpace(history[i].Content().Text)
+		if text != "" {
+			return text
+		}
+	}
+	return ""
 }
 
 func (a *agent) compactHistoryForContextWindow(ctx context.Context, sessionID string, msgHistory []message.Message, state *executionLoopState) ([]message.Message, error) {

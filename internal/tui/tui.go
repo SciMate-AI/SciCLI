@@ -13,6 +13,8 @@ import (
 	"github.com/SciMate-AI/scicli/internal/permission"
 	"github.com/SciMate-AI/scicli/internal/pubsub"
 	"github.com/SciMate-AI/scicli/internal/session"
+	"github.com/SciMate-AI/scicli/internal/skills"
+	"github.com/SciMate-AI/scicli/internal/taskrun"
 	"github.com/SciMate-AI/scicli/internal/tui/components/chat"
 	"github.com/SciMate-AI/scicli/internal/tui/components/core"
 	"github.com/SciMate-AI/scicli/internal/tui/components/dialog"
@@ -23,6 +25,7 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	zone "github.com/lrstanley/bubblezone"
 )
 
 type keyMap struct {
@@ -34,11 +37,15 @@ type keyMap struct {
 	Filepicker    key.Binding
 	Models        key.Binding
 	SwitchTheme   key.Binding
+	PrevTask      key.Binding
+	NextTask      key.Binding
 }
 
-type startCompactSessionMsg struct{}
 type showSessionDialogMsg struct{}
 type showModelDialogMsg struct{}
+type focusInspectorGlobalMsg struct{}
+type openLatestTaskGlobalMsg struct{}
+type stopLatestTaskGlobalMsg struct{}
 type authQuickActionResultMsg struct {
 	session *auth.Session
 	message string
@@ -85,6 +92,14 @@ var keys = keyMap{
 	SwitchTheme: key.NewBinding(
 		key.WithKeys("ctrl+t"),
 		key.WithHelp("ctrl+t", "switch theme"),
+	),
+	PrevTask: key.NewBinding(
+		key.WithKeys("alt+["),
+		key.WithHelp("alt+[", "prev task"),
+	),
+	NextTask: key.NewBinding(
+		key.WithKeys("alt+]"),
+		key.WithHelp("alt+]", "next task"),
 	),
 }
 
@@ -147,6 +162,12 @@ type appModel struct {
 	showMultiArgumentsDialog bool
 	multiArgumentsDialog     dialog.MultiArgumentsDialogCmp
 
+	showSkillsDialog bool
+	skillsDialog     dialog.SkillDialog
+
+	showTaskDialog bool
+	taskDialog     dialog.TaskDialog
+
 	isCompacting      bool
 	compactingMessage string
 }
@@ -175,6 +196,10 @@ func (a appModel) Init() tea.Cmd {
 	cmd = a.filepicker.Init()
 	cmds = append(cmds, cmd)
 	cmd = a.themeDialog.Init()
+	cmds = append(cmds, cmd)
+	cmd = a.skillsDialog.Init()
+	cmds = append(cmds, cmd)
+	cmd = a.taskDialog.Init()
 	cmds = append(cmds, cmd)
 
 	// Check if we should show the init dialog
@@ -380,6 +405,7 @@ func (a appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			!a.showPermissions &&
 			!a.showSessionDialog &&
 			!a.showCommandDialog &&
+			!a.showTaskDialog &&
 			!a.showAuthDialog &&
 			!a.showThemeDialog &&
 			!a.showFilepicker {
@@ -387,7 +413,7 @@ func (a appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return a, nil
 
-	case startCompactSessionMsg:
+	case dialog.StartCompactSessionMsg:
 		// Start compacting the current session
 		a.isCompacting = true
 		a.compactingMessage = "Starting summarization..."
@@ -421,7 +447,7 @@ func (a appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			contextWindow := model.ContextWindow
 			tokens := a.selectedSession.CompletionTokens + a.selectedSession.PromptTokens
 			if (tokens >= int64(float64(contextWindow)*0.95)) && config.Get().AutoCompact {
-				return a, util.CmdHandler(startCompactSessionMsg{})
+				return a, util.CmdHandler(dialog.StartCompactSessionMsg{})
 			}
 		}
 		// Continue listening for events
@@ -430,6 +456,63 @@ func (a appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case dialog.CloseThemeDialogMsg:
 		a.showThemeDialog = false
 		return a, nil
+
+	case dialog.ShowSkillDialogMsg:
+		items, err := a.app.Skills.List(context.Background())
+		if err != nil {
+			return a, util.ReportError(err)
+		}
+		a.skillsDialog.SetSkills(items)
+		a.showSkillsDialog = true
+		return a, nil
+
+	case dialog.CloseSkillDialogMsg:
+		a.showSkillsDialog = false
+		return a, nil
+
+	case dialog.SkillSelectedMsg:
+		a.showSkillsDialog = false
+		if a.selectedSession.ID == "" {
+			return a, util.ReportWarn("Start a session before activating a skill")
+		}
+		skill, err := a.app.Skills.Activate(context.Background(), a.selectedSession.ID, msg.Skill.ID)
+		if err != nil {
+			return a, util.ReportError(err)
+		}
+		return a, util.ReportInfo(fmt.Sprintf("Activated skill %s", skill.ID))
+
+	case dialog.SkillInstallRequestedMsg:
+		skill, err := a.app.Skills.Install(context.Background(), msg.Source)
+		if err != nil {
+			return a, util.ReportError(err)
+		}
+		if err := a.reloadSkillsDialog(); err != nil {
+			return a, util.ReportError(err)
+		}
+		return a, util.ReportInfo(fmt.Sprintf("Installed skill %s", skill.ID))
+
+	case dialog.SkillUninstallRequestedMsg:
+		if msg.Skill.Source != skills.UserInstalledExtensionName {
+			return a, util.ReportWarn("Only user-installed skills can be removed from the TUI")
+		}
+		if err := a.app.Skills.Uninstall(context.Background(), msg.Skill.ID); err != nil {
+			return a, util.ReportError(err)
+		}
+		if err := a.reloadSkillsDialog(); err != nil {
+			return a, util.ReportError(err)
+		}
+		return a, util.ReportInfo(fmt.Sprintf("Uninstalled skill %s", msg.Skill.ID))
+
+	case dialog.ShowTaskDialogMsg:
+		return a, a.openTaskDialog()
+
+	case dialog.CloseTaskDialogMsg:
+		a.showTaskDialog = false
+		return a, nil
+
+	case dialog.TaskSelectedMsg:
+		a.showTaskDialog = false
+		return a, util.CmdHandler(chat.SessionSelectedMsg(msg.Session))
 
 	case dialog.ThemeChangedMsg:
 		a.pages[a.currentPage], cmd = a.pages[a.currentPage].Update(msg)
@@ -498,6 +581,54 @@ func (a appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return a, util.ReportInfo("Command selected: " + msg.Command.Title)
 
+	case focusInspectorGlobalMsg:
+		moveCmd := a.moveToPage(page.ChatPage)
+		return a, tea.Batch(moveCmd, util.CmdHandler(chat.InspectorFocusMsg{Focused: true}))
+
+	case core.StatusFocusInspectorMsg:
+		moveCmd := a.moveToPage(page.ChatPage)
+		return a, tea.Batch(moveCmd, util.CmdHandler(chat.InspectorFocusMsg{Focused: true}))
+
+	case core.StatusOpenTaskMsg:
+		selectedSession, err := a.app.Sessions.Get(context.Background(), msg.SessionID)
+		if err != nil {
+			return a, util.ReportError(err)
+		}
+		moveCmd := a.moveToPage(page.ChatPage)
+		return a, tea.Batch(moveCmd, util.CmdHandler(chat.SessionSelectedMsg(selectedSession)))
+
+	case openLatestTaskGlobalMsg:
+		sessionID, title, err := a.latestTaskContext(false)
+		if err != nil {
+			return a, util.ReportError(err)
+		}
+		if sessionID == "" {
+			return a, util.ReportWarn("No delegated task available to open")
+		}
+		moveCmd := a.moveToPage(page.ChatPage)
+		return a, tea.Batch(
+			moveCmd,
+			util.CmdHandler(chat.InspectorFocusMsg{Focused: true}),
+			util.CmdHandler(chat.InspectorOpenTaskMsg{SessionID: sessionID}),
+			util.ReportInfo("Opening latest task: "+title),
+		)
+
+	case stopLatestTaskGlobalMsg:
+		sessionID, title, err := a.latestTaskContext(true)
+		if err != nil {
+			return a, util.ReportError(err)
+		}
+		if sessionID == "" {
+			return a, util.ReportWarn("No running delegated task available to stop")
+		}
+		moveCmd := a.moveToPage(page.ChatPage)
+		return a, tea.Batch(
+			moveCmd,
+			util.CmdHandler(chat.InspectorFocusMsg{Focused: true}),
+			util.CmdHandler(chat.InspectorStopTaskMsg{SessionID: sessionID}),
+			util.ReportInfo("Stopping latest running task: "+title),
+		)
+
 	case dialog.ShowMultiArgumentsDialogMsg:
 		// Show multi-arguments dialog
 		a.multiArgumentsDialog = dialog.NewMultiArgumentsDialogCmp(msg.CommandID, msg.Content, msg.ArgNames)
@@ -562,6 +693,12 @@ func (a appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if a.showModelDialog {
 				a.showModelDialog = false
 			}
+			if a.showSkillsDialog {
+				a.showSkillsDialog = false
+			}
+			if a.showTaskDialog {
+				a.showTaskDialog = false
+			}
 			if a.showMultiArgumentsDialog {
 				a.showMultiArgumentsDialog = false
 			}
@@ -569,7 +706,7 @@ func (a appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, keys.SwitchSession):
 			return a, a.openSessionDialog()
 		case key.Matches(msg, keys.Commands):
-			if a.currentPage == page.ChatPage && !a.showQuit && !a.showPermissions && !a.showSessionDialog && !a.showThemeDialog && !a.showFilepicker {
+			if a.currentPage == page.ChatPage && !a.showQuit && !a.showPermissions && !a.showSessionDialog && !a.showThemeDialog && !a.showFilepicker && !a.showTaskDialog {
 				// Show commands dialog
 				if len(a.commands) == 0 {
 					return a, util.ReportWarn("No commands available")
@@ -586,13 +723,21 @@ func (a appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return a, util.CmdHandler(showModelDialogMsg{})
 		case key.Matches(msg, keys.SwitchTheme):
-			if !a.showQuit && !a.showPermissions && !a.showSessionDialog && !a.showCommandDialog {
+			if !a.showQuit && !a.showPermissions && !a.showSessionDialog && !a.showCommandDialog && !a.showTaskDialog {
 				// Show theme switcher dialog
 				a.showThemeDialog = true
 				// Theme list is dynamically loaded by the dialog component
 				return a, a.themeDialog.Init()
 			}
 			return a, nil
+		case key.Matches(msg, keys.PrevTask):
+			s, cmd := a.status.Update(core.StatusCycleTaskMsg{Delta: -1})
+			a.status = s.(core.StatusCmp)
+			return a, cmd
+		case key.Matches(msg, keys.NextTask):
+			s, cmd := a.status.Update(core.StatusCycleTaskMsg{Delta: 1})
+			a.status = s.(core.StatusCmp)
+			return a, cmd
 		case key.Matches(msg, returnKey) || key.Matches(msg):
 			if msg.String() == quitKey {
 				if a.currentPage == page.LogsPage {
@@ -744,6 +889,24 @@ func (a appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	if a.showSkillsDialog {
+		d, skillsCmd := a.skillsDialog.Update(msg)
+		a.skillsDialog = d.(dialog.SkillDialog)
+		cmds = append(cmds, skillsCmd)
+		if _, ok := msg.(tea.KeyMsg); ok {
+			return a, tea.Batch(cmds...)
+		}
+	}
+
+	if a.showTaskDialog {
+		d, taskCmd := a.taskDialog.Update(msg)
+		a.taskDialog = d.(dialog.TaskDialog)
+		cmds = append(cmds, taskCmd)
+		if _, ok := msg.(tea.KeyMsg); ok {
+			return a, tea.Batch(cmds...)
+		}
+	}
+
 	s, _ := a.status.Update(msg)
 	a.status = s.(core.StatusCmp)
 	a.pages[a.currentPage], cmd = a.pages[a.currentPage].Update(msg)
@@ -770,6 +933,7 @@ func (a *appModel) openSessionDialog() tea.Cmd {
 		a.showQuit ||
 		a.showPermissions ||
 		a.showCommandDialog ||
+		a.showTaskDialog ||
 		a.showAuthDialog ||
 		a.showThemeDialog ||
 		a.showFilepicker ||
@@ -787,6 +951,76 @@ func (a *appModel) openSessionDialog() tea.Cmd {
 	a.sessionDialog.SetSessions(sessions)
 	a.showSessionDialog = true
 	return nil
+}
+
+func (a *appModel) openTaskDialog() tea.Cmd {
+	if a.currentPage != page.ChatPage ||
+		a.showQuit ||
+		a.showPermissions ||
+		a.showCommandDialog ||
+		a.showSessionDialog ||
+		a.showAuthDialog ||
+		a.showThemeDialog ||
+		a.showFilepicker ||
+		a.showModelDialog {
+		return nil
+	}
+	if a.selectedSession.ID == "" {
+		return util.ReportWarn("Start or select a session before inspecting delegated tasks")
+	}
+	tasks, err := a.app.Sessions.ListChildren(context.Background(), a.selectedSession.ID)
+	if err != nil {
+		return util.ReportError(err)
+	}
+	a.taskDialog.SetParentSession(a.selectedSession)
+	a.taskDialog.SetTasks(tasks)
+	a.showTaskDialog = true
+	return nil
+}
+
+func (a *appModel) reloadSkillsDialog() error {
+	items, err := a.app.Skills.List(context.Background())
+	if err != nil {
+		return err
+	}
+	a.skillsDialog.SetSkills(items)
+	a.showSkillsDialog = true
+	return nil
+}
+
+func (a *appModel) latestTaskContext(requireRunning bool) (string, string, error) {
+	if a.selectedSession.ID == "" {
+		return "", "", nil
+	}
+
+	contextID := a.selectedSession.ID
+	if a.selectedSession.ParentSessionID != "" {
+		contextID = a.selectedSession.ParentSessionID
+	}
+
+	runs := a.app.TaskRuns.Snapshot(contextID)
+	if len(runs) == 0 {
+		return "", "", nil
+	}
+
+	if requireRunning {
+		for _, run := range runs {
+			if run.Status == taskrun.StatusRunning {
+				return run.SessionID, fallbackCommandTaskTitle(run.Title), nil
+			}
+		}
+		return "", "", nil
+	}
+
+	return runs[0].SessionID, fallbackCommandTaskTitle(runs[0].Title), nil
+}
+
+func fallbackCommandTaskTitle(title string) string {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return "latest task"
+	}
+	return title
 }
 
 func currentAuthSession() (*auth.Session, error) {
@@ -951,8 +1185,26 @@ func (a appModel) View() string {
 		if a.showPermissions {
 			bindings = append(bindings, a.permissions.BindingKeys()...)
 		}
+		if a.showSessionDialog {
+			bindings = append(bindings, a.sessionDialog.BindingKeys()...)
+		}
+		if a.showCommandDialog {
+			bindings = append(bindings, a.commandDialog.BindingKeys()...)
+		}
 		if a.showAuthDialog {
 			bindings = append(bindings, a.authDialog.BindingKeys()...)
+		}
+		if a.showModelDialog {
+			bindings = append(bindings, a.modelDialog.BindingKeys()...)
+		}
+		if a.showThemeDialog {
+			bindings = append(bindings, a.themeDialog.BindingKeys()...)
+		}
+		if a.showSkillsDialog {
+			bindings = append(bindings, a.skillsDialog.BindingKeys()...)
+		}
+		if a.showTaskDialog {
+			bindings = append(bindings, a.taskDialog.BindingKeys()...)
 		}
 		if a.currentPage == page.LogsPage {
 			bindings = append(bindings, logsKeyReturnKey)
@@ -1077,6 +1329,24 @@ func (a appModel) View() string {
 		)
 	}
 
+	if a.showSkillsDialog {
+		overlay := a.skillsDialog.View()
+		row := lipgloss.Height(appView) / 2
+		row -= lipgloss.Height(overlay) / 2
+		col := lipgloss.Width(appView) / 2
+		col -= lipgloss.Width(overlay) / 2
+		appView = layout.PlaceOverlay(col, row, overlay, appView, true)
+	}
+
+	if a.showTaskDialog {
+		overlay := a.taskDialog.View()
+		row := lipgloss.Height(appView) / 2
+		row -= lipgloss.Height(overlay) / 2
+		col := lipgloss.Width(appView) / 2
+		col -= lipgloss.Width(overlay) / 2
+		appView = layout.PlaceOverlay(col, row, overlay, appView, true)
+	}
+
 	if a.showMultiArgumentsDialog {
 		overlay := a.multiArgumentsDialog.View()
 		row := lipgloss.Height(appView) / 2
@@ -1092,7 +1362,7 @@ func (a appModel) View() string {
 		)
 	}
 
-	return appView
+	return zone.Scan(appView)
 }
 
 func New(app *app.App) tea.Model {
@@ -1100,7 +1370,7 @@ func New(app *app.App) tea.Model {
 	model := &appModel{
 		currentPage:   startPage,
 		loadedPages:   make(map[page.PageID]bool),
-		status:        core.NewStatusCmp(app.LSPClients),
+		status:        core.NewStatusCmp(app.LSPClients, app.Skills, app.Permissions, app.TaskRuns),
 		help:          dialog.NewHelpCmp(),
 		quit:          dialog.NewQuitCmp(),
 		sessionDialog: dialog.NewSessionDialogCmp(),
@@ -1110,6 +1380,8 @@ func New(app *app.App) tea.Model {
 		permissions:   dialog.NewPermissionDialogCmp(),
 		initDialog:    dialog.NewInitDialogCmp(),
 		themeDialog:   dialog.NewThemeDialogCmp(),
+		skillsDialog:  dialog.NewSkillDialogCmp(),
+		taskDialog:    dialog.NewTaskDialogCmp(),
 		app:           app,
 		commands:      []dialog.Command{},
 		pages: map[page.PageID]tea.Model{
@@ -1118,6 +1390,33 @@ func New(app *app.App) tea.Model {
 		},
 		filepicker: dialog.NewFilepickerCmp(app),
 	}
+
+	model.RegisterCommand(dialog.Command{
+		ID:          "focus-inspector",
+		Title:       "Focus Inspector",
+		Description: "Jump focus to the right-side run/task inspector",
+		Handler: func(cmd dialog.Command) tea.Cmd {
+			return util.CmdHandler(focusInspectorGlobalMsg{})
+		},
+	})
+
+	model.RegisterCommand(dialog.Command{
+		ID:          "open-latest-task",
+		Title:       "Open Latest Task",
+		Description: "Jump into the most recently updated delegated task",
+		Handler: func(cmd dialog.Command) tea.Cmd {
+			return util.CmdHandler(openLatestTaskGlobalMsg{})
+		},
+	})
+
+	model.RegisterCommand(dialog.Command{
+		ID:          "stop-latest-task",
+		Title:       "Stop Latest Running Task",
+		Description: "Send a stop signal to the most recent running delegated task",
+		Handler: func(cmd dialog.Command) tea.Cmd {
+			return util.CmdHandler(stopLatestTaskGlobalMsg{})
+		},
+	})
 
 	model.RegisterCommand(dialog.Command{
 		ID:          "init",
@@ -1145,8 +1444,26 @@ If there are Cursor rules (in .cursor/rules/ or .cursorrules) or Copilot rules (
 		Description: "Summarize the current session and create a new one with the summary",
 		Handler: func(cmd dialog.Command) tea.Cmd {
 			return func() tea.Msg {
-				return startCompactSessionMsg{}
+				return dialog.StartCompactSessionMsg{}
 			}
+		},
+	})
+
+	model.RegisterCommand(dialog.Command{
+		ID:          "skills",
+		Title:       "Skills",
+		Description: "Browse and activate available skills",
+		Handler: func(cmd dialog.Command) tea.Cmd {
+			return util.CmdHandler(dialog.ShowSkillDialogMsg{})
+		},
+	})
+
+	model.RegisterCommand(dialog.Command{
+		ID:          "tasks",
+		Title:       "Delegated Tasks",
+		Description: "Inspect delegated child-agent sessions for the current chat",
+		Handler: func(cmd dialog.Command) tea.Cmd {
+			return util.CmdHandler(dialog.ShowTaskDialogMsg{})
 		},
 	})
 
@@ -1192,6 +1509,38 @@ If there are Cursor rules (in .cursor/rules/ or .cursorrules) or Copilot rules (
 		Description: "Refresh the stored access token",
 		Handler: func(cmd dialog.Command) tea.Cmd {
 			return util.CmdHandler(dialog.AuthQuickActionMsg{Action: dialog.AuthQuickActionRefresh})
+		},
+	})
+
+	model.RegisterCommand(dialog.Command{
+		ID:          "ultrawork",
+		Title:       "Enable Ultrawork",
+		Description: "Switch the current runtime to ultrawork mode",
+		Handler: func(cmd dialog.Command) tea.Cmd {
+			return func() tea.Msg {
+				if err := config.SetWorkMode(config.WorkModeUltrawork, false); err != nil {
+					return util.InfoMsg{Type: util.InfoTypeError, Msg: err.Error()}
+				}
+				return util.InfoMsg{Type: util.InfoTypeInfo, Msg: "Ultrawork mode enabled"}
+			}
+		},
+	})
+
+	model.RegisterCommand(dialog.Command{
+		ID:          "parent-session",
+		Title:       "Go To Parent Session",
+		Description: "Jump from a delegated task session back to its parent chat",
+		Handler: func(cmd dialog.Command) tea.Cmd {
+			return func() tea.Msg {
+				if model.selectedSession.ParentSessionID == "" {
+					return util.InfoMsg{Type: util.InfoTypeWarn, Msg: "Current session has no parent"}
+				}
+				parentSession, err := app.Sessions.Get(context.Background(), model.selectedSession.ParentSessionID)
+				if err != nil {
+					return util.InfoMsg{Type: util.InfoTypeError, Msg: err.Error()}
+				}
+				return chat.SessionSelectedMsg(parentSession)
+			}
 		},
 	})
 

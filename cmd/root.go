@@ -22,6 +22,12 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var (
+	runtimeWorkMode      string
+	runtimeAutoApprove   bool
+	runtimeAllowPrefixes []string
+)
+
 var rootCmd = &cobra.Command{
 	Use:   "scicli",
 	Short: "Terminal-based AI assistant for software development",
@@ -83,8 +89,7 @@ to assist developers in writing, debugging, and understanding code directly from
 			}
 			cwd = c
 		}
-		_, err := config.Load(cwd, debug)
-		if err != nil {
+		if err := loadRuntimeConfig("", debug); err != nil {
 			return err
 		}
 		if config.NeedsOnboarding() {
@@ -268,6 +273,9 @@ func setupSubscriptions(app *app.App, parentCtx context.Context) (chan tea.Msg, 
 	setupSubscriber(ctx, &wg, "messages", app.Messages.Subscribe, ch)
 	setupSubscriber(ctx, &wg, "permissions", app.Permissions.Subscribe, ch)
 	setupSubscriber(ctx, &wg, "coderAgent", app.CoderAgent.Subscribe, ch)
+	setupSubscriber(ctx, &wg, "taskRuns", app.TaskRuns.Subscribe, ch)
+	setupSubscriber(ctx, &wg, "taskRunEvents", app.TaskRuns.SubscribeEvents, ch)
+	setupSubscriber(ctx, &wg, "history", app.History.Subscribe, ch)
 
 	cleanupFunc := func() {
 		logging.Info("Cancelling all subscriptions")
@@ -304,6 +312,9 @@ func init() {
 	rootCmd.Flags().BoolP("version", "v", false, "Version")
 	rootCmd.PersistentFlags().BoolP("debug", "d", false, "Debug")
 	rootCmd.PersistentFlags().StringP("cwd", "c", "", "Current working directory")
+	rootCmd.PersistentFlags().StringVar(&runtimeWorkMode, "work-mode", "", "Work mode override: interactive, auto, ultrawork")
+	rootCmd.PersistentFlags().BoolVar(&runtimeAutoApprove, "auto-approve", false, "Automatically approve tool actions allowed by the runtime policy")
+	rootCmd.PersistentFlags().StringSliceVar(&runtimeAllowPrefixes, "allow-prefix", nil, "Additional shell command prefixes to auto-approve")
 	rootCmd.Flags().StringP("prompt", "p", "", "Prompt to run in non-interactive mode")
 
 	// Add format flag with validation logic

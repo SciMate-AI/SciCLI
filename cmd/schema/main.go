@@ -98,6 +98,29 @@ func generateSchema() map[string]any {
 		},
 	}
 
+	schema["properties"].(map[string]any)["skills"] = map[string]any{
+		"type":        "object",
+		"description": "Agent Skill discovery and enablement settings",
+		"properties": map[string]any{
+			"paths": map[string]any{
+				"type":        "array",
+				"description": "Additional directories to scan for skill folders containing SKILL.md",
+				"items": map[string]any{
+					"type": "string",
+				},
+				"default": []string{},
+			},
+			"disabled": map[string]any{
+				"type":        "array",
+				"description": "Skill IDs or names to suppress from discovery",
+				"items": map[string]any{
+					"type": "string",
+				},
+				"default": []string{},
+			},
+		},
+	}
+
 	schema["properties"].(map[string]any)["tui"] = map[string]any{
 		"type":        "object",
 		"description": "Terminal User Interface configuration",
@@ -118,6 +141,43 @@ func generateSchema() map[string]any {
 					"tokyonight",
 					"tron",
 				},
+			},
+		},
+	}
+
+	schema["properties"].(map[string]any)["automation"] = map[string]any{
+		"type":        "object",
+		"description": "Agent automation defaults",
+		"properties": map[string]any{
+			"workMode": map[string]any{
+				"type":        "string",
+				"description": "Execution mode for the coder agent",
+				"default":     string(config.WorkModeInteractive),
+				"enum": []string{
+					string(config.WorkModeInteractive),
+					string(config.WorkModeAuto),
+					string(config.WorkModeUltrawork),
+				},
+			},
+		},
+	}
+
+	schema["properties"].(map[string]any)["permissions"] = map[string]any{
+		"type":        "object",
+		"description": "Permission and auto-approval settings",
+		"properties": map[string]any{
+			"autoApprove": map[string]any{
+				"type":        "boolean",
+				"description": "Automatically approve tool actions allowed by the runtime policy",
+				"default":     false,
+			},
+			"allowCommandPrefixes": map[string]any{
+				"type":        "array",
+				"description": "Shell command prefixes that can be auto-approved",
+				"items": map[string]any{
+					"type": "string",
+				},
+				"default": []string{},
 			},
 		},
 	}

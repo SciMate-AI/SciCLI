@@ -9,6 +9,8 @@ import (
 	"github.com/SciMate-AI/scicli/internal/message"
 	"github.com/SciMate-AI/scicli/internal/permission"
 	"github.com/SciMate-AI/scicli/internal/session"
+	"github.com/SciMate-AI/scicli/internal/skills"
+	"github.com/SciMate-AI/scicli/internal/taskrun"
 )
 
 func CoderAgentTools(
@@ -17,11 +19,16 @@ func CoderAgentTools(
 	messages message.Service,
 	history history.Service,
 	lspClients map[string]*lsp.Client,
+	skillsSvc skills.Service,
+	taskRuns taskrun.Service,
 ) []tools.BaseTool {
 	ctx := context.Background()
 	otherTools := GetMcpTools(ctx, permissions)
 	if len(lspClients) > 0 {
 		otherTools = append(otherTools, tools.NewDiagnosticsTool(lspClients))
+	}
+	if skillsSvc != nil {
+		otherTools = append(otherTools, NewActivateSkillTool(skillsSvc))
 	}
 	return append(
 		[]tools.BaseTool{
@@ -35,17 +42,21 @@ func CoderAgentTools(
 			tools.NewViewTool(lspClients),
 			tools.NewPatchTool(lspClients, permissions, history),
 			tools.NewWriteTool(lspClients, permissions, history),
-			NewAgentTool(sessions, messages, lspClients),
+			NewAgentTool(permissions, sessions, messages, lspClients, skillsSvc, taskRuns),
 		}, otherTools...,
 	)
 }
 
-func TaskAgentTools(lspClients map[string]*lsp.Client) []tools.BaseTool {
-	return []tools.BaseTool{
+func TaskAgentTools(lspClients map[string]*lsp.Client, skillsSvc skills.Service) []tools.BaseTool {
+	toolsList := []tools.BaseTool{
 		tools.NewGlobTool(),
 		tools.NewGrepTool(),
 		tools.NewLsTool(),
 		tools.NewSourcegraphTool(),
 		tools.NewViewTool(lspClients),
 	}
+	if skillsSvc != nil {
+		toolsList = append(toolsList, NewActivateSkillTool(skillsSvc))
+	}
+	return toolsList
 }

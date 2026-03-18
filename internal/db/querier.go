@@ -6,6 +6,7 @@ package db
 
 import (
 	"context"
+	"database/sql"
 )
 
 type Querier interface {
@@ -26,6 +27,7 @@ type Querier interface {
 	ListLatestSessionFiles(ctx context.Context, sessionID string) ([]File, error)
 	ListMessagesBySession(ctx context.Context, sessionID string) ([]Message, error)
 	ListNewFiles(ctx context.Context) ([]File, error)
+	ListChildSessions(ctx context.Context, parentSessionID sql.NullString) ([]Session, error)
 	ListSessions(ctx context.Context) ([]Session, error)
 	UpdateFile(ctx context.Context, arg UpdateFileParams) (File, error)
 	UpdateMessage(ctx context.Context, arg UpdateMessageParams) error

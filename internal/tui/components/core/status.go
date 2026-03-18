@@ -5,30 +5,54 @@ import (
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/SciMate-AI/scicli/internal/config"
 	"github.com/SciMate-AI/scicli/internal/llm/models"
 	"github.com/SciMate-AI/scicli/internal/lsp"
 	"github.com/SciMate-AI/scicli/internal/lsp/protocol"
+	"github.com/SciMate-AI/scicli/internal/permission"
 	"github.com/SciMate-AI/scicli/internal/pubsub"
 	"github.com/SciMate-AI/scicli/internal/session"
+	"github.com/SciMate-AI/scicli/internal/skills"
+	"github.com/SciMate-AI/scicli/internal/taskrun"
 	"github.com/SciMate-AI/scicli/internal/tui/components/chat"
 	"github.com/SciMate-AI/scicli/internal/tui/styles"
 	"github.com/SciMate-AI/scicli/internal/tui/theme"
 	"github.com/SciMate-AI/scicli/internal/tui/util"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	zone "github.com/lrstanley/bubblezone"
 )
 
 type StatusCmp interface {
 	tea.Model
 }
 
+type StatusCycleTaskMsg struct {
+	Delta int
+}
+
+type StatusOpenTaskMsg struct {
+	SessionID string
+}
+
+type StatusFocusInspectorMsg struct{}
+
+const (
+	statusTaskZoneID      = "status-task-chip"
+	statusInspectorZoneID = "status-inspector-chip"
+)
+
 type statusCmp struct {
-	info       util.InfoMsg
-	width      int
-	messageTTL time.Duration
-	lspClients map[string]*lsp.Client
-	session    session.Session
+	info             util.InfoMsg
+	width            int
+	messageTTL       time.Duration
+	lspClients       map[string]*lsp.Client
+	session          session.Session
+	skillsSvc        skills.Service
+	permission       permission.Service
+	taskRuns         taskrun.Service
+	inspectorFocused bool
+	taskCursor       int
 }
 
 // clearMessageCmd is a command that clears status messages after a timeout
@@ -49,13 +73,35 @@ func (m statusCmp) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case chat.SessionSelectedMsg:
 		m.session = msg
+		m.taskCursor = 0
 	case chat.SessionClearedMsg:
 		m.session = session.Session{}
+		m.taskCursor = 0
+	case chat.InspectorFocusMsg:
+		m.inspectorFocused = msg.Focused
+	case StatusCycleTaskMsg:
+		m.shiftTaskCursor(msg.Delta)
+		return m, nil
 	case pubsub.Event[session.Session]:
 		if msg.Type == pubsub.UpdatedEvent {
 			if m.session.ID == msg.Payload.ID {
 				m.session = msg.Payload
 			}
+		}
+	case pubsub.Event[taskrun.Run]:
+		return m, nil
+	case tea.MouseMsg:
+		if !zone.Get(statusTaskZoneID).InBounds(msg) && !zone.Get(statusInspectorZoneID).InBounds(msg) {
+			return m, nil
+		}
+		if msg.Action != tea.MouseActionPress {
+			return m, nil
+		}
+		if zone.Get(statusInspectorZoneID).InBounds(msg) {
+			return m, util.CmdHandler(StatusFocusInspectorMsg{})
+		}
+		if run, ok := m.selectedTaskRun(); ok {
+			return m, util.CmdHandler(StatusOpenTaskMsg{SessionID: run.SessionID})
 		}
 	case util.InfoMsg:
 		m.info = msg
@@ -123,6 +169,17 @@ func (m statusCmp) View() string {
 
 	// Initialize the help widget
 	status := getHelpWidget()
+	modeWidget := m.workMode()
+	skillWidget := ""
+	if m.session.ID != "" && m.skillsSvc != nil {
+		skillWidget = m.skillSummary()
+	}
+	inspectorWidget := m.inspectorSummary()
+	taskWidget := m.taskSummary()
+	approvalWidget := ""
+	if m.permission != nil && m.permission.PendingCount() > 0 {
+		approvalWidget = m.pendingApprovals()
+	}
 
 	tokenInfoWidth := 0
 	if m.session.ID != "" {
@@ -143,7 +200,7 @@ func (m statusCmp) View() string {
 		Background(t.BackgroundDarker()).
 		Render(m.projectDiagnostics())
 
-	availableWidht := max(0, m.width-lipgloss.Width(helpWidget)-lipgloss.Width(m.model())-lipgloss.Width(diagnostics)-tokenInfoWidth)
+	availableWidht := max(0, m.width-lipgloss.Width(helpWidget)-lipgloss.Width(m.model())-lipgloss.Width(modeWidget)-lipgloss.Width(skillWidget)-lipgloss.Width(inspectorWidget)-lipgloss.Width(taskWidget)-lipgloss.Width(approvalWidget)-lipgloss.Width(diagnostics)-tokenInfoWidth)
 
 	if m.info.Msg != "" {
 		infoStyle := styles.Padded().
@@ -171,10 +228,15 @@ func (m statusCmp) View() string {
 			Foreground(t.Text()).
 			Background(t.BackgroundSecondary()).
 			Width(availableWidht).
-			Render("")
+			Render(truncateString("cwd: "+config.WorkingDirectory(), availableWidht-2))
 	}
 
 	status += diagnostics
+	status += taskWidget
+	status += inspectorWidget
+	status += skillWidget
+	status += approvalWidget
+	status += modeWidget
 	status += m.model()
 	return status
 }
@@ -283,11 +345,170 @@ func (m statusCmp) model() string {
 		Render(model.Name)
 }
 
-func NewStatusCmp(lspClients map[string]*lsp.Client) StatusCmp {
+func (m statusCmp) workMode() string {
+	t := theme.CurrentTheme()
+	return styles.Padded().
+		Background(t.Primary()).
+		Foreground(t.Background()).
+		Render("Mode: " + string(config.Get().Automation.WorkMode))
+}
+
+func (m statusCmp) skillSummary() string {
+	t := theme.CurrentTheme()
+	return styles.Padded().
+		Background(t.BackgroundDarker()).
+		Foreground(t.Text()).
+		Render(fmt.Sprintf("Skills: %d", len(m.skillsSvc.Active(m.session.ID))))
+}
+
+func (m statusCmp) inspectorSummary() string {
+	t := theme.CurrentTheme()
+	label := "Inspector: Ready"
+	bg := t.BackgroundDarker()
+	fg := t.Text()
+	if m.inspectorFocused {
+		label = "Inspector: Focused"
+		bg = t.Primary()
+		fg = t.Background()
+	}
+	return zone.Mark(statusInspectorZoneID, styles.Padded().
+		Background(bg).
+		Foreground(fg).
+		Render(label))
+}
+
+func (m statusCmp) taskSummary() string {
+	if m.taskRuns == nil {
+		return ""
+	}
+	contextID := m.taskContextSessionID()
+	if contextID == "" {
+		return ""
+	}
+	runs := m.taskRuns.Snapshot(contextID)
+	if len(runs) == 0 {
+		return ""
+	}
+
+	running := 0
+	for _, run := range runs {
+		if run.Status == taskrun.StatusRunning {
+			running++
+		}
+	}
+
+	selected := runs[m.clampedTaskCursor(len(runs))]
+	title := fallbackTaskTitle(selected.Title)
+	label := fmt.Sprintf("Task %d/%d", m.clampedTaskCursor(len(runs))+1, len(runs))
+	if running > 0 {
+		label += fmt.Sprintf(" Run:%d", running)
+	}
+	label += " " + strings.ToUpper(string(selected.Status))
+	label += " " + truncateString(title, 18)
+
+	t := theme.CurrentTheme()
+	bg := t.BackgroundDarker()
+	fg := t.Text()
+	if selected.Status == taskrun.StatusRunning || running > 0 {
+		bg = t.Secondary()
+		fg = t.Background()
+	}
+	return zone.Mark(statusTaskZoneID, styles.Padded().
+		Background(bg).
+		Foreground(fg).
+		Render(label))
+}
+
+func (m statusCmp) taskContextSessionID() string {
+	if m.session.ID == "" {
+		return ""
+	}
+	if m.session.ParentSessionID != "" {
+		return m.session.ParentSessionID
+	}
+	return m.session.ID
+}
+
+func fallbackTaskTitle(title string) string {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return "latest"
+	}
+	return title
+}
+
+func (m *statusCmp) shiftTaskCursor(delta int) {
+	runs := m.currentTaskRuns()
+	if len(runs) == 0 || delta == 0 {
+		return
+	}
+	m.taskCursor += delta
+	if m.taskCursor < 0 {
+		m.taskCursor = len(runs) - 1
+	}
+	if m.taskCursor >= len(runs) {
+		m.taskCursor = 0
+	}
+}
+
+func (m statusCmp) clampedTaskCursor(length int) int {
+	if length <= 0 {
+		return 0
+	}
+	if m.taskCursor < 0 {
+		return 0
+	}
+	if m.taskCursor >= length {
+		return length - 1
+	}
+	return m.taskCursor
+}
+
+func (m statusCmp) currentTaskRuns() []taskrun.Run {
+	if m.taskRuns == nil {
+		return nil
+	}
+	contextID := m.taskContextSessionID()
+	if contextID == "" {
+		return nil
+	}
+	return m.taskRuns.Snapshot(contextID)
+}
+
+func (m statusCmp) selectedTaskRun() (taskrun.Run, bool) {
+	runs := m.currentTaskRuns()
+	if len(runs) == 0 {
+		return taskrun.Run{}, false
+	}
+	return runs[m.clampedTaskCursor(len(runs))], true
+}
+
+func (m statusCmp) pendingApprovals() string {
+	t := theme.CurrentTheme()
+	return styles.Padded().
+		Background(t.Warning()).
+		Foreground(t.Background()).
+		Render(fmt.Sprintf("Approvals: %d", m.permission.PendingCount()))
+}
+
+func truncateString(value string, width int) string {
+	if width <= 0 || len(value) <= width {
+		return value
+	}
+	if width <= 3 {
+		return value[:width]
+	}
+	return value[:width-3] + "..."
+}
+
+func NewStatusCmp(lspClients map[string]*lsp.Client, skillsSvc skills.Service, permissionSvc permission.Service, taskRuns taskrun.Service) StatusCmp {
 	helpWidget = getHelpWidget()
 
 	return &statusCmp{
 		messageTTL: 10 * time.Second,
 		lspClients: lspClients,
+		skillsSvc:  skillsSvc,
+		permission: permissionSvc,
+		taskRuns:   taskRuns,
 	}
 }

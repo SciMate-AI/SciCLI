@@ -3,12 +3,12 @@ package permission
 import (
 	"errors"
 	"path/filepath"
-	"slices"
+	"strings"
 	"sync"
 
-	"github.com/google/uuid"
 	"github.com/SciMate-AI/scicli/internal/config"
 	"github.com/SciMate-AI/scicli/internal/pubsub"
+	"github.com/google/uuid"
 )
 
 var ErrorPermissionDenied = errors.New("permission denied")
@@ -20,6 +20,7 @@ type CreatePermissionRequest struct {
 	Action      string `json:"action"`
 	Params      any    `json:"params"`
 	Path        string `json:"path"`
+	Command     string `json:"command,omitempty"`
 }
 
 type PermissionRequest struct {
@@ -39,6 +40,8 @@ type Service interface {
 	Deny(permission PermissionRequest)
 	Request(opts CreatePermissionRequest) bool
 	AutoApproveSession(sessionID string)
+	IsAutoApproved(sessionID string) bool
+	PendingCount() int
 }
 
 type permissionService struct {
@@ -46,7 +49,8 @@ type permissionService struct {
 
 	sessionPermissions  []PermissionRequest
 	pendingRequests     sync.Map
-	autoApproveSessions []string
+	autoApproveMu       sync.RWMutex
+	autoApproveSessions map[string]struct{}
 }
 
 func (s *permissionService) GrantPersistant(permission PermissionRequest) {
@@ -72,8 +76,17 @@ func (s *permissionService) Deny(permission PermissionRequest) {
 }
 
 func (s *permissionService) Request(opts CreatePermissionRequest) bool {
-	if slices.Contains(s.autoApproveSessions, opts.SessionID) {
+	if s.IsAutoApproved(opts.SessionID) {
 		return true
+	}
+	cfg := config.Get()
+	if cfg != nil {
+		if cfg.Permissions.AutoApprove {
+			return true
+		}
+		if opts.ToolName == "bash" && opts.Action == "execute" && commandAllowedByPrefix(opts.Command, cfg.Permissions.AllowCommandPrefixes) {
+			return true
+		}
 	}
 	dir := filepath.Dir(opts.Path)
 	if dir == "." {
@@ -108,12 +121,87 @@ func (s *permissionService) Request(opts CreatePermissionRequest) bool {
 }
 
 func (s *permissionService) AutoApproveSession(sessionID string) {
-	s.autoApproveSessions = append(s.autoApproveSessions, sessionID)
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return
+	}
+	s.autoApproveMu.Lock()
+	defer s.autoApproveMu.Unlock()
+	s.autoApproveSessions[sessionID] = struct{}{}
+}
+
+func (s *permissionService) IsAutoApproved(sessionID string) bool {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return false
+	}
+	s.autoApproveMu.RLock()
+	defer s.autoApproveMu.RUnlock()
+	_, ok := s.autoApproveSessions[sessionID]
+	return ok
+}
+
+func (s *permissionService) PendingCount() int {
+	count := 0
+	s.pendingRequests.Range(func(_, _ any) bool {
+		count++
+		return true
+	})
+	return count
+}
+
+func commandAllowedByPrefix(command string, prefixes []string) bool {
+	command = strings.TrimSpace(command)
+	if command == "" || len(prefixes) == 0 {
+		return false
+	}
+
+	segments := splitCommandSegments(command)
+	if len(segments) == 0 {
+		return false
+	}
+
+	for _, segment := range segments {
+		matched := false
+		lowerSegment := strings.ToLower(segment)
+		for _, prefix := range prefixes {
+			prefix = strings.ToLower(strings.TrimSpace(prefix))
+			if prefix == "" {
+				continue
+			}
+			if strings.HasPrefix(lowerSegment, prefix) {
+				if len(lowerSegment) == len(prefix) || lowerSegment[len(prefix)] == ' ' {
+					matched = true
+					break
+				}
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+
+	return true
+}
+
+func splitCommandSegments(command string) []string {
+	replacer := strings.NewReplacer("&&", "\n", "||", "\n", ";", "\n", "|", "\n")
+	parts := strings.Split(replacer.Replace(command), "\n")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		out = append(out, part)
+	}
+	return out
 }
 
 func NewPermissionService() Service {
 	return &permissionService{
-		Broker:             pubsub.NewBroker[PermissionRequest](),
-		sessionPermissions: make([]PermissionRequest, 0),
+		Broker:              pubsub.NewBroker[PermissionRequest](),
+		sessionPermissions:  make([]PermissionRequest, 0),
+		autoApproveSessions: make(map[string]struct{}),
 	}
 }

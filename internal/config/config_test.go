@@ -111,6 +111,55 @@ func TestSaveOnboardingSelectionPersistsOpenAICompatibleProvider(t *testing.T) {
 	assert.Equal(t, models.OpenAICompatibleCustom, cfg.Agents[AgentCoder].Model)
 }
 
+func TestSetSkillDisabledPersistsConfig(t *testing.T) {
+	resetConfigTestState()
+
+	tmpDir := t.TempDir()
+	configFile := filepath.Join(tmpDir, ".scicli.json")
+	require.NoError(t, os.WriteFile(configFile, []byte("{}"), 0o644))
+
+	viper.SetConfigFile(configFile)
+	require.NoError(t, viper.ReadInConfig())
+
+	cfg = &Config{}
+	require.NoError(t, SetSkillDisabled("chem/analyze", true))
+	assert.Equal(t, []string{"chem/analyze"}, cfg.Skills.Disabled)
+
+	require.NoError(t, SetSkillDisabled("chem/analyze", false))
+	assert.Empty(t, cfg.Skills.Disabled)
+}
+
+func TestApplyRuntimeOverridesUpdatesAutomationAndPermissions(t *testing.T) {
+	resetConfigTestState()
+	cfg = &Config{}
+
+	err := ApplyRuntimeOverrides("ultrawork", true, []string{"git status", "go test"})
+	require.NoError(t, err)
+
+	assert.Equal(t, WorkModeUltrawork, cfg.Automation.WorkMode)
+	assert.True(t, cfg.Permissions.AutoApprove)
+	assert.Equal(t, []string{"git status", "go test"}, cfg.Permissions.AllowCommandPrefixes)
+}
+
+func TestSetWorkModeRuntimeOnly(t *testing.T) {
+	resetConfigTestState()
+	cfg = &Config{}
+
+	require.NoError(t, SetWorkMode(WorkModeAuto, false))
+	assert.Equal(t, WorkModeAuto, cfg.Automation.WorkMode)
+}
+
+func TestSetDefaultsIncludesArxivMCPServer(t *testing.T) {
+	resetConfigTestState()
+	t.Setenv("SCICLI_MCP_ARXIV_COMMAND", "")
+	t.Setenv("SCICLI_MCP_ARXIV_PACKAGE", "")
+
+	setDefaults(false)
+
+	assert.Equal(t, DefaultArxivMcpCommand, viper.GetString("mcpServers.arxiv.command"))
+	assert.Equal(t, []string{DefaultArxivMcpPackage}, viper.GetStringSlice("mcpServers.arxiv.args"))
+}
+
 func resetConfigTestState() {
 	cfg = nil
 	viper.Reset()
