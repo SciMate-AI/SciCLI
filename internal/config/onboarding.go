@@ -158,21 +158,8 @@ func SaveOnboardingSelection(selection OnboardingSelection) error {
 		return fmt.Errorf("config not loaded")
 	}
 
-	model, ok := models.SupportedModels[selection.ModelID]
-	if !ok {
-		return fmt.Errorf("model %s not supported", selection.ModelID)
-	}
-	if model.Provider != selection.Provider {
-		return fmt.Errorf("model %s does not belong to provider %s", selection.ModelID, selection.Provider)
-	}
-
-	if selection.Provider == models.ProviderOpenAICompatible {
-		if strings.TrimSpace(selection.BaseURL) == "" {
-			return fmt.Errorf("base url is required for %s", selection.Provider)
-		}
-		if strings.TrimSpace(selection.CustomModel) == "" {
-			return fmt.Errorf("model is required for %s", selection.Provider)
-		}
+	if _, err := validateOnboardingSelection(selection); err != nil {
+		return err
 	}
 
 	if cfg.Providers == nil {
@@ -182,17 +169,7 @@ func SaveOnboardingSelection(selection OnboardingSelection) error {
 		cfg.Agents = make(map[AgentName]Agent)
 	}
 
-	storedAPIKey := ""
-	if selection.PersistAPIKey {
-		storedAPIKey = strings.TrimSpace(selection.APIKey)
-	}
-
-	providerCfg := Provider{
-		APIKey:   storedAPIKey,
-		BaseURL:  strings.TrimSpace(selection.BaseURL),
-		Model:    strings.TrimSpace(selection.CustomModel),
-		Disabled: false,
-	}
+	providerCfg := providerConfigFromSelection(selection)
 	cfg.Providers[selection.Provider] = providerCfg
 
 	agents, err := buildOnboardingAgents(selection.Provider, selection.ModelID)
@@ -221,6 +198,78 @@ func SaveOnboardingSelection(selection OnboardingSelection) error {
 			fileCfg.Agents[name] = agent
 		}
 	})
+}
+
+func SaveProviderSelection(selection OnboardingSelection) error {
+	if cfg == nil {
+		return fmt.Errorf("config not loaded")
+	}
+
+	if _, err := validateOnboardingSelection(selection); err != nil {
+		return err
+	}
+
+	if cfg.Providers == nil {
+		cfg.Providers = make(map[models.ModelProvider]Provider)
+	}
+	if cfg.Agents == nil {
+		cfg.Agents = make(map[AgentName]Agent)
+	}
+
+	providerCfg := providerConfigFromSelection(selection)
+	cfg.Providers[selection.Provider] = providerCfg
+	cfg.Agents[AgentCoder] = newDefaultAgentConfig(AgentCoder, selection.ModelID)
+
+	if !providerConfigReady(selection.Provider, providerCfg) {
+		return fmt.Errorf("provider %s configuration is incomplete", selection.Provider)
+	}
+
+	return updateCfgFile(func(fileCfg *Config) {
+		if fileCfg.Providers == nil {
+			fileCfg.Providers = make(map[models.ModelProvider]Provider)
+		}
+		if fileCfg.Agents == nil {
+			fileCfg.Agents = make(map[AgentName]Agent)
+		}
+
+		fileCfg.Providers[selection.Provider] = providerCfg
+		fileCfg.Agents[AgentCoder] = newDefaultAgentConfig(AgentCoder, selection.ModelID)
+	})
+}
+
+func validateOnboardingSelection(selection OnboardingSelection) (models.Model, error) {
+	model, ok := models.SupportedModels[selection.ModelID]
+	if !ok {
+		return models.Model{}, fmt.Errorf("model %s not supported", selection.ModelID)
+	}
+	if model.Provider != selection.Provider {
+		return models.Model{}, fmt.Errorf("model %s does not belong to provider %s", selection.ModelID, selection.Provider)
+	}
+
+	if selection.Provider == models.ProviderOpenAICompatible {
+		if strings.TrimSpace(selection.BaseURL) == "" {
+			return models.Model{}, fmt.Errorf("base url is required for %s", selection.Provider)
+		}
+		if strings.TrimSpace(selection.CustomModel) == "" {
+			return models.Model{}, fmt.Errorf("model is required for %s", selection.Provider)
+		}
+	}
+
+	return model, nil
+}
+
+func providerConfigFromSelection(selection OnboardingSelection) Provider {
+	storedAPIKey := ""
+	if selection.PersistAPIKey {
+		storedAPIKey = strings.TrimSpace(selection.APIKey)
+	}
+
+	return Provider{
+		APIKey:   storedAPIKey,
+		BaseURL:  strings.TrimSpace(selection.BaseURL),
+		Model:    strings.TrimSpace(selection.CustomModel),
+		Disabled: false,
+	}
 }
 
 func buildOnboardingAgents(provider models.ModelProvider, coderModel models.ModelID) (map[AgentName]Agent, error) {

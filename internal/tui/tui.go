@@ -150,6 +150,9 @@ type appModel struct {
 	showModelDialog bool
 	modelDialog     dialog.ModelDialog
 
+	showProviderSetupDialog bool
+	providerSetupDialog     dialog.ProviderSetupDialog
+
 	showFilepicker bool
 	filepicker     dialog.FilepickerCmp
 
@@ -187,6 +190,8 @@ func (a appModel) Init() tea.Cmd {
 	cmd = a.authDialog.Init()
 	cmds = append(cmds, cmd)
 	cmd = a.modelDialog.Init()
+	cmds = append(cmds, cmd)
+	cmd = a.providerSetupDialog.Init()
 	cmds = append(cmds, cmd)
 	cmd = a.filepicker.Init()
 	cmds = append(cmds, cmd)
@@ -232,6 +237,10 @@ func (a appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		authDialog, authCmd := a.authDialog.Update(msg)
 		a.authDialog = authDialog.(dialog.AuthDialog)
 		cmds = append(cmds, authCmd)
+
+		providerSetup, providerSetupCmd := a.providerSetupDialog.Update(msg)
+		a.providerSetupDialog = providerSetup.(dialog.ProviderSetupDialog)
+		cmds = append(cmds, providerSetupCmd)
 
 		filepicker, filepickerCmd := a.filepicker.Update(msg)
 		a.filepicker = filepicker.(dialog.FilepickerCmp)
@@ -388,11 +397,41 @@ func (a appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			!a.showCommandDialog &&
 			!a.showTaskDialog &&
 			!a.showAuthDialog &&
+			!a.showProviderSetupDialog &&
 			!a.showThemeDialog &&
 			!a.showFilepicker {
 			a.showModelDialog = true
 		}
 		return a, nil
+
+	case dialog.ShowProviderSetupDialogMsg:
+		if a.currentPage != page.ChatPage ||
+			a.showQuit ||
+			a.showPermissions ||
+			a.showSessionDialog ||
+			a.showCommandDialog ||
+			a.showTaskDialog ||
+			a.showAuthDialog ||
+			a.showThemeDialog ||
+			a.showFilepicker {
+			return a, nil
+		}
+		a.providerSetupDialog.Open(msg.Provider, msg.ModelID)
+		a.showProviderSetupDialog = true
+		a.showModelDialog = false
+		return a, nil
+
+	case dialog.CloseProviderSetupDialogMsg:
+		a.showProviderSetupDialog = false
+		return a, nil
+
+	case dialog.ProviderSetupSavedMsg:
+		a.showProviderSetupDialog = false
+		model, err := a.app.CoderAgent.Update(config.AgentCoder, msg.Selection.ModelID)
+		if err != nil {
+			return a, util.ReportWarn(fmt.Sprintf("Saved %s to config, but runtime reload failed: %v", msg.ProviderLabel, err))
+		}
+		return a, util.ReportInfo(fmt.Sprintf("Configured %s with %s", msg.ProviderLabel, model.Name))
 
 	case dialog.StartCompactSessionMsg:
 		// Start compacting the current session
@@ -650,6 +689,9 @@ func (a appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if a.showAuthDialog {
 				a.showAuthDialog = false
 			}
+			if a.showProviderSetupDialog {
+				a.showProviderSetupDialog = false
+			}
 			if a.showFilepicker {
 				a.showFilepicker = false
 				a.filepicker.ToggleFilepicker(a.showFilepicker)
@@ -815,6 +857,15 @@ func (a appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	if a.showProviderSetupDialog {
+		d, providerSetupCmd := a.providerSetupDialog.Update(msg)
+		a.providerSetupDialog = d.(dialog.ProviderSetupDialog)
+		cmds = append(cmds, providerSetupCmd)
+		if _, ok := msg.(tea.KeyMsg); ok {
+			return a, tea.Batch(cmds...)
+		}
+	}
+
 	if a.showModelDialog {
 		d, modelCmd := a.modelDialog.Update(msg)
 		a.modelDialog = d.(dialog.ModelDialog)
@@ -881,6 +932,7 @@ func (a *appModel) openSessionDialog() tea.Cmd {
 		a.showCommandDialog ||
 		a.showTaskDialog ||
 		a.showAuthDialog ||
+		a.showProviderSetupDialog ||
 		a.showThemeDialog ||
 		a.showFilepicker ||
 		a.showModelDialog {
@@ -906,6 +958,7 @@ func (a *appModel) openTaskDialog() tea.Cmd {
 		a.showCommandDialog ||
 		a.showSessionDialog ||
 		a.showAuthDialog ||
+		a.showProviderSetupDialog ||
 		a.showThemeDialog ||
 		a.showFilepicker ||
 		a.showModelDialog {
@@ -1140,6 +1193,9 @@ func (a appModel) View() string {
 		if a.showAuthDialog {
 			bindings = append(bindings, a.authDialog.BindingKeys()...)
 		}
+		if a.showProviderSetupDialog {
+			bindings = append(bindings, a.providerSetupDialog.BindingKeys()...)
+		}
 		if a.showModelDialog {
 			bindings = append(bindings, a.modelDialog.BindingKeys()...)
 		}
@@ -1206,6 +1262,21 @@ func (a appModel) View() string {
 
 	if a.showAuthDialog {
 		overlay := a.authDialog.View()
+		row := lipgloss.Height(appView) / 2
+		row -= lipgloss.Height(overlay) / 2
+		col := lipgloss.Width(appView) / 2
+		col -= lipgloss.Width(overlay) / 2
+		appView = layout.PlaceOverlay(
+			col,
+			row,
+			overlay,
+			appView,
+			true,
+		)
+	}
+
+	if a.showProviderSetupDialog {
+		overlay := a.providerSetupDialog.View()
 		row := lipgloss.Height(appView) / 2
 		row -= lipgloss.Height(overlay) / 2
 		col := lipgloss.Width(appView) / 2
@@ -1312,6 +1383,7 @@ func New(app *app.App) tea.Model {
 		commandDialog: dialog.NewCommandDialogCmp(),
 		authDialog:    dialog.NewAuthDialogCmp(),
 		modelDialog:   dialog.NewModelDialogCmp(),
+		providerSetupDialog: dialog.NewProviderSetupDialogCmp(),
 		permissions:   dialog.NewPermissionDialogCmp(),
 		themeDialog:   dialog.NewThemeDialogCmp(),
 		skillsDialog:  dialog.NewSkillDialogCmp(),
@@ -1606,9 +1678,18 @@ If there are Cursor rules (in .cursor/rules/ or .cursorrules) or Copilot rules (
 	model.RegisterCommand(dialog.Command{
 		ID:          "switch-provider-model",
 		Title:       "Switch Provider / Model",
-		Description: "Choose a provider and model for the coder agent",
+		Description: "Choose a provider and model for the coder agent, including providers that still need setup",
 		Handler: func(cmd dialog.Command) tea.Cmd {
 			return util.CmdHandler(showModelDialogMsg{})
+		},
+	})
+
+	model.RegisterCommand(dialog.Command{
+		ID:          "configure-provider",
+		Title:       "Configure Provider",
+		Description: "Add or edit API key, base URL, and custom model for any provider",
+		Handler: func(cmd dialog.Command) tea.Cmd {
+			return util.CmdHandler(dialog.ShowProviderSetupDialogMsg{})
 		},
 	})
 	// Load custom commands

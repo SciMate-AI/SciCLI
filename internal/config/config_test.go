@@ -111,6 +111,64 @@ func TestSaveOnboardingSelectionPersistsOpenAICompatibleProvider(t *testing.T) {
 	assert.Equal(t, models.OpenAICompatibleCustom, cfg.Agents[AgentCoder].Model)
 }
 
+func TestSaveProviderSelectionPersistsProviderAndCoderOnly(t *testing.T) {
+	resetConfigTestState()
+
+	tmpDir := t.TempDir()
+	configFile := filepath.Join(tmpDir, ".scicli.json")
+	require.NoError(t, os.WriteFile(configFile, []byte("{}"), 0o644))
+
+	viper.SetConfigFile(configFile)
+	require.NoError(t, viper.ReadInConfig())
+
+	cfg = &Config{
+		Providers: make(map[models.ModelProvider]Provider),
+		Agents: map[AgentName]Agent{
+			AgentCoder:      newDefaultAgentConfig(AgentCoder, models.Claude4Sonnet),
+			AgentSummarizer: newDefaultAgentConfig(AgentSummarizer, models.Claude4Sonnet),
+			AgentTask:       newDefaultAgentConfig(AgentTask, models.Claude4Sonnet),
+			AgentTitle:      newDefaultAgentConfig(AgentTitle, models.Claude4Sonnet),
+		},
+		LSP:        make(map[string]LSPConfig),
+		MCPServers: make(map[string]MCPServer),
+	}
+
+	err := SaveProviderSelection(OnboardingSelection{
+		Provider:      models.ProviderOpenAI,
+		APIKey:        "later-key",
+		PersistAPIKey: true,
+		ModelID:       models.GPT54,
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, "later-key", cfg.Providers[models.ProviderOpenAI].APIKey)
+	assert.Equal(t, models.GPT54, cfg.Agents[AgentCoder].Model)
+	assert.Equal(t, models.Claude4Sonnet, cfg.Agents[AgentSummarizer].Model)
+	assert.Equal(t, models.Claude4Sonnet, cfg.Agents[AgentTask].Model)
+	assert.Equal(t, models.Claude4Sonnet, cfg.Agents[AgentTitle].Model)
+
+	savedConfig, err := os.ReadFile(configFile)
+	require.NoError(t, err)
+	assert.Contains(t, string(savedConfig), `"openai"`)
+	assert.Contains(t, string(savedConfig), `"later-key"`)
+	assert.Contains(t, string(savedConfig), `"gpt-5.4"`)
+}
+
+func TestProviderReadyRecognizesConfiguredOpenAICompatible(t *testing.T) {
+	resetConfigTestState()
+	cfg = &Config{
+		Providers: map[models.ModelProvider]Provider{
+			models.ProviderOpenAICompatible: {
+				BaseURL: "https://example.test/v1",
+				Model:   "custom-model",
+			},
+		},
+	}
+
+	assert.True(t, ProviderReady(models.ProviderOpenAICompatible))
+	assert.False(t, ProviderReady(models.ProviderOpenAI))
+}
+
 func TestSetSkillDisabledPersistsConfig(t *testing.T) {
 	resetConfigTestState()
 

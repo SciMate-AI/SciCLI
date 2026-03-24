@@ -1059,6 +1059,33 @@ func NeedsOnboarding() bool {
 	return !providerConfigReady(model.Provider, providerCfg)
 }
 
+func ProviderReady(provider models.ModelProvider) bool {
+	if cfg == nil {
+		return false
+	}
+
+	providerCfg, ok := cfg.Providers[provider]
+	if ok {
+		if providerCfg.Disabled {
+			return false
+		}
+		return providerConfigReady(provider, providerCfg)
+	}
+
+	switch provider {
+	case models.ProviderOpenAICompatible:
+		return false
+	case models.ProviderBedrock:
+		return hasAWSCredentials()
+	case models.ProviderVertexAI:
+		return hasVertexAICredentials()
+	case models.ProviderLocal:
+		return strings.TrimSpace(os.Getenv("LOCAL_ENDPOINT")) != ""
+	default:
+		return strings.TrimSpace(getProviderAPIKey(provider)) != ""
+	}
+}
+
 type OnboardingProvider struct {
 	Provider             models.ModelProvider
 	Label                string

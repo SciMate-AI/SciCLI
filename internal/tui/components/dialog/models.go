@@ -125,6 +125,15 @@ func (m *modelDialogCmp) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.switchProvider(1)
 			}
 		case key.Matches(msg, modelKeys.Enter):
+			if len(m.models) == 0 {
+				return m, nil
+			}
+			if !config.ProviderReady(m.provider) {
+				return m, util.CmdHandler(ShowProviderSetupDialogMsg{
+					Provider: m.provider,
+					ModelID:  m.models[m.selectedIdx].ID,
+				})
+			}
 			util.ReportInfo(fmt.Sprintf("selected model: %s", m.models[m.selectedIdx].Name))
 			return m, util.CmdHandler(ModelSelectedMsg{Model: m.models[m.selectedIdx]})
 		case key.Matches(msg, modelKeys.Escape):
@@ -183,6 +192,9 @@ func (m *modelDialogCmp) View() string {
 	baseStyle := styles.BaseStyle()
 
 	providerName := strings.ToUpper(string(m.provider)[:1]) + string(m.provider[1:])
+	if !config.ProviderReady(m.provider) {
+		providerName += " [setup required]"
+	}
 	title := baseStyle.
 		Foreground(t.Primary()).
 		Bold(true).
@@ -210,7 +222,7 @@ func (m *modelDialogCmp) View() string {
 	content := lipgloss.JoinVertical(
 		lipgloss.Left,
 		title,
-		baseStyle.Width(maxDialogWidth).Render("Select Provider / Model"),
+		baseStyle.Width(maxDialogWidth).Render(m.headerText()),
 		baseStyle.Width(maxDialogWidth).Render(""),
 		baseStyle.Width(maxDialogWidth).Render(lipgloss.JoinVertical(lipgloss.Left, modelItems...)),
 		footer,
@@ -254,7 +266,7 @@ func (m *modelDialogCmp) BindingKeys() []key.Binding {
 func (m *modelDialogCmp) setupModels() {
 	cfg := config.Get()
 	modelInfo := GetSelectedModel(cfg)
-	m.availableProviders = getEnabledProviders(cfg)
+	m.availableProviders = getSelectableProviders(cfg)
 	m.hScrollPossible = len(m.availableProviders) > 1
 
 	m.provider = modelInfo.Provider
@@ -271,15 +283,24 @@ func GetSelectedModel(cfg *config.Config) models.Model {
 	return models.SupportedModels[selectedModelID]
 }
 
-func getEnabledProviders(cfg *config.Config) []models.ModelProvider {
-	var providers []models.ModelProvider
+func getSelectableProviders(cfg *config.Config) []models.ModelProvider {
+	onboardingProviders := config.OnboardingProviders()
+	providers := make([]models.ModelProvider, 0, len(onboardingProviders))
+	for _, provider := range onboardingProviders {
+		providers = append(providers, provider.Provider)
+	}
+	if len(providers) > 0 {
+		return providers
+	}
+
+	var configured []models.ModelProvider
 	for providerID, provider := range cfg.Providers {
 		if !provider.Disabled {
-			providers = append(providers, providerID)
+			configured = append(configured, providerID)
 		}
 	}
 
-	slices.SortFunc(providers, func(a, b models.ModelProvider) int {
+	slices.SortFunc(configured, func(a, b models.ModelProvider) int {
 		rA := models.ProviderPopularity[a]
 		rB := models.ProviderPopularity[b]
 		if rA == 0 {
@@ -290,7 +311,7 @@ func getEnabledProviders(cfg *config.Config) []models.ModelProvider {
 		}
 		return rA - rB
 	})
-	return providers
+	return configured
 }
 
 func findProviderIndex(providers []models.ModelProvider, provider models.ModelProvider) int {
@@ -343,6 +364,13 @@ func getModelsForProvider(provider models.ModelProvider) []models.Model {
 		return 0
 	})
 	return providerModels
+}
+
+func (m *modelDialogCmp) headerText() string {
+	if config.ProviderReady(m.provider) {
+		return "Select Provider / Model"
+	}
+	return "Press Enter to configure this provider"
 }
 
 func NewModelDialogCmp() ModelDialog {
