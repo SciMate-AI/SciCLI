@@ -21,6 +21,10 @@ type Command struct {
 	Title       string
 	Description string
 	Handler     func(cmd Command) tea.Cmd
+	Boost       int
+	Recommended bool
+	Disabled    bool
+	Reason      string
 }
 
 func (ci Command) Render(selected bool, width int) string {
@@ -32,6 +36,11 @@ func (ci Command) Render(selected bool, width int) string {
 		Foreground(t.Text()).
 		Background(t.Background())
 
+	if ci.Disabled {
+		itemStyle = itemStyle.Foreground(t.TextMuted())
+		descStyle = descStyle.Foreground(t.TextMuted())
+	}
+
 	if selected {
 		itemStyle = itemStyle.
 			Background(t.Primary()).
@@ -42,9 +51,25 @@ func (ci Command) Render(selected bool, width int) string {
 			Foreground(t.Background())
 	}
 
-	title := itemStyle.Padding(0, 1).Render(ci.Title)
-	if ci.Description != "" {
-		description := descStyle.Padding(0, 1).Render(ci.Description)
+	titleText := ci.Title
+	if ci.Recommended {
+		titleText = "Next: " + titleText
+	}
+	if ci.Disabled {
+		titleText = titleText + " [Unavailable]"
+	}
+
+	descriptionText := ci.Description
+	if ci.Disabled && strings.TrimSpace(ci.Reason) != "" {
+		if descriptionText != "" {
+			descriptionText += " "
+		}
+		descriptionText += "Why: " + ci.Reason
+	}
+
+	title := itemStyle.Padding(0, 1).Render(titleText)
+	if descriptionText != "" {
+		description := descStyle.Padding(0, 1).Render(descriptionText)
 		return lipgloss.JoinVertical(lipgloss.Left, title, description)
 	}
 	return title
@@ -325,6 +350,10 @@ func scoreCommandMatch(cmd Command, query string) int {
 		if strings.Contains(description, token) {
 			score += 8
 		}
+	}
+	score += cmd.Boost
+	if cmd.Disabled {
+		score -= 80
 	}
 	return score
 }

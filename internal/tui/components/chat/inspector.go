@@ -14,6 +14,7 @@ import (
 	"github.com/SciMate-AI/scicli/internal/history"
 	"github.com/SciMate-AI/scicli/internal/message"
 	"github.com/SciMate-AI/scicli/internal/pubsub"
+	"github.com/SciMate-AI/scicli/internal/research"
 	"github.com/SciMate-AI/scicli/internal/session"
 	"github.com/SciMate-AI/scicli/internal/skills"
 	"github.com/SciMate-AI/scicli/internal/taskrun"
@@ -25,6 +26,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	zone "github.com/lrstanley/bubblezone"
 )
 
 type InspectorKeyMsg struct {
@@ -43,6 +45,16 @@ type InspectorStopTaskMsg struct {
 	SessionID string
 }
 
+type WorkbenchRunCommandMsg struct {
+	Command string
+}
+
+type WorkbenchOpenArgumentsMsg struct {
+	CommandID string
+	Command   string
+	ArgNames  []string
+}
+
 type inspectorDataLoadedMsg struct {
 	sessionID string
 	data      inspectorData
@@ -58,6 +70,10 @@ type inspectorData struct {
 	parentTitle       string
 	activeSkills      []skills.Skill
 	current           runSnapshot
+	research          research.SessionState
+	researchSessionID string
+	researchInherited bool
+	researchTitle     string
 	tasks             []runSnapshot
 	timelineSessionID string
 	timeline          []timelineSnapshot
@@ -112,6 +128,10 @@ type inspectorCmp struct {
 	parentTitle       string
 	activeSkills      []skills.Skill
 	current           runSnapshot
+	research          research.SessionState
+	researchSessionID string
+	researchInherited bool
+	researchTitle     string
 	tasks             []runSnapshot
 	timelineSessionID string
 	timeline          []timelineSnapshot
@@ -120,6 +140,8 @@ type inspectorCmp struct {
 	focused             bool
 	filterMode          bool
 	filter              textinput.Model
+	artifactFilterMode  bool
+	artifactFilter      textinput.Model
 	selected            int
 	consoleFilter       consoleFilter
 	consoleSearchMode   bool
@@ -134,6 +156,7 @@ type inspectorKeyMap struct {
 	Open          key.Binding
 	Stop          key.Binding
 	Filter        key.Binding
+	Artifact      key.Binding
 	Clear         key.Binding
 	ConsoleSearch key.Binding
 	NextConsole   key.Binding
@@ -152,6 +175,7 @@ var inspectorKeys = inspectorKeyMap{
 	Open:          key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "open task")),
 	Stop:          key.NewBinding(key.WithKeys("ctrl+x"), key.WithHelp("ctrl+x", "stop task")),
 	Filter:        key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter tasks")),
+	Artifact:      key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "filter artifacts")),
 	Clear:         key.NewBinding(key.WithKeys("ctrl+u"), key.WithHelp("ctrl+u", "clear filter")),
 	ConsoleSearch: key.NewBinding(key.WithKeys("."), key.WithHelp(".", "filter console")),
 	NextConsole:   key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "next console filter")),
@@ -177,10 +201,16 @@ func (m *inspectorCmp) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.session = msg
 		m.parentTitle = ""
 		m.current = runSnapshot{}
+		m.research = research.SessionState{}
+		m.researchSessionID = ""
+		m.researchInherited = false
+		m.researchTitle = ""
 		m.tasks = nil
 		m.timelineSessionID = ""
 		m.timeline = nil
 		m.modified = nil
+		m.artifactFilterMode = false
+		m.artifactFilter.SetValue("")
 		m.selected = 0
 		m.consoleScrollOffset = 0
 		return m, m.loadDataCmd()
@@ -189,10 +219,16 @@ func (m *inspectorCmp) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.parentTitle = ""
 		m.activeSkills = nil
 		m.current = runSnapshot{}
+		m.research = research.SessionState{}
+		m.researchSessionID = ""
+		m.researchInherited = false
+		m.researchTitle = ""
 		m.tasks = nil
 		m.timelineSessionID = ""
 		m.timeline = nil
 		m.modified = nil
+		m.artifactFilterMode = false
+		m.artifactFilter.SetValue("")
 		m.selected = 0
 		m.consoleScrollOffset = 0
 		return m, nil
@@ -201,12 +237,16 @@ func (m *inspectorCmp) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.focused {
 			m.filterMode = false
 			m.filter.Blur()
+			m.artifactFilterMode = false
+			m.artifactFilter.Blur()
 			m.consoleSearchMode = false
 			m.consoleSearch.Blur()
 		}
 		return m, nil
 	case InspectorKeyMsg:
 		return m, m.handleInspectorKey(msg.Key)
+	case tea.MouseMsg:
+		return m, m.handleMouse(msg)
 	case inspectorDataLoadedMsg:
 		if msg.sessionID != m.session.ID || msg.err != nil {
 			return m, nil
@@ -214,6 +254,10 @@ func (m *inspectorCmp) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.parentTitle = msg.data.parentTitle
 		m.activeSkills = msg.data.activeSkills
 		m.current = msg.data.current
+		m.research = msg.data.research
+		m.researchSessionID = msg.data.researchSessionID
+		m.researchInherited = msg.data.researchInherited
+		m.researchTitle = msg.data.researchTitle
 		m.tasks = msg.data.tasks
 		if m.timelineSessionID != msg.data.timelineSessionID {
 			m.consoleScrollOffset = 0
@@ -247,6 +291,10 @@ func (m *inspectorCmp) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case pubsub.Event[history.File]:
 		if msg.Payload.SessionID == m.session.ID {
 			return m, m.loadModifiedCmd()
+		}
+	case pubsub.Event[research.SessionState]:
+		if msg.Payload.SessionID == m.researchSessionID {
+			return m, m.loadDataCmd()
 		}
 	case pubsub.Event[taskrun.Run]:
 		if msg.Payload.SessionID == m.session.ID && m.session.ParentSessionID != "" {
@@ -293,10 +341,15 @@ func (m *inspectorCmp) View() string {
 
 	sections := []string{
 		header,
-		baseStyle.Foreground(t.TextMuted()).Width(width).Render("Ctrl+I focuses inspector. Enter opens task. Ctrl+X stops task. PgUp/PgDn scroll the run console."),
+		baseStyle.Foreground(t.TextMuted()).Width(width).Render("Ctrl+I focuses inspector. Enter opens task. Ctrl+X stops task. A filters artifacts. PgUp/PgDn scroll the run console."),
 		sectionTitle(filterLabel, width),
 		baseStyle.Width(width).Render(m.filter.View()),
 		m.renderCurrentSession(width),
+		m.renderResearchSection(width),
+		m.renderExperimentSection(width),
+		m.renderLineageSection(width),
+		m.renderActionSection(width),
+		m.renderArtifactSection(width),
 		m.renderSkillSection(width),
 		m.renderTaskSection(width),
 		m.renderTaskConsole(width),
@@ -313,6 +366,7 @@ func (m *inspectorCmp) SetSize(width, height int) tea.Cmd {
 	m.width = width
 	m.height = height
 	m.filter.Width = max(12, width-2)
+	m.artifactFilter.Width = max(12, width-2)
 	return nil
 }
 
@@ -335,11 +389,17 @@ func NewInspectorCmp(app *app.App) tea.Model {
 	consoleSearch.Prompt = "> "
 	consoleSearch.CharLimit = 120
 	consoleSearch.Cursor.Blink = true
+	artifactFilter := textinput.New()
+	artifactFilter.Placeholder = "Filter artifacts by kind, path, summary, experiment"
+	artifactFilter.Prompt = "> "
+	artifactFilter.CharLimit = 120
+	artifactFilter.Cursor.Blink = true
 	return &inspectorCmp{
-		app:           app,
-		filter:        filter,
-		consoleFilter: consoleFilterAll,
-		consoleSearch: consoleSearch,
+		app:            app,
+		filter:         filter,
+		artifactFilter: artifactFilter,
+		consoleFilter:  consoleFilterAll,
+		consoleSearch:  consoleSearch,
 	}
 }
 
@@ -385,6 +445,22 @@ func (m *inspectorCmp) handleInspectorKey(msg tea.KeyMsg) tea.Cmd {
 		}
 	}
 
+	if m.artifactFilterMode {
+		switch {
+		case key.Matches(msg, inspectorKeys.Exit):
+			m.artifactFilterMode = false
+			m.artifactFilter.Blur()
+			return nil
+		case key.Matches(msg, inspectorKeys.Clear):
+			m.artifactFilter.SetValue("")
+			return nil
+		default:
+			var cmd tea.Cmd
+			m.artifactFilter, cmd = m.artifactFilter.Update(msg)
+			return cmd
+		}
+	}
+
 	previous := m.timelineTargetSessionID()
 	switch {
 	case key.Matches(msg, inspectorKeys.Up):
@@ -397,8 +473,13 @@ func (m *inspectorCmp) handleInspectorKey(msg tea.KeyMsg) tea.Cmd {
 		m.filterMode = true
 		m.filter.Focus()
 		return m.filter.Cursor.BlinkCmd()
+	case key.Matches(msg, inspectorKeys.Artifact):
+		m.artifactFilterMode = true
+		m.artifactFilter.Focus()
+		return m.artifactFilter.Cursor.BlinkCmd()
 	case key.Matches(msg, inspectorKeys.Clear):
 		m.filter.SetValue("")
+		m.artifactFilter.SetValue("")
 		m.clampSelection()
 		return m.timelineSyncCmd(previous)
 	case key.Matches(msg, inspectorKeys.ConsoleSearch):
@@ -439,6 +520,8 @@ func (m *inspectorCmp) handleInspectorKey(msg tea.KeyMsg) tea.Cmd {
 		m.focused = false
 		m.filterMode = false
 		m.filter.Blur()
+		m.artifactFilterMode = false
+		m.artifactFilter.Blur()
 	}
 	m.clampConsoleScroll()
 	return m.timelineSyncCmd(previous)
@@ -462,6 +545,7 @@ func (m *inspectorCmp) loadDataCmd() tea.Cmd {
 		}
 
 		data.current = loadCurrentRunSnapshot(context.Background(), m.app, currentSession)
+		data.researchSessionID, data.researchInherited, data.researchTitle, data.research = loadResearchSnapshot(context.Background(), m.app, currentSession)
 
 		data.tasks = loadTaskSnapshots(context.Background(), m.app, sessionID)
 		data.timelineSessionID = initialTimelineTargetSessionID(currentSession, data.tasks)
@@ -487,6 +571,10 @@ func (m *inspectorCmp) loadCurrentRunCmd() tea.Cmd {
 				parentTitle:       m.parentTitle,
 				activeSkills:      m.app.Skills.Active(sessionID),
 				current:           loadCurrentRunSnapshot(context.Background(), m.app, currentSession),
+				research:          m.research,
+				researchSessionID: m.researchSessionID,
+				researchInherited: m.researchInherited,
+				researchTitle:     m.researchTitle,
 				tasks:             m.tasks,
 				timelineSessionID: m.timelineSessionID,
 				timeline:          m.timeline,
@@ -512,6 +600,10 @@ func (m *inspectorCmp) loadModifiedCmd() tea.Cmd {
 				parentTitle:       m.parentTitle,
 				activeSkills:      m.activeSkills,
 				current:           m.current,
+				research:          m.research,
+				researchSessionID: m.researchSessionID,
+				researchInherited: m.researchInherited,
+				researchTitle:     m.researchTitle,
 				tasks:             m.tasks,
 				timelineSessionID: m.timelineSessionID,
 				timeline:          m.timeline,
@@ -531,6 +623,39 @@ func (m *inspectorCmp) loadTimelineCmd(sessionID string) tea.Cmd {
 			timeline:  loadTimelineSnapshots(context.Background(), m.app.TaskRuns, sessionID, consoleTimelineLimit),
 		}
 	}
+}
+
+func (m *inspectorCmp) handleMouse(msg tea.MouseMsg) tea.Cmd {
+	if msg.Action != tea.MouseActionPress {
+		return nil
+	}
+	for _, action := range researchWorkbenchActions(m.research) {
+		zoneID := inspectorActionZoneID(action.ID)
+		if !zone.Get(zoneID).InBounds(msg) {
+			continue
+		}
+		if !action.Enabled {
+			reason := strings.TrimSpace(action.Reason)
+			if reason == "" {
+				reason = action.Label + " is not available right now"
+			}
+			return util.ReportWarn(reason)
+		}
+		if len(action.ArgNames) > 0 {
+			return util.CmdHandler(WorkbenchOpenArgumentsMsg{
+				CommandID: action.CommandID,
+				Command:   action.Command,
+				ArgNames:  action.ArgNames,
+			})
+		}
+		return util.CmdHandler(WorkbenchRunCommandMsg{Command: action.Command})
+	}
+	for _, plan := range m.research.Experiments {
+		if zone.Get(inspectorExperimentZoneID(plan.ID)).InBounds(msg) || zone.Get(inspectorLineageZoneID(plan.ID)).InBounds(msg) {
+			return util.CmdHandler(WorkbenchRunCommandMsg{Command: "/experiment activate " + plan.ID})
+		}
+	}
+	return nil
 }
 
 func (m *inspectorCmp) timelineTargetSessionID() string {
@@ -581,6 +706,280 @@ func (m *inspectorCmp) renderCurrentSession(width int) string {
 	}
 	if strings.TrimSpace(m.current.Detail) != "" {
 		lines = append(lines, baseStyle.Width(width).Foreground(t.Text()).Render(m.current.Detail))
+	}
+	return baseStyle.Width(width).Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
+}
+
+func (m *inspectorCmp) renderResearchSection(width int) string {
+	baseStyle := styles.BaseStyle()
+	t := theme.CurrentTheme()
+
+	lines := []string{sectionTitle("Research", width)}
+	if !m.research.HasContent() {
+		lines = append(lines, baseStyle.Width(width).Foreground(t.TextMuted()).Render("No research objective yet. Use /research set <objective>."))
+		return baseStyle.Width(width).Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
+	}
+
+	lines = append(lines, baseStyle.Width(width).Render(truncateString(m.research.Objective, max(12, width))))
+
+	meta := []string{fmt.Sprintf("Stage %s", strings.ToUpper(string(m.research.Stage)))}
+	if strings.TrimSpace(m.research.Domain) != "" {
+		meta = append(meta, "Domain "+m.research.Domain)
+	}
+	meta = append(meta, fmt.Sprintf("%d criteria", len(m.research.SuccessCriteria)))
+	meta = append(meta, fmt.Sprintf("%d hypotheses", len(m.research.Hypotheses)))
+	meta = append(meta, fmt.Sprintf("%d experiments", len(m.research.Experiments)))
+	if strings.TrimSpace(m.research.PromotedExperimentID) != "" {
+		meta = append(meta, "Promoted "+shortResearchID(m.research.PromotedExperimentID))
+	}
+	lines = append(lines, baseStyle.Width(width).Foreground(t.TextMuted()).Render(strings.Join(meta, "  ")))
+
+	if m.researchInherited {
+		source := "Inherited from parent chat"
+		if strings.TrimSpace(m.researchTitle) != "" {
+			source += ": " + m.researchTitle
+		}
+		lines = append(lines, baseStyle.Width(width).Foreground(t.TextMuted()).Render(source))
+	}
+	lines = append(lines, baseStyle.Width(width).Foreground(t.TextMuted()).Render("Updated "+formatInspectorTime(m.research.UpdatedAt)))
+
+	maxCriteria := min(len(m.research.SuccessCriteria), 2)
+	for i := 0; i < maxCriteria; i++ {
+		lines = append(lines, baseStyle.Width(width).Render("- "+truncateString(m.research.SuccessCriteria[i], max(12, width-2))))
+	}
+	if len(m.research.SuccessCriteria) > maxCriteria {
+		lines = append(lines, baseStyle.Width(width).Foreground(t.TextMuted()).Render(fmt.Sprintf("+%d more criteria", len(m.research.SuccessCriteria)-maxCriteria)))
+	}
+
+	return baseStyle.Width(width).Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
+}
+
+func (m *inspectorCmp) renderExperimentSection(width int) string {
+	baseStyle := styles.BaseStyle()
+	t := theme.CurrentTheme()
+
+	lines := []string{sectionTitle("Experiments", width)}
+	if len(m.research.Experiments) == 0 {
+		lines = append(lines, baseStyle.Width(width).Foreground(t.TextMuted()).Render("No experiment plans yet. Use /experiment add <title>."))
+		return baseStyle.Width(width).Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
+	}
+
+	maxItems := min(len(m.research.Experiments), 3)
+	for i := 0; i < maxItems; i++ {
+		plan := m.research.Experiments[i]
+		statusLine := fmt.Sprintf("G%d  %s  %s", plan.Generation, strings.ToUpper(string(plan.Status)), shortResearchID(plan.ID))
+		if plan.ID == m.research.ActiveExperimentID {
+			statusLine += "  ACTIVE"
+		}
+		if plan.ID == m.research.PromotedExperimentID {
+			statusLine += "  PROMOTED"
+		}
+		block := []string{
+			baseStyle.Width(width).Render(statusLine),
+			baseStyle.Width(width).Render(truncateString(plan.Title, max(12, width))),
+		}
+		if len(plan.Runs) > 0 {
+			latestRun := plan.Runs[0]
+			block = append(block, baseStyle.Width(width).Foreground(t.TextMuted()).Render(fmt.Sprintf("Runs %d  Latest %s  %s", len(plan.Runs), strings.ToUpper(string(latestRun.Status)), truncateString(latestRun.Title, max(10, width-24)))))
+		} else {
+			block = append(block, baseStyle.Width(width).Foreground(t.TextMuted()).Render("Runs 0"))
+		}
+		if strings.TrimSpace(plan.ParentExperimentID) != "" {
+			root := shortResearchID(plan.LineageRootID)
+			if root == "" {
+				root = shortResearchID(plan.ParentExperimentID)
+			}
+			lineage := "From " + shortResearchID(plan.ParentExperimentID) + "  Root " + root
+			if plan.EvolutionDecision != "" {
+				lineage += "  " + strings.ToUpper(string(plan.EvolutionDecision))
+			}
+			block = append(block, baseStyle.Width(width).Foreground(t.TextMuted()).Render(lineage))
+		}
+		if strings.TrimSpace(plan.Rationale) != "" {
+			block = append(block, baseStyle.Width(width).Foreground(t.TextMuted()).Render(truncateString(plan.Rationale, max(12, width))))
+		}
+		if plan.LatestEval != nil {
+			block = append(block,
+				baseStyle.Width(width).Foreground(t.TextMuted()).Render(fmt.Sprintf("Eval %.2f %s", plan.LatestEval.Score, strings.ToUpper(string(plan.LatestEval.Decision)))),
+				baseStyle.Width(width).Foreground(t.TextMuted()).Render(truncateString(plan.LatestEval.Summary, max(12, width))),
+			)
+		}
+		block = append(block, baseStyle.Width(width).Foreground(t.TextMuted()).Render("Click to activate"))
+		lines = append(lines, zone.Mark(inspectorExperimentZoneID(plan.ID), lipgloss.JoinVertical(lipgloss.Left, block...)))
+	}
+	if len(m.research.Experiments) > maxItems {
+		lines = append(lines, baseStyle.Width(width).Foreground(t.TextMuted()).Render(fmt.Sprintf("+%d more experiments", len(m.research.Experiments)-maxItems)))
+	}
+	return baseStyle.Width(width).Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
+}
+
+func (m *inspectorCmp) renderLineageSection(width int) string {
+	baseStyle := styles.BaseStyle()
+	t := theme.CurrentTheme()
+
+	lines := []string{sectionTitle("Lineage", width)}
+	groups := research.LineageGroups(m.research)
+	if len(groups) == 0 {
+		lines = append(lines, baseStyle.Width(width).Foreground(t.TextMuted()).Render("No lineage yet. Evaluate and evolve an experiment to start one."))
+		return baseStyle.Width(width).Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
+	}
+
+	maxGroups := min(len(groups), 3)
+	for i := 0; i < maxGroups; i++ {
+		group := groups[i]
+		header := "Root " + shortResearchID(group.RootID)
+		if strings.TrimSpace(group.RootTitle) != "" {
+			header += " " + truncateString(group.RootTitle, max(10, width-18))
+		}
+		headerFlags := make([]string, 0, 2)
+		if group.RootID == m.research.PromotedExperimentID {
+			headerFlags = append(headerFlags, "PROMOTED")
+		}
+		if lineageContainsExperiment(group, m.research.ActiveExperimentID) {
+			headerFlags = append(headerFlags, "ACTIVE-LINEAGE")
+		}
+		if len(headerFlags) > 0 {
+			header += " [" + strings.Join(headerFlags, ", ") + "]"
+		}
+		if group.BestScore >= 0 {
+			header += fmt.Sprintf(" | best %.2f", group.BestScore)
+		}
+		header += fmt.Sprintf(" | %d generations", len(group.Plans))
+		lines = append(lines, baseStyle.Width(width).Render(header))
+
+		if best, ok := bestExperimentInLineage(group); ok && best.LatestEval != nil {
+			bestLine := fmt.Sprintf("  Best %s  %.2f %s", shortResearchID(best.ID), best.LatestEval.Score, strings.ToUpper(string(best.LatestEval.Decision)))
+			lines = append(lines, baseStyle.Width(width).Foreground(t.TextMuted()).Render(truncateString(bestLine, max(12, width))))
+		}
+		if current, ok := currentExperimentInLineage(m.research, group); ok {
+			currentLine := fmt.Sprintf("  Current %s G%d %s", shortResearchID(current.ID), current.Generation, truncateString(current.Title, max(10, width-28)))
+			flags := experimentFlags(m.research, current)
+			if len(flags) > 0 {
+				currentLine += " [" + strings.Join(flags, ", ") + "]"
+			}
+			lines = append(lines, baseStyle.Width(width).Foreground(t.TextMuted()).Render(truncateString(currentLine, max(12, width))))
+		}
+		statsLine := fmt.Sprintf("  Queue %d", queuedExperimentCount(group))
+		lines = append(lines, baseStyle.Width(width).Foreground(t.TextMuted()).Render(statsLine))
+
+		maxPlans := min(len(group.Plans), 3)
+		for j := 0; j < maxPlans; j++ {
+			plan := group.Plans[j]
+			label := fmt.Sprintf("  %s G%d %s", shortResearchID(plan.ID), plan.Generation, truncateString(plan.Title, max(10, width-24)))
+			flags := experimentFlags(m.research, plan)
+			if len(flags) > 0 {
+				label += " [" + strings.Join(flags, ", ") + "]"
+			}
+			details := []string{strings.ToUpper(string(plan.Status))}
+			if plan.LatestEval != nil {
+				details = append(details, fmt.Sprintf("score %.2f", plan.LatestEval.Score), strings.ToUpper(string(plan.LatestEval.Decision)))
+			} else {
+				details = append(details, "no evaluation")
+			}
+			details = append(details, fmt.Sprintf("runs %d", len(plan.Runs)))
+			block := lipgloss.JoinVertical(
+				lipgloss.Left,
+				baseStyle.Width(width).Render(truncateString(label, max(12, width))),
+				baseStyle.Width(width).Foreground(t.TextMuted()).Render(truncateString("    "+strings.Join(details, " | "), max(12, width))),
+			)
+			lines = append(lines, zone.Mark(inspectorLineageZoneID(plan.ID), block))
+		}
+		if len(group.Plans) > maxPlans {
+			lines = append(lines, baseStyle.Width(width).Foreground(t.TextMuted()).Render(fmt.Sprintf("  +%d more generations", len(group.Plans)-maxPlans)))
+		}
+		lines = append(lines, baseStyle.Width(width).Foreground(t.TextMuted()).Render("  "+truncateString(lineageActionHint(m.research, group), max(12, width-2))))
+	}
+	if len(groups) > maxGroups {
+		lines = append(lines, baseStyle.Width(width).Foreground(t.TextMuted()).Render(fmt.Sprintf("+%d more lineages", len(groups)-maxGroups)))
+	}
+	lines = append(lines, baseStyle.Width(width).Foreground(t.TextMuted()).Render("Use /experiment compare for the full lineage board."))
+	return baseStyle.Width(width).Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
+}
+
+func (m *inspectorCmp) renderActionSection(width int) string {
+	baseStyle := styles.BaseStyle()
+	t := theme.CurrentTheme()
+
+	lines := []string{
+		sectionTitle("Actions", width),
+		baseStyle.Width(width).Foreground(t.TextMuted()).Render("Click an action chip to drive the active experiment loop"),
+	}
+
+	actions := researchWorkbenchActions(m.research)
+	chips := make([]string, 0, len(actions))
+	for _, action := range actions {
+		chips = append(chips, renderInspectorActionChip(action))
+	}
+	lines = append(lines, lipgloss.JoinHorizontal(lipgloss.Left, chips...))
+
+	for _, action := range actions {
+		if action.Enabled || strings.TrimSpace(action.Reason) == "" {
+			continue
+		}
+		lines = append(lines, baseStyle.Width(width).Foreground(t.TextMuted()).Render(
+			truncateString(action.Label+": "+action.Reason, max(12, width)),
+		))
+	}
+	return baseStyle.Width(width).Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
+}
+
+func (m *inspectorCmp) renderArtifactSection(width int) string {
+	baseStyle := styles.BaseStyle()
+	t := theme.CurrentTheme()
+
+	lines := []string{sectionTitle("Artifacts", width)}
+	if m.artifactFilterMode {
+		lines = append(lines,
+			baseStyle.Width(width).Foreground(t.TextMuted()).Render("Artifact filter [typing]"),
+			baseStyle.Width(width).Render(m.artifactFilter.View()),
+		)
+	} else if strings.TrimSpace(m.artifactFilter.Value()) != "" {
+		lines = append(lines, baseStyle.Width(width).Foreground(t.TextMuted()).Render("Artifact filter: "+m.artifactFilter.Value()))
+	} else {
+		lines = append(lines, baseStyle.Width(width).Foreground(t.TextMuted()).Render("Press A to search artifacts across the research session"))
+	}
+
+	items := research.ArtifactIndex(m.research)
+	if len(items) == 0 {
+		lines = append(lines, baseStyle.Width(width).Foreground(t.TextMuted()).Render("No captured artifacts yet"))
+		return baseStyle.Width(width).Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
+	}
+
+	filtered := research.FilterArtifactIndex(items, m.artifactFilter.Value())
+	if len(filtered) == 0 {
+		lines = append(lines, baseStyle.Width(width).Foreground(t.TextMuted()).Render("No artifacts match the current filter"))
+		return baseStyle.Width(width).Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
+	}
+
+	lines = append(lines, baseStyle.Width(width).Foreground(t.TextMuted()).Render(fmt.Sprintf("Showing %d of %d indexed artifacts", len(filtered), len(items))))
+	maxItems := min(len(filtered), max(4, min(8, m.height/9)))
+	for i := 0; i < maxItems; i++ {
+		item := filtered[i]
+		artifact := item.Artifact
+		label := artifact.Label
+		if strings.TrimSpace(label) == "" {
+			label = string(artifact.Kind)
+		}
+		lines = append(lines,
+			baseStyle.Width(width).Render(strings.ToUpper(string(artifact.Kind))+"  "+truncateString(label, max(10, width-14))),
+		)
+		contextLine := []string{shortResearchID(item.ExperimentID)}
+		if strings.TrimSpace(item.RunTitle) != "" {
+			contextLine = append(contextLine, truncateString(item.RunTitle, max(10, width/2)))
+		}
+		if item.Evaluation != nil && strings.TrimSpace(string(item.Evaluation.Decision)) != "" {
+			contextLine = append(contextLine, strings.ToUpper(string(item.Evaluation.Decision)))
+		}
+		lines = append(lines, baseStyle.Width(width).Foreground(t.TextMuted()).Render(strings.Join(contextLine, "  ")))
+		if strings.TrimSpace(artifact.Path) != "" {
+			lines = append(lines, baseStyle.Width(width).Foreground(t.TextMuted()).Render(truncateString(artifact.Path, max(10, width))))
+		}
+		if strings.TrimSpace(artifact.Summary) != "" {
+			lines = append(lines, baseStyle.Width(width).Foreground(t.TextMuted()).Render(truncateString(artifact.Summary, max(10, width))))
+		}
+	}
+	if len(filtered) > maxItems {
+		lines = append(lines, baseStyle.Width(width).Foreground(t.TextMuted()).Render(fmt.Sprintf("+%d more artifacts", len(filtered)-maxItems)))
 	}
 	return baseStyle.Width(width).Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
 }
@@ -1077,6 +1476,35 @@ func toolNameBadge(name string) string {
 		Render(strings.ToUpper(truncateString(strings.TrimSpace(name), 18)))
 }
 
+func renderInspectorActionChip(action researchWorkbenchAction) string {
+	t := theme.CurrentTheme()
+	style := lipgloss.NewStyle().
+		Padding(0, 1).
+		MarginRight(1).
+		Background(t.BackgroundDarker()).
+		Foreground(t.Text())
+
+	if action.Enabled {
+		style = style.Background(t.Primary()).Foreground(t.Background()).Bold(true)
+	} else {
+		style = style.Foreground(t.TextMuted())
+	}
+
+	return zone.Mark(inspectorActionZoneID(action.ID), style.Render(action.Label))
+}
+
+func inspectorActionZoneID(actionID string) string {
+	return "inspector-action-" + strings.TrimSpace(actionID)
+}
+
+func inspectorExperimentZoneID(experimentID string) string {
+	return "inspector-experiment-" + strings.TrimSpace(experimentID)
+}
+
+func inspectorLineageZoneID(experimentID string) string {
+	return "inspector-lineage-" + strings.TrimSpace(experimentID)
+}
+
 func buildRunSnapshot(sess session.Session, messages []message.Message) runSnapshot {
 	status, detail := deriveRunStatus(messages)
 	updatedAt := sess.UpdatedAt
@@ -1292,6 +1720,56 @@ func initialTimelineTargetSessionID(current session.Session, tasks []runSnapshot
 		return ""
 	}
 	return tasks[0].Session.ID
+}
+
+func loadResearchSnapshot(ctx context.Context, app *app.App, current session.Session) (string, bool, string, research.SessionState) {
+	if app == nil || app.Research == nil || current.ID == "" {
+		return "", false, "", research.SessionState{}
+	}
+
+	researchSession, err := resolveResearchSession(ctx, app.Sessions, current)
+	if err != nil {
+		return "", false, "", research.SessionState{}
+	}
+
+	state, err := app.Research.Get(ctx, researchSession.ID)
+	if err != nil {
+		return researchSession.ID, researchSession.ID != current.ID, researchSession.Title, research.SessionState{SessionID: researchSession.ID, Stage: research.StageObjective}
+	}
+	return researchSession.ID, researchSession.ID != current.ID, researchSession.Title, state
+}
+
+func shortResearchID(id string) string {
+	id = strings.TrimSpace(id)
+	if len(id) <= 12 {
+		return id
+	}
+	return id[:12]
+}
+
+func activeExperiment(state research.SessionState) (research.ExperimentPlan, bool) {
+	if strings.TrimSpace(state.ActiveExperimentID) != "" {
+		for _, plan := range state.Experiments {
+			if plan.ID == state.ActiveExperimentID {
+				return plan, true
+			}
+		}
+	}
+	if len(state.Experiments) == 0 {
+		return research.ExperimentPlan{}, false
+	}
+	return state.Experiments[0], true
+}
+
+func resolveResearchSession(ctx context.Context, sessions session.Service, current session.Session) (session.Session, error) {
+	for current.ParentSessionID != "" {
+		parent, err := sessions.Get(ctx, current.ParentSessionID)
+		if err != nil {
+			return session.Session{}, err
+		}
+		current = parent
+	}
+	return current, nil
 }
 
 func loadTimelineSnapshots(_ context.Context, svc taskrun.Service, sessionID string, limit int) []timelineSnapshot {

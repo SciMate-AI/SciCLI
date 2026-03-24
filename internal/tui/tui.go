@@ -150,9 +150,6 @@ type appModel struct {
 	showModelDialog bool
 	modelDialog     dialog.ModelDialog
 
-	showInitDialog bool
-	initDialog     dialog.InitDialogCmp
-
 	showFilepicker bool
 	filepicker     dialog.FilepickerCmp
 
@@ -191,8 +188,6 @@ func (a appModel) Init() tea.Cmd {
 	cmds = append(cmds, cmd)
 	cmd = a.modelDialog.Init()
 	cmds = append(cmds, cmd)
-	cmd = a.initDialog.Init()
-	cmds = append(cmds, cmd)
 	cmd = a.filepicker.Init()
 	cmds = append(cmds, cmd)
 	cmd = a.themeDialog.Init()
@@ -201,18 +196,6 @@ func (a appModel) Init() tea.Cmd {
 	cmds = append(cmds, cmd)
 	cmd = a.taskDialog.Init()
 	cmds = append(cmds, cmd)
-
-	// Check if we should show the init dialog
-	cmds = append(cmds, func() tea.Msg {
-		shouldShow, err := config.ShouldShowInitDialog()
-		if err != nil {
-			return util.InfoMsg{
-				Type: util.InfoTypeError,
-				Msg:  "Failed to check init status: " + err.Error(),
-			}
-		}
-		return dialog.ShowInitDialogMsg{Show: shouldShow}
-	})
 
 	return tea.Batch(cmds...)
 }
@@ -253,8 +236,6 @@ func (a appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		filepicker, filepickerCmd := a.filepicker.Update(msg)
 		a.filepicker = filepicker.(dialog.FilepickerCmp)
 		cmds = append(cmds, filepickerCmd)
-
-		a.initDialog.SetSize(msg.Width, msg.Height)
 
 		if a.showMultiArgumentsDialog {
 			a.multiArgumentsDialog.SetSize(msg.Width, msg.Height)
@@ -533,31 +514,6 @@ func (a appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		return a, util.ReportInfo(fmt.Sprintf("Model changed to %s", model.Name))
 
-	case dialog.ShowInitDialogMsg:
-		a.showInitDialog = msg.Show
-		return a, nil
-
-	case dialog.CloseInitDialogMsg:
-		a.showInitDialog = false
-		if msg.Initialize {
-			// Run the initialization command
-			for _, cmd := range a.commands {
-				if cmd.ID == "init" {
-					// Mark the project as initialized
-					if err := config.MarkProjectInitialized(); err != nil {
-						return a, util.ReportError(err)
-					}
-					return a, cmd.Handler(cmd)
-				}
-			}
-		} else {
-			// Mark the project as initialized without running the command
-			if err := config.MarkProjectInitialized(); err != nil {
-				return a, util.ReportError(err)
-			}
-		}
-		return a, nil
-
 	case chat.SessionSelectedMsg:
 		a.selectedSession = msg
 		a.sessionDialog.SetSelectedSession(msg.ID)
@@ -574,6 +530,14 @@ func (a appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case dialog.CommandSelectedMsg:
+		if msg.Command.Disabled {
+			a.showCommandDialog = true
+			reason := strings.TrimSpace(msg.Command.Reason)
+			if reason == "" {
+				reason = "This command is not available in the current context"
+			}
+			return a, util.ReportWarn(reason)
+		}
 		a.showCommandDialog = false
 		// Execute the command handler if available
 		if msg.Command.Handler != nil {
@@ -711,7 +675,7 @@ func (a appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if len(a.commands) == 0 {
 					return a, util.ReportWarn("No commands available")
 				}
-				a.commandDialog.SetCommands(a.commands)
+				a.commandDialog.SetCommands(a.contextualCommands())
 				a.showCommandDialog = true
 				return a, nil
 			}
@@ -754,14 +718,6 @@ func (a appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				if a.showAuthDialog {
 					a.showAuthDialog = false
-					return a, nil
-				}
-				if a.showInitDialog {
-					a.showInitDialog = false
-					// Mark the project as initialized without running the command
-					if err := config.MarkProjectInitialized(); err != nil {
-						return a, util.ReportError(err)
-					}
 					return a, nil
 				}
 				if a.showFilepicker {
@@ -863,16 +819,6 @@ func (a appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		d, modelCmd := a.modelDialog.Update(msg)
 		a.modelDialog = d.(dialog.ModelDialog)
 		cmds = append(cmds, modelCmd)
-		// Only block key messages send all other messages down
-		if _, ok := msg.(tea.KeyMsg); ok {
-			return a, tea.Batch(cmds...)
-		}
-	}
-
-	if a.showInitDialog {
-		d, initCmd := a.initDialog.Update(msg)
-		a.initDialog = d.(dialog.InitDialogCmp)
-		cmds = append(cmds, initCmd)
 		// Only block key messages send all other messages down
 		if _, ok := msg.(tea.KeyMsg); ok {
 			return a, tea.Batch(cmds...)
@@ -1303,17 +1249,6 @@ func (a appModel) View() string {
 		)
 	}
 
-	if a.showInitDialog {
-		overlay := a.initDialog.View()
-		appView = layout.PlaceOverlay(
-			a.width/2-lipgloss.Width(overlay)/2,
-			a.height/2-lipgloss.Height(overlay)/2,
-			overlay,
-			appView,
-			true,
-		)
-	}
-
 	if a.showThemeDialog {
 		overlay := a.themeDialog.View()
 		row := lipgloss.Height(appView) / 2
@@ -1378,7 +1313,6 @@ func New(app *app.App) tea.Model {
 		authDialog:    dialog.NewAuthDialogCmp(),
 		modelDialog:   dialog.NewModelDialogCmp(),
 		permissions:   dialog.NewPermissionDialogCmp(),
-		initDialog:    dialog.NewInitDialogCmp(),
 		themeDialog:   dialog.NewThemeDialogCmp(),
 		skillsDialog:  dialog.NewSkillDialogCmp(),
 		taskDialog:    dialog.NewTaskDialogCmp(),
@@ -1419,9 +1353,9 @@ func New(app *app.App) tea.Model {
 	})
 
 	model.RegisterCommand(dialog.Command{
-		ID:          "init",
-		Title:       "Initialize Project",
-		Description: "Create/Update the SCICLI.md memory file",
+		ID:          "project-memory",
+		Title:       "Generate Project Memory",
+		Description: "Create or refresh the SCICLI.md memory file",
 		Handler: func(cmd dialog.Command) tea.Cmd {
 			prompt := `Please analyze this codebase and create a SCICLI.md file containing:
 1. Build/lint/test commands - especially for running a single test
@@ -1435,6 +1369,122 @@ If there are Cursor rules (in .cursor/rules/ or .cursorrules) or Copilot rules (
 					Text: prompt,
 				}),
 			)
+		},
+	})
+
+	model.RegisterCommand(dialog.Command{
+		ID:          "set-research-objective",
+		Title:       "Set Research Objective",
+		Description: "Create or update the structured research objective for this session",
+		Handler: func(cmd dialog.Command) tea.Cmd {
+			return util.CmdHandler(dialog.ShowMultiArgumentsDialogMsg{
+				CommandID: cmd.ID,
+				Content:   "/research set $objective",
+				ArgNames:  []string{"objective"},
+			})
+		},
+	})
+
+	model.RegisterCommand(dialog.Command{
+		ID:          "show-research-state",
+		Title:       "Show Research State",
+		Description: "Print the persisted research objective, stage, and experiment summary for this session",
+		Handler: func(cmd dialog.Command) tea.Cmd {
+			return util.CmdHandler(dialog.CommandRunCustomMsg{
+				Content: "/research show",
+			})
+		},
+	})
+
+	model.RegisterCommand(dialog.Command{
+		ID:          "add-experiment-plan",
+		Title:       "Add Experiment Plan",
+		Description: "Create a machine-readable experiment plan under the current research session",
+		Handler: func(cmd dialog.Command) tea.Cmd {
+			return util.CmdHandler(dialog.ShowMultiArgumentsDialogMsg{
+				CommandID: cmd.ID,
+				Content:   "/experiment add $title",
+				ArgNames:  []string{"title"},
+			})
+		},
+	})
+
+	model.RegisterCommand(dialog.Command{
+		ID:          "evaluate-active-experiment",
+		Title:       "Evaluate Active Experiment",
+		Description: "Store a score and decision for the active experiment plan",
+		Handler: func(cmd dialog.Command) tea.Cmd {
+			return util.CmdHandler(dialog.ShowMultiArgumentsDialogMsg{
+				CommandID: cmd.ID,
+				Content:   "/experiment evaluate $score $decision $summary",
+				ArgNames:  []string{"score", "decision", "summary"},
+			})
+		},
+	})
+
+	model.RegisterCommand(dialog.Command{
+		ID:          "promote-active-experiment",
+		Title:       "Promote Active Experiment",
+		Description: "Mark the active experiment as the current best candidate if it has a valid evaluation",
+		Handler: func(cmd dialog.Command) tea.Cmd {
+			return util.CmdHandler(dialog.CommandRunCustomMsg{
+				Content: "/experiment promote",
+			})
+		},
+	})
+
+	model.RegisterCommand(dialog.Command{
+		ID:          "propose-next-experiment",
+		Title:       "Propose Next Experiment",
+		Description: "Ask the agent to generate the next candidate experiment from current research state",
+		Handler: func(cmd dialog.Command) tea.Cmd {
+			return util.CmdHandler(dialog.CommandRunCustomMsg{
+				Content: "/experiment propose",
+			})
+		},
+	})
+
+	model.RegisterCommand(dialog.Command{
+		ID:          "evolve-active-experiment",
+		Title:       "Evolve Active Experiment",
+		Description: "Create the next generation from the active mutate/branch candidate using the default lineage title",
+		Handler: func(cmd dialog.Command) tea.Cmd {
+			return util.CmdHandler(dialog.CommandRunCustomMsg{
+				Content: "/experiment evolve",
+			})
+		},
+	})
+
+	model.RegisterCommand(dialog.Command{
+		ID:          "rerun-active-experiment",
+		Title:       "Rerun Active Experiment",
+		Description: "Clone the active experiment into a fresh rerun candidate with lineage",
+		Handler: func(cmd dialog.Command) tea.Cmd {
+			return util.CmdHandler(dialog.CommandRunCustomMsg{
+				Content: "/experiment rerun",
+			})
+		},
+	})
+
+	model.RegisterCommand(dialog.Command{
+		ID:          "compare-experiments",
+		Title:       "Compare Experiments",
+		Description: "Show a compact comparison of experiment outcomes and lineage",
+		Handler: func(cmd dialog.Command) tea.Cmd {
+			return util.CmdHandler(dialog.CommandRunCustomMsg{
+				Content: "/experiment compare",
+			})
+		},
+	})
+
+	model.RegisterCommand(dialog.Command{
+		ID:          "list-experiment-artifacts",
+		Title:       "List Experiment Artifacts",
+		Description: "Show the captured provenance artifacts for the active experiment run",
+		Handler: func(cmd dialog.Command) tea.Cmd {
+			return util.CmdHandler(dialog.CommandRunCustomMsg{
+				Content: "/artifact list",
+			})
 		},
 	})
 

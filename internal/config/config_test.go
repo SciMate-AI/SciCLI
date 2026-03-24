@@ -149,15 +149,12 @@ func TestSetWorkModeRuntimeOnly(t *testing.T) {
 	assert.Equal(t, WorkModeAuto, cfg.Automation.WorkMode)
 }
 
-func TestSetDefaultsIncludesArxivMCPServer(t *testing.T) {
+func TestSetDefaultsDoesNotInjectBuiltInMCPServers(t *testing.T) {
 	resetConfigTestState()
-	t.Setenv("SCICLI_MCP_ARXIV_COMMAND", "")
-	t.Setenv("SCICLI_MCP_ARXIV_PACKAGE", "")
 
 	setDefaults(false)
 
-	assert.Equal(t, DefaultArxivMcpCommand, viper.GetString("mcpServers.arxiv.command"))
-	assert.Equal(t, []string{DefaultArxivMcpPackage}, viper.GetStringSlice("mcpServers.arxiv.args"))
+	assert.Empty(t, viper.GetStringMap("mcpServers"))
 }
 
 func resetConfigTestState() {

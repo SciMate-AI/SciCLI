@@ -8,6 +8,7 @@ import (
 	"github.com/SciMate-AI/scicli/internal/lsp"
 	"github.com/SciMate-AI/scicli/internal/message"
 	"github.com/SciMate-AI/scicli/internal/permission"
+	"github.com/SciMate-AI/scicli/internal/research"
 	"github.com/SciMate-AI/scicli/internal/session"
 	"github.com/SciMate-AI/scicli/internal/skills"
 	"github.com/SciMate-AI/scicli/internal/taskrun"
@@ -21,6 +22,7 @@ func CoderAgentTools(
 	lspClients map[string]*lsp.Client,
 	skillsSvc skills.Service,
 	taskRuns taskrun.Service,
+	researchSvc research.Service,
 ) []tools.BaseTool {
 	ctx := context.Background()
 	otherTools := GetMcpTools(ctx, permissions)
@@ -42,7 +44,7 @@ func CoderAgentTools(
 			tools.NewViewTool(lspClients),
 			tools.NewPatchTool(lspClients, permissions, history),
 			tools.NewWriteTool(lspClients, permissions, history),
-			NewAgentTool(permissions, sessions, messages, lspClients, skillsSvc, taskRuns),
+			NewAgentTool(permissions, sessions, messages, lspClients, skillsSvc, taskRuns, researchSvc),
 		}, otherTools...,
 	)
 }

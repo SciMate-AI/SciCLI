@@ -4,12 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/SciMate-AI/scicli/internal/config"
 	"github.com/SciMate-AI/scicli/internal/llm/tools"
 	"github.com/SciMate-AI/scicli/internal/lsp"
 	"github.com/SciMate-AI/scicli/internal/message"
 	"github.com/SciMate-AI/scicli/internal/permission"
+	"github.com/SciMate-AI/scicli/internal/research"
 	"github.com/SciMate-AI/scicli/internal/session"
 	"github.com/SciMate-AI/scicli/internal/skills"
 	"github.com/SciMate-AI/scicli/internal/taskrun"
@@ -22,6 +25,7 @@ type agentTool struct {
 	lspClients  map[string]*lsp.Client
 	skillsSvc   skills.Service
 	taskRuns    taskrun.Service
+	researchSvc research.Service
 }
 
 const (
@@ -75,6 +79,21 @@ func (b *agentTool) Run(ctx context.Context, call tools.ToolCall) (tools.ToolRes
 	if b.taskRuns != nil {
 		b.taskRuns.Queue(session, params.Prompt)
 	}
+	if b.researchSvc != nil {
+		if researchSession, resolveErr := resolveResearchSession(ctx, b.sessions, sessionID); resolveErr == nil {
+			if state, getErr := b.researchSvc.Get(ctx, researchSession.ID); getErr == nil && strings.TrimSpace(state.ActiveExperimentID) != "" {
+				_, _, _ = b.researchSvc.AttachTaskRun(ctx, researchSession.ID, state.ActiveExperimentID, taskrun.Run{
+					SessionID:       session.ID,
+					ParentSessionID: session.ParentSessionID,
+					Title:           session.Title,
+					Prompt:          params.Prompt,
+					Status:          taskrun.StatusQueued,
+					Detail:          "Queued",
+					UpdatedAt:       time.Now().Unix(),
+				})
+			}
+		}
+	}
 
 	done, err := agent.Run(ctx, session.ID, params.Prompt)
 	if err != nil {
@@ -115,6 +134,7 @@ func NewAgentTool(
 	LspClients map[string]*lsp.Client,
 	skillsSvc skills.Service,
 	taskRuns taskrun.Service,
+	researchSvc research.Service,
 ) tools.BaseTool {
 	return &agentTool{
 		permissions: permissions,
@@ -123,5 +143,21 @@ func NewAgentTool(
 		lspClients:  LspClients,
 		skillsSvc:   skillsSvc,
 		taskRuns:    taskRuns,
+		researchSvc: researchSvc,
 	}
+}
+
+func resolveResearchSession(ctx context.Context, sessions session.Service, sessionID string) (session.Session, error) {
+	current, err := sessions.Get(ctx, sessionID)
+	if err != nil {
+		return session.Session{}, err
+	}
+	for current.ParentSessionID != "" {
+		parent, err := sessions.Get(ctx, current.ParentSessionID)
+		if err != nil {
+			return session.Session{}, err
+		}
+		current = parent
+	}
+	return current, nil
 }

@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/SciMate-AI/scicli/internal/scimate"
+	"github.com/SciMate-AI/scicli/internal/mcpcli"
 	"github.com/spf13/cobra"
 )
 
@@ -16,7 +16,7 @@ func init() {
 func newMcpCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "mcp",
-		Short: "Inspect and call remote MCP tools",
+		Short: "Inspect and call configured MCP tools",
 	}
 	cmd.AddCommand(newMcpListToolsCmd())
 	cmd.AddCommand(newMcpCallCmd())
@@ -35,7 +35,7 @@ func newMcpListToolsCmd() *cobra.Command {
 			if err := loadRuntimeConfig(cwd, debug); err != nil {
 				return err
 			}
-			client, err := scimate.NewClient(server)
+			client, err := mcpcli.NewClient(server)
 			if err != nil {
 				return err
 			}
@@ -52,7 +52,7 @@ func newMcpListToolsCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&server, "server", "cae-agent", "Configured MCP server name")
+	cmd.Flags().StringVar(&server, "server", "", "Configured MCP server name")
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Print JSON output")
 	return cmd
 }
@@ -64,7 +64,7 @@ func newMcpCallCmd() *cobra.Command {
 	var jsonOutput bool
 	cmd := &cobra.Command{
 		Use:   "call",
-		Short: "Call a remote MCP tool",
+		Short: "Call a configured MCP tool",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			debug, _ := cmd.Flags().GetBool("debug")
 			cwd, _ := cmd.Flags().GetString("cwd")
@@ -77,7 +77,7 @@ func newMcpCallCmd() *cobra.Command {
 					return fmt.Errorf("failed to parse --args JSON: %w", err)
 				}
 			}
-			client, err := scimate.NewClient(server)
+			client, err := mcpcli.NewClient(server)
 			if err != nil {
 				return err
 			}
@@ -88,11 +88,11 @@ func newMcpCallCmd() *cobra.Command {
 			if jsonOutput {
 				return printJSON(result)
 			}
-			fmt.Println(scimate.ExtractToolText(result))
+			fmt.Println(mcpcli.ExtractToolText(result))
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&server, "server", "cae-agent", "Configured MCP server name")
+	cmd.Flags().StringVar(&server, "server", "", "Configured MCP server name")
 	cmd.Flags().StringVar(&toolName, "tool", "", "Tool name")
 	cmd.Flags().StringVar(&rawArgs, "args", "{}", "Tool arguments as JSON")
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Print JSON output")

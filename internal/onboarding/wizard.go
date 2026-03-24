@@ -337,8 +337,8 @@ func (m *wizardModel) View() string {
 		Border(lipgloss.RoundedBorder())
 
 	parts := []string{
-		lipgloss.NewStyle().Bold(true).Render("SciCLI first-run setup"),
-		"Register or log in first, then configure your AI provider and default model.",
+		lipgloss.NewStyle().Bold(true).Render("SciCLI onboarding"),
+		"Complete this once to connect an account, choose a provider, and set your default model.",
 		"",
 		m.stepIndicator(),
 		"",
@@ -361,7 +361,12 @@ func (m *wizardModel) View() string {
 		parts = append(parts, "", lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Render(m.authNotice))
 	}
 
-	parts = append(parts, "", lipgloss.NewStyle().Faint(true).Render("Config file: "+config.ConfigFilePath()))
+	parts = append(
+		parts,
+		"",
+		lipgloss.NewStyle().Faint(true).Render("Project memory is optional and can be generated later from the command palette."),
+		lipgloss.NewStyle().Faint(true).Render("Config file: "+config.ConfigFilePath()),
+	)
 
 	return lipgloss.Place(
 		m.width,

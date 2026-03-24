@@ -1,44 +1,49 @@
 # `scicli` Implementation Plan
 
+> Historical note:
+> This document captures the original rebrand-and-port plan from the early `scicli` phase.
+> It is no longer the full product direction.
+> The current product roadmap lives in [docs/scicli-roadmap.md](./scicli-roadmap.md).
+> Several items listed below were intentionally removed later, including built-in MCP presets, token-aware MCP injection, and CAE run/log/artifact commands.
+
 ## Summary
 - Use `opencode` as the CLI and agent baseline.
 - Do not port VS Code-only systems from `scimate-vscode` such as webviews, the plan engine, or the fallback workspace/terminal/patch tools created for the extension host.
-- Add the missing SciMate capabilities that matter in a standalone CLI:
+- Original proposal items that were later reduced or removed:
   - Supabase auth with register/login/logout/status
   - token refresh and token-aware remote MCP calls
   - built-in SciMate MCP server presets
   - CAE run, log, and artifact commands
+- Durable outcomes that remain relevant:
   - `scicli` branding, config paths, and local state
+  - keeping `opencode` as the local coding baseline
 
 ## Implementation
 - Rebrand the `opencode` baseline to `scicli` at the CLI/config/data-directory level.
 - Keep the existing `opencode` local coding tools, permissions, sessions, and MCP tool exposure for the agent.
-- Extend configuration with:
+- Original configuration additions under consideration:
   - `auth.supabase.url`
   - `auth.supabase.anonKey`
   - built-in MCP defaults for `cae-agent`, `origin`, and `rdkit`
-- Add a lightweight auth subsystem:
+- Original auth additions under consideration:
   - Supabase password signup/login
   - refresh-token based renewal
   - local token persistence
-- Extend MCP support with:
+- Original MCP additions under consideration:
   - `streamable-http` transport
   - access-token injection when a tool schema declares `access_token`
-- Add CLI commands:
+- Original CLI additions under consideration:
   - `scicli auth register|login|logout|status`
   - `scicli mcp list-tools|call`
-  - `scicli runs start|last`
-  - `scicli log get`
-  - `scicli artifacts list|get`
+  - dedicated remote run-management commands
 
 ## Scope Decisions
 - Keep `opencode` agent behavior as the main code-agent path.
 - Do not add a second plan/replay engine.
 - Do not port VS Code UI state, review flows, or local workspace MCP shims.
-- Keep the current SciMate backend endpoints as defaults, but express them through `scicli` config.
+- This specific backend-defaults direction was later dropped.
 
 ## Validation
-- Build and smoke test the new commands.
-- Verify auth flow against Supabase.
-- Verify token-aware MCP calls against the default CAE server.
-- Verify run start, run log fetch, and artifact listing against the current backend.
+- Build and smoke test the retained commands.
+- Verify the remaining auth flow if that subsystem is still enabled.
+- Verify only the MCP behavior that still exists in the current branch.

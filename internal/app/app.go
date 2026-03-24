@@ -18,6 +18,7 @@ import (
 	"github.com/SciMate-AI/scicli/internal/lsp"
 	"github.com/SciMate-AI/scicli/internal/message"
 	"github.com/SciMate-AI/scicli/internal/permission"
+	"github.com/SciMate-AI/scicli/internal/research"
 	"github.com/SciMate-AI/scicli/internal/session"
 	"github.com/SciMate-AI/scicli/internal/skills"
 	"github.com/SciMate-AI/scicli/internal/taskrun"
@@ -29,6 +30,7 @@ type App struct {
 	Messages    message.Service
 	History     history.Service
 	Permissions permission.Service
+	Research    research.Service
 
 	CoderAgent agent.Service
 
@@ -59,13 +61,18 @@ func New(ctx context.Context, conn *sql.DB) (*App, error) {
 		TaskRuns:    taskrun.NewService(conn),
 	}
 
+	researchSvc, err := research.NewService()
+	if err != nil {
+		return nil, err
+	}
+	app.Research = researchSvc
+
 	// Initialize theme based on configuration
 	app.initTheme()
 
 	// Initialize LSP clients in the background
 	go app.initLSPClients(ctx)
 
-	var err error
 	app.CoderAgent, err = agent.NewAgent(
 		config.AgentCoder,
 		app.Sessions,
@@ -78,6 +85,7 @@ func New(ctx context.Context, conn *sql.DB) (*App, error) {
 			app.LSPClients,
 			app.Skills,
 			app.TaskRuns,
+			app.Research,
 		),
 		app.Skills,
 		app.TaskRuns,
@@ -86,6 +94,8 @@ func New(ctx context.Context, conn *sql.DB) (*App, error) {
 		logging.Error("Failed to create coder agent", err)
 		return nil, err
 	}
+
+	app.startResearchRunSync(ctx)
 
 	return app, nil
 }

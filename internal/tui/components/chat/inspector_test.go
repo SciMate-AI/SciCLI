@@ -5,7 +5,9 @@ import (
 	"testing"
 
 	"github.com/SciMate-AI/scicli/internal/message"
+	"github.com/SciMate-AI/scicli/internal/research"
 	"github.com/SciMate-AI/scicli/internal/taskrun"
+	zone "github.com/lrstanley/bubblezone"
 )
 
 func TestDeriveRunStatusRunningWhenAssistantUnfinished(t *testing.T) {
@@ -87,6 +89,86 @@ func TestTimelineSnapshotMetadataLine(t *testing.T) {
 	}
 	if !containsAll(line, []string{"input", "go test", "finish end_turn"}) {
 		t.Fatalf("unexpected metadata line: %q", line)
+	}
+}
+
+func TestRenderLineageSectionShowsPromotedAndActive(t *testing.T) {
+	zone.NewGlobal()
+	cmp := &inspectorCmp{
+		width:  80,
+		height: 40,
+		research: research.SessionState{
+			ActiveExperimentID:   "exp-a2",
+			PromotedExperimentID: "exp-a1",
+			Experiments: []research.ExperimentPlan{
+				{
+					ID:            "exp-a1",
+					Title:         "Seed A",
+					LineageRootID: "exp-a1",
+					Generation:    0,
+					Status:        research.ExperimentEvaluated,
+					LatestEval: &research.EvaluationResult{
+						Score:    0.91,
+						Decision: research.DecisionKeep,
+					},
+				},
+				{
+					ID:                 "exp-a2",
+					Title:              "Mutated A",
+					LineageRootID:      "exp-a1",
+					ParentExperimentID: "exp-a1",
+					Generation:         1,
+					EvolutionDecision:  research.DecisionMutate,
+					Status:             research.ExperimentEvaluated,
+					LatestEval: &research.EvaluationResult{
+						Score:    0.88,
+						Decision: research.DecisionMutate,
+					},
+				},
+			},
+		},
+	}
+
+	view := cmp.renderLineageSection(80)
+	if !containsAll(view, []string{
+		"Lineage",
+		"Root exp-a1 Seed A [PROMOTED, ACTIVE-LINEAGE] | best 0.91 | 2 generations",
+		"Current exp-a2 G1 Mutated A [ACTIVE, MUTATE]",
+		"Next /experiment evolve [title]",
+	}) {
+		t.Fatalf("unexpected lineage view: %q", view)
+	}
+}
+
+func TestRenderActionSectionShowsClickableActionLabels(t *testing.T) {
+	zone.NewGlobal()
+	cmp := &inspectorCmp{
+		width:  80,
+		height: 40,
+		research: research.SessionState{
+			ActiveExperimentID: "exp-a1",
+			Experiments: []research.ExperimentPlan{
+				{
+					ID:     "exp-a1",
+					Title:  "Candidate A",
+					Status: research.ExperimentEvaluated,
+					Runs:   []research.ExperimentRun{{ID: "run-1", SessionID: "run-1"}},
+					LatestEval: &research.EvaluationResult{
+						Score:    0.86,
+						Decision: research.DecisionMutate,
+					},
+				},
+				{
+					ID:    "exp-b1",
+					Title: "Candidate B",
+				},
+			},
+		},
+	}
+
+	view := cmp.renderActionSection(80)
+	if !containsAll(view, []string{"Actions", "Evaluate", "Promote", "Evolve", "Compare"}) {
+		t.Fatalf("unexpected action section: %q", view)
 	}
 }
 

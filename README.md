@@ -1,22 +1,24 @@
 # SciCLI
 
-Terminal-based AI assistant for coding and SciMate workflows.
+Terminal-based AI assistant for coding and research workflows.
 
-Adapted from the original `opencode` code-agent baseline and significantly extended for SciMate-native tooling, authentication, MCP integration, and scientific/engineering use cases.
+Adapted from the original `opencode` code-agent baseline and extended toward a terminal-first research workbench for scientific and engineering use cases.
 
 > [!WARNING]
 > SciCLI is still evolving quickly. Interfaces, prompts, defaults, and provider/model support may change between releases.
 
 ## What Makes SciCLI Different
 
-SciCLI is not just a generic terminal chat wrapper around an LLM. It is designed to be a practical coding and scientific workflow agent with a local-first terminal UX and built-in support for SciMate services.
+SciCLI is not just a generic terminal chat wrapper around an LLM. It is designed to be a practical coding and research agent with a local-first terminal UX and optional support for user-configured MCP servers.
 
-- **SciMate-native MCP integration**: SciCLI boots with default MCP entries for `cae-agent`, `origin`, `rdkit`, and `arxiv`, so chemistry, CAE, origin-analysis, and literature search workflows can be exposed as normal agent tools.
-- **Built-in SciMate auth flow**: `scicli auth register|login|logout|status` store a persistent local session, and MCP tools that require `access_token` can receive a refreshed token automatically instead of asking the user to paste credentials into prompts.
+- **Configurable MCP integration**: SciCLI can load tools from MCP servers you explicitly configure, so internal APIs, research backends, and local MCP utilities can be exposed as normal agent tools.
 - **Context-window protection for long tool outputs**: long MCP tool returns are compacted before being sent back to the model, while the full raw result remains available in metadata for the UI. This reduces 400 errors caused by oversized tool context.
 - **Terminal UI built for tool-heavy sessions**: sessions, permissions, logs, account actions, provider/model switching, file edits, and tool results all live in the TUI. Long histories can be browsed with mouse wheel support, a visible scrollbar, and scroll position hints.
-- **Local coding tools plus remote tools**: the agent can inspect files, run shell commands, edit code, apply patches, fetch URLs, read diagnostics, and call MCP tools in the same conversation.
+- **Local coding tools plus configured MCP tools**: the agent can inspect files, run shell commands, edit code, apply patches, fetch URLs, read diagnostics, and call MCP tools in the same conversation.
 - **Conversation continuity**: automatic session compaction summarizes long conversations before they exceed the current model's context window, so work can continue without manually restarting from scratch.
+- **Structured research session memory**: each chat can now keep a persisted research objective and stage outside the raw transcript, so the operator can reopen a session and recover the current direction immediately.
+- **Structured experiment loop skeleton**: experiment plans, linked delegated-task runs, and evaluation notes are now persisted as machine-readable research state instead of being buried in prompts.
+- **Artifact-centered experiment provenance**: completed experiment runs now capture prompt, final response, task timeline, and modified-file artifacts so results are inspectable without replaying the full chat.
 - **Project memory support**: SciCLI automatically looks for files such as `SCICLI.md`, `scicli.md`, `CLAUDE.md`, and `.github/copilot-instructions.md` to load project-specific guidance into the agent context.
 - **Interactive and non-interactive modes**: use the full TUI for exploratory work, or run one-shot prompts from scripts and CI with `-p`.
 - **Multi-provider model routing**: SciCLI supports OpenAI, Anthropic, Gemini, OpenRouter, Groq, xAI, Copilot, Bedrock, Vertex AI, Azure OpenAI, local OpenAI-compatible endpoints, and custom OpenAI-compatible servers.
@@ -54,7 +56,7 @@ go build ./...
 scicli
 ```
 
-On first launch, SciCLI opens an onboarding flow if no usable provider/model is configured yet.
+On first launch, SciCLI opens a single onboarding flow if no usable provider/model is configured yet. That flow handles account login or registration, provider selection, credentials, and default model selection.
 
 ### 2. Configure a model provider
 
@@ -68,13 +70,22 @@ export ANTHROPIC_API_KEY=...
 
 You can also configure providers manually in `~/.scicli.json`.
 
-### 3. Log in to SciMate if you use protected MCP services
+### 3. Configure MCP servers if you need external tools
 
-```bash
-scicli auth login
+Add MCP servers to `~/.scicli.json` or `./.scicli.json`:
+
+```json
+{
+  "mcpServers": {
+    "research-api": {
+      "type": "sse",
+      "url": "https://your-server.example/sse"
+    }
+  }
+}
 ```
 
-After login, remote MCP tools whose schema includes `access_token` can use the stored token automatically. SciCLI will also refresh the token before protected calls when the saved session is close to expiry.
+SciCLI does not ship built-in remote CAE, run-management, or service-specific MCP presets. If you need remote tools, add them explicitly in configuration.
 
 ### 4. Optional local dependencies
 
@@ -82,8 +93,12 @@ SciCLI works without these tools, but some features are better with them install
 
 - `rg` / `ripgrep`: faster file search, grep, and project scanning
 - `fzf`: better interactive selection for some terminal workflows
-- `uvx`: enables the bundled local `arxiv` MCP server entry out of the box
+- `uvx`: useful if one of your configured MCP servers is launched locally through `uvx`
 - language servers such as `gopls` or `typescript-language-server`: diagnostics support
+
+### 5. Optional project memory
+
+Project memory is no longer part of first-run onboarding. If you want SciCLI to generate or refresh `SCICLI.md`, open the command palette with `Ctrl+K` and run `Generate Project Memory`.
 
 ## CLI Usage
 
@@ -105,29 +120,11 @@ scicli --work-mode ultrawork -p "Investigate and fix the failing tests"
 scicli ultrawork "Ship this refactor end to end"
 ```
 
-### Auth commands
-
-```bash
-scicli auth register
-scicli auth login
-scicli auth status
-scicli auth logout
-```
-
 ### MCP inspection and direct calls
 
 ```bash
-scicli mcp list-tools
-scicli mcp call rdkit_describe_molecule "{\"smiles\":\"Cn1c(=O)n(C)c2ncn(C)c2c1=O\"}"
-```
-
-### Run management
-
-```bash
-scicli runs start
-scicli runs last
-scicli runs log
-scicli runs artifacts list
+scicli mcp list-tools --server research-api
+scicli mcp call --server rdkit --tool rdkit_describe_molecule --args "{\"smiles\":\"Cn1c(=O)n(C)c2ncn(C)c2c1=O\"}"
 ```
 
 ## Key Features
@@ -135,12 +132,16 @@ scicli runs artifacts list
 ### Terminal UI
 
 - Searchable command palette (`Ctrl+K`) for account actions, session switching, work-mode controls, and provider/model switching
+- `Set Research Objective` command to persist a session-level research goal
+- `Add Experiment Plan` and `Evaluate Active Experiment` commands for the Phase 2 research loop
+- `Propose Next Experiment` to ask the agent for a candidate plan based on prior experiment state
+- `Generate Project Memory` command to create or refresh `SCICLI.md` on demand
 - Session history browser with persistent saved sessions
 - Scrollable conversation history with mouse wheel support, visible scrollbar, and position indicator
 - Account dialog for register/login/logout/token refresh from inside the UI
 - Model/provider switcher from inside the UI
 - Searchable skill browser (`/skills`) with in-TUI install and uninstall actions
-- Three-column workbench layout with a left navigator, center conversation pane, and right run/task inspector
+- Three-column workbench layout with a left research navigator, center conversation pane, and right run/task inspector
 - Delegated task browser (`/tasks`) for inspecting child-agent sessions spawned from the current chat
 - Permission prompts for tool execution
 - Logs view for debugging and tool inspection
@@ -197,17 +198,9 @@ SciCLI includes two complementary protections against context blowups:
 
 This is especially important for tools that can return bulky JSON, molecular blocks, coordinates, or large generated documents.
 
-### SciMate Integration
+### MCP Integration
 
-By default, SciCLI is prepared to work with SciMate services:
-
-- `cae-agent` MCP server
-- `origin` MCP server
-- `rdkit` MCP server
-- `arxiv` MCP server via `uvx arxiv-paper-mcp-server`
-- Supabase-backed SciMate authentication
-
-These defaults can be overridden through configuration or environment variables.
+SciCLI can integrate with whatever MCP servers you configure. There are no built-in remote CAE, run-management, or service-specific MCP integrations in the current product.
 
 ### Project Context Files
 
@@ -289,13 +282,13 @@ SciCLI reads configuration from:
     "disabled": ["example/skill"]
   },
   "mcpServers": {
-    "cae-agent": {
-      "type": "sse",
-      "url": "https://your-cae-agent/sse"
-    },
     "rdkit": {
       "type": "streamable-http",
       "url": "https://your-rdkit-server/mcp"
+    },
+    "research-api": {
+      "type": "sse",
+      "url": "https://your-server.example/sse"
     },
     "arxiv": {
       "type": "stdio",
@@ -336,13 +329,6 @@ SciCLI reads configuration from:
 | `GITHUB_TOKEN` | Enable GitHub Copilot if token-based auth is used |
 | `LOCAL_ENDPOINT` | Use a local OpenAI-compatible endpoint |
 | `OPENAI_COMPATIBLE_API_KEY` | API key for a custom OpenAI-compatible endpoint |
-| `SCICLI_MCP_CAE_AGENT_URL` | Override default `cae-agent` MCP endpoint |
-| `SCICLI_MCP_ORIGIN_URL` | Override default `origin` MCP endpoint |
-| `SCICLI_MCP_RDKIT_URL` | Override default `rdkit` MCP endpoint |
-| `SCICLI_MCP_ARXIV_COMMAND` | Override the default `arxiv` MCP launcher command |
-| `SCICLI_MCP_ARXIV_PACKAGE` | Override the default `arxiv` MCP package passed to the launcher |
-| `SCICLI_SUPABASE_URL` | Override SciMate auth backend URL |
-| `SCICLI_SUPABASE_ANON_KEY` | Override SciMate auth anon key |
 | `SHELL` | Default shell path used by the `bash` tool |
 
 ## MCP Support
@@ -358,7 +344,6 @@ Once configured, MCP tools are auto-discovered and exposed to the coding agent. 
 SciCLI's MCP implementation also includes practical behavior for real-world agent use:
 
 - automatic startup of MCP clients when needed
-- remote auth token injection for tools that request `access_token`
 - support for long-running remote servers
 - tool-result compaction so large payloads do not overwhelm model context
 
@@ -395,6 +380,19 @@ Typical setup:
 
 Inside the TUI, slash commands now include:
 
+- `/research set <objective>`
+- `/research show`
+- `/experiment add <title>`
+- `/experiment list`
+- `/experiment compare`
+- `/experiment activate <experiment-id>`
+- `/experiment promote [experiment-id]`
+- `/experiment evaluate <score> <keep|discard|mutate|branch> <summary>`
+- `/experiment rerun [experiment-id]`
+- `/experiment evolve [title]`
+- `/experiment propose`
+- `/artifact list [query]`
+- `/artifact show <artifact-id>`
 - `/skills`
 - `/tasks`
 - `/parent`
@@ -418,9 +416,26 @@ The delegated task browser supports:
 The right-side run/task inspector supports:
 
 - near-real-time task status refresh for delegated child sessions
-- current run state, active skills, delegated task summaries, persisted task event timelines, and tracked file changes in one pane
+- current run state, persisted research summary, experiment plans, lineage board summary, searchable captured artifacts, linked run status, active skills, delegated task summaries, persisted task event timelines, and tracked file changes in one pane
+- lineage-focused summaries now include active/promoted candidates, per-lineage best score, queued generations, and next-step operator hints
+- clickable action chips can now trigger evaluate, promote, evolve, and compare flows directly from the inspector
 - staying visible during normal chat work instead of requiring a modal dialog
-- `Ctrl+I` to focus the inspector, `/` to filter tasks, `.` to filter the run console by tool/detail, `Tab` / `Shift+Tab` to cycle run-console categories, `Enter` to open the selected task, and `Ctrl+X` to stop it
+- `Ctrl+I` to focus the inspector, `/` to filter tasks, `A` to filter artifacts, `.` to filter the run console by tool/detail, `Tab` / `Shift+Tab` to cycle run-console categories, `Enter` to open the selected task, and `Ctrl+X` to stop it
+
+The experiment loop now also tracks explicit selection decisions and lineage:
+
+- evaluation decisions are normalized to `keep`, `discard`, `mutate`, or `branch`
+- experiments carry generation and lineage-root metadata
+- research sessions can mark one promoted experiment as the current best candidate
+- `/experiment evolve` creates the next generation from an evaluated `mutate` or `branch` candidate
+- `/experiment propose` now returns and stores an explicit `mutate` or `branch` strategy for the proposed child experiment
+
+The left workbench navigator now mirrors the research loop directly:
+
+- current research objective and stage
+- active and promoted candidates
+- queued follow-up experiments
+- the most relevant next action for the operator
 
 When work mode is set to `ultrawork`, the current TUI session auto-approves tool permissions so autonomous runs are not interrupted by approval prompts. Delegated child-task sessions now inherit that session-level auto-approval as well.
 
@@ -466,6 +481,16 @@ Common shortcuts:
 Useful command-palette actions:
 
 - `Account`: open the account panel with current login status
+- `Set Research Objective`
+- `Show Research State`
+- `Add Experiment Plan`
+- `Evaluate Active Experiment`
+- `Promote Active Experiment`
+- `Propose Next Experiment`
+- `Evolve Active Experiment`
+- `Rerun Active Experiment`
+- `Compare Experiments`
+- `List Experiment Artifacts`
 - `Login` / `Register` / `Logout` / `Refresh Login`
 - `Focus Inspector`
 - `Open Latest Task`
@@ -509,6 +534,20 @@ Tag-based GitHub Actions publish:
 Repository setup details live in [docs/release-setup.md](docs/release-setup.md).
 
 ## Architecture
+
+Current product direction:
+
+- the original rebrand-and-port baseline is documented in [docs/scicli-implementation-plan.md](docs/scicli-implementation-plan.md)
+- the active product roadmap is documented in [docs/scicli-roadmap.md](docs/scicli-roadmap.md)
+
+Roadmap execution status:
+
+- Phase 0 is complete enough for the current branch: onboarding is singular, built-in/default MCP startup is gone, and the old built-in remote CAE command surface has been removed.
+- Phase 1 is now in progress: a minimal persisted research-session layer exists in the TUI and can store a session objective with `/research set`.
+- Phase 2 has started: experiment plans, delegated-task run links, and evaluation summaries now persist in research state, with new `/experiment ...` commands and inspector visibility.
+- Phase 3 has started: completed experiment runs now persist local provenance artifacts, and the inspector can browse those artifacts directly.
+- Phase 4 is in progress: selection decisions, promoted candidates, and lineage-aware evolve flows are now stored and visible.
+- Phase 5 has started: the workbench now surfaces research objective, candidate queue, and lineage/operator hints directly in the TUI.
 
 Key packages:
 

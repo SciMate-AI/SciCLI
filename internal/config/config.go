@@ -146,13 +146,8 @@ const (
 )
 
 const (
-	DefaultSciMateMcpSseEndpoint       = "https://cae-agent-service-495426659633.us-central1.run.app/sse"
-	DefaultSciMateOriginMcpSseEndpoint = "https://origin-mcp-server-495426659633.us-central1.run.app/sse"
-	DefaultSciMateRdkitMcpHTTPEndpoint = "https://rdkit-mcp-495426659633.us-central1.run.app/mcp"
-	DefaultArxivMcpCommand             = "uvx"
-	DefaultArxivMcpPackage             = "arxiv-paper-mcp-server"
-	DefaultSupabaseURL                 = "https://ltwikvvzbuuuigzkqggs.supabase.co"
-	DefaultSupabaseAnonKey             = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imx0d2lrdnZ6YnV1dWlnemtxZ2dzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njk1NjU4NDEsImV4cCI6MjA4NTE0MTg0MX0.V4oVqYAjDQ3xeiCvCI1iora-WklFdXJAmbpIOia_Eq4"
+	DefaultSupabaseURL     = "https://ltwikvvzbuuuigzkqggs.supabase.co"
+	DefaultSupabaseAnonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imx0d2lrdnZ6YnV1dWlnemtxZ2dzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njk1NjU4NDEsImV4cCI6MjA4NTE0MTg0MX0.V4oVqYAjDQ3xeiCvCI1iora-WklFdXJAmbpIOia_Eq4"
 )
 
 var defaultContextPaths = []string{
@@ -291,27 +286,7 @@ func setDefaults(debug bool) {
 	viper.SetDefault("skills.disabled", []string{})
 	viper.SetDefault("auth.supabase.url", envOrDefault("SCICLI_SUPABASE_URL", DefaultSupabaseURL))
 	viper.SetDefault("auth.supabase.anonKey", envOrDefault("SCICLI_SUPABASE_ANON_KEY", DefaultSupabaseAnonKey))
-	viper.SetDefault("mcpServers", map[string]any{
-		"cae-agent": map[string]any{
-			"type": "sse",
-			"url":  envOrDefault("SCICLI_MCP_CAE_AGENT_URL", DefaultSciMateMcpSseEndpoint),
-		},
-		"origin": map[string]any{
-			"type": "sse",
-			"url":  envOrDefault("SCICLI_MCP_ORIGIN_URL", DefaultSciMateOriginMcpSseEndpoint),
-		},
-		"rdkit": map[string]any{
-			"type": "streamable-http",
-			"url":  envOrDefault("SCICLI_MCP_RDKIT_URL", DefaultSciMateRdkitMcpHTTPEndpoint),
-		},
-		"arxiv": map[string]any{
-			"type":    "stdio",
-			"command": envOrDefault("SCICLI_MCP_ARXIV_COMMAND", DefaultArxivMcpCommand),
-			"args": []string{
-				envOrDefault("SCICLI_MCP_ARXIV_PACKAGE", DefaultArxivMcpPackage),
-			},
-		},
-	})
+	viper.SetDefault("mcpServers", map[string]any{})
 
 	defaultShell := DefaultShellConfig()
 	viper.SetDefault("shell.path", defaultShell.Path)

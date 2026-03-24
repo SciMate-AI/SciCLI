@@ -7,7 +7,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/SciMate-AI/scicli/internal/auth"
 	"github.com/SciMate-AI/scicli/internal/config"
 	"github.com/SciMate-AI/scicli/internal/llm/tools"
 	"github.com/SciMate-AI/scicli/internal/logging"
@@ -58,9 +57,6 @@ func (b *mcpTool) Info() tools.ToolInfo {
 	} else {
 		description = fmt.Sprintf("Remote MCP tool from %s: %s", b.mcpName, description)
 	}
-	if _, ok := b.tool.InputSchema.Properties["access_token"]; ok {
-		description += " Requires SciCLI login; access_token is injected automatically."
-	}
 	return tools.ToolInfo{
 		Name:        fmt.Sprintf("%s_%s", b.mcpName, b.tool.Name),
 		Description: description,
@@ -94,34 +90,8 @@ func runTool(ctx context.Context, c MCPClient, tool mcp.Tool, input string) (too
 	if err = json.Unmarshal([]byte(input), &args); err != nil {
 		return tools.NewTextErrorResponse(fmt.Sprintf("error parsing parameters: %s", err)), nil
 	}
-	var authSvc *auth.Service
-	needsAccessToken := false
-	if _, ok := tool.InputSchema.Properties["access_token"]; ok {
-		needsAccessToken = true
-		authSvc, authErr := auth.NewService()
-		if authErr != nil {
-			return tools.NewTextErrorResponse(authErr.Error()), nil
-		}
-		if !hasUsableAccessToken(args) {
-			token, tokenErr := authSvc.RequireAccessToken()
-			if tokenErr != nil {
-				return tools.NewTextErrorResponse(tokenErr.Error()), nil
-			}
-			args["access_token"] = token
-		}
-	}
 	toolRequest.Params.Arguments = args
 	result, err := c.CallTool(ctx, toolRequest)
-	if err != nil {
-		if needsAccessToken && authSvc != nil && isAuthError(err) {
-			refreshed, refreshErr := authSvc.Refresh()
-			if refreshErr == nil {
-				args["access_token"] = refreshed.AccessToken
-				toolRequest.Params.Arguments = args
-				result, err = c.CallTool(ctx, toolRequest)
-			}
-		}
-	}
 	if err != nil {
 		return tools.NewTextErrorResponse(err.Error()), nil
 	}
@@ -331,29 +301,6 @@ func pathLabel(path string) string {
 		return "root"
 	}
 	return path
-}
-
-func isAuthError(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "unauthorized") ||
-		strings.Contains(msg, "access_token") ||
-		strings.Contains(msg, "access token") ||
-		strings.Contains(msg, "jwt")
-}
-
-func hasUsableAccessToken(args map[string]any) bool {
-	if args == nil {
-		return false
-	}
-	raw, exists := args["access_token"]
-	if !exists {
-		return false
-	}
-	token, ok := raw.(string)
-	return ok && strings.TrimSpace(token) != ""
 }
 
 func (b *mcpTool) Run(ctx context.Context, params tools.ToolCall) (tools.ToolResponse, error) {

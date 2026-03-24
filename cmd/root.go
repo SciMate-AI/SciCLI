@@ -11,7 +11,6 @@ import (
 	"github.com/SciMate-AI/scicli/internal/config"
 	"github.com/SciMate-AI/scicli/internal/db"
 	"github.com/SciMate-AI/scicli/internal/format"
-	"github.com/SciMate-AI/scicli/internal/llm/agent"
 	"github.com/SciMate-AI/scicli/internal/logging"
 	"github.com/SciMate-AI/scicli/internal/onboarding"
 	"github.com/SciMate-AI/scicli/internal/pubsub"
@@ -120,9 +119,6 @@ to assist developers in writing, debugging, and understanding code directly from
 		// Defer shutdown here so it runs for both interactive and non-interactive modes
 		defer app.Shutdown()
 
-		// Initialize MCP tools early for both modes
-		initMCPTools(ctx, app)
-
 		// Non-interactive mode
 		if prompt != "" {
 			// Run non-interactive flow using the App method
@@ -208,20 +204,6 @@ func attemptTUIRecovery(program *tea.Program) {
 	program.Quit()
 }
 
-func initMCPTools(ctx context.Context, app *app.App) {
-	go func() {
-		defer logging.RecoverPanic("MCP-goroutine", nil)
-
-		// Create a context with timeout for the initial MCP tools fetch
-		ctxWithTimeout, cancel := context.WithTimeout(ctx, 90*time.Second)
-		defer cancel()
-
-		// Set this up once with proper error handling
-		agent.GetMcpTools(ctxWithTimeout, app.Permissions)
-		logging.Info("MCP message handling goroutine exiting")
-	}()
-}
-
 func setupSubscriber[T any](
 	ctx context.Context,
 	wg *sync.WaitGroup,
@@ -272,6 +254,7 @@ func setupSubscriptions(app *app.App, parentCtx context.Context) (chan tea.Msg, 
 	setupSubscriber(ctx, &wg, "sessions", app.Sessions.Subscribe, ch)
 	setupSubscriber(ctx, &wg, "messages", app.Messages.Subscribe, ch)
 	setupSubscriber(ctx, &wg, "permissions", app.Permissions.Subscribe, ch)
+	setupSubscriber(ctx, &wg, "research", app.Research.Subscribe, ch)
 	setupSubscriber(ctx, &wg, "coderAgent", app.CoderAgent.Subscribe, ch)
 	setupSubscriber(ctx, &wg, "taskRuns", app.TaskRuns.Subscribe, ch)
 	setupSubscriber(ctx, &wg, "taskRunEvents", app.TaskRuns.SubscribeEvents, ch)
