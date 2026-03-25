@@ -2,10 +2,12 @@ package onboarding
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/SciMate-AI/scicli/internal/auth"
 	"github.com/SciMate-AI/scicli/internal/config"
+	"github.com/SciMate-AI/scicli/internal/tui/util"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -59,7 +61,11 @@ func Run() error {
 		return err
 	}
 
-	program := tea.NewProgram(model, tea.WithAltScreen())
+	options := []tea.ProgramOption{}
+	if strings.TrimSpace(os.Getenv("SCICLI_NO_ALT_SCREEN")) == "" {
+		options = append(options, tea.WithAltScreen())
+	}
+	program := tea.NewProgram(model, options...)
 	result, err := program.Run()
 	if err != nil {
 		return err
@@ -175,6 +181,13 @@ func (m *wizardModel) updateAuthFormStep(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.focusAuthInput((m.authFocus + len(m.authInputs) - 1) % len(m.authInputs))
 		case "down", "tab":
 			return m, m.focusAuthInput((m.authFocus + 1) % len(m.authInputs))
+		case "ctrl+v":
+			if err := util.PasteSingleLineTextInput(&m.authInputs[m.authFocus]); err != nil {
+				m.authNotice = err.Error()
+				return m, nil
+			}
+			m.authNotice = ""
+			return m, nil
 		case "enter":
 			if m.authFocus < len(m.authInputs)-1 {
 				return m, m.focusAuthInput(m.authFocus + 1)
@@ -256,6 +269,17 @@ func (m *wizardModel) updateCredentialStep(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if current.SupportsManualAPIKey && current.DetectedCredential {
 				m.useDetectedCredential = !m.useDetectedCredential
 				return m, m.currentFocusCmd()
+			}
+		case "ctrl+v":
+			if m.shouldFocusCredentialInputs() {
+				active := m.activeCredentialInputs()
+				if err := util.PasteSingleLineTextInput(&active[m.credentialFocus]); err != nil {
+					m.err = err
+					return m, nil
+				}
+				m.syncCredentialInputs(active)
+				m.err = nil
+				return m, nil
 			}
 		case "up", "shift+tab":
 			if m.shouldFocusCredentialInputs() {
@@ -575,8 +599,6 @@ func (m *wizardModel) initCredentialInputs() {
 	apiKey.Placeholder = "API key"
 	apiKey.Prompt = "> "
 	apiKey.Width = 56
-	apiKey.EchoMode = textinput.EchoPassword
-	apiKey.EchoCharacter = '*'
 
 	model := textinput.New()
 	model.Placeholder = "Model"

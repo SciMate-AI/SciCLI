@@ -1,6 +1,6 @@
 {
   "name": "@scimate/scicli",
-  "version": "0.0.73",
+  "version": "0.0.74",
   "description": "SciCLI terminal agent packaged for npm distribution",
   "license": "MIT",
   "bin": {

@@ -103,8 +103,8 @@ func NewOpenCodeTheme() *OpenCodeTheme {
 		Light: lightCurrentLine,
 	}
 	theme.BackgroundDarkerColor = lipgloss.AdaptiveColor{
-		Dark:  "#121212", // Slightly darker than background
-		Light: "#ffffff", // Slightly lighter than background
+		Dark:  "#1e1e1e", // Keep contrast without rendering near-black chips
+		Light: "#f5f5f5", // Keep contrast without stark white blocks
 	}
 
 	// Border colors

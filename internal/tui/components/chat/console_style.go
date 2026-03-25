@@ -30,7 +30,7 @@ func consoleSection(width int, title string, body ...string) string {
 		Padding(0, 1).
 		Border(lipgloss.NormalBorder()).
 		BorderForeground(t.BorderDim()).
-		Background(t.BackgroundSecondary()).
+		Background(t.Background()).
 		Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
 }
 

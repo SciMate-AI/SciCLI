@@ -25,6 +25,8 @@ var (
 	runtimeWorkMode      string
 	runtimeAutoApprove   bool
 	runtimeAllowPrefixes []string
+	runtimeNoAltScreen   bool
+	runtimeNoMouse       bool
 )
 
 var rootCmd = &cobra.Command{
@@ -69,6 +71,14 @@ to assist developers in writing, debugging, and understanding code directly from
 		prompt, _ := cmd.Flags().GetString("prompt")
 		outputFormat, _ := cmd.Flags().GetString("output-format")
 		quiet, _ := cmd.Flags().GetBool("quiet")
+		noAltScreen := true
+		noMouse := true
+		if cmd.Flags().Changed("no-alt-screen") {
+			noAltScreen, _ = cmd.Flags().GetBool("no-alt-screen")
+		}
+		if cmd.Flags().Changed("no-mouse") {
+			noMouse, _ = cmd.Flags().GetBool("no-mouse")
+		}
 
 		// Validate format option
 		if !format.IsValid(outputFormat) {
@@ -90,6 +100,16 @@ to assist developers in writing, debugging, and understanding code directly from
 		}
 		if err := loadRuntimeConfig("", debug); err != nil {
 			return err
+		}
+		if noAltScreen {
+			_ = os.Setenv("SCICLI_NO_ALT_SCREEN", "1")
+		} else {
+			_ = os.Unsetenv("SCICLI_NO_ALT_SCREEN")
+		}
+		if noMouse {
+			_ = os.Setenv("SCICLI_NO_MOUSE", "1")
+		} else {
+			_ = os.Unsetenv("SCICLI_NO_MOUSE")
 		}
 		if config.NeedsOnboarding() {
 			if prompt != "" {
@@ -128,10 +148,16 @@ to assist developers in writing, debugging, and understanding code directly from
 		// Interactive mode
 		// Set up the TUI
 		zone.NewGlobal()
+		programOptions := []tea.ProgramOption{}
+		if !noAltScreen {
+			programOptions = append(programOptions, tea.WithAltScreen())
+		}
+		if !noMouse {
+			programOptions = append(programOptions, tea.WithMouseCellMotion())
+		}
 		program := tea.NewProgram(
 			tui.New(app),
-			tea.WithAltScreen(),
-			tea.WithMouseCellMotion(),
+			programOptions...,
 		)
 
 		// Setup the subscriptions, this will send services events to the TUI
@@ -298,6 +324,8 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&runtimeWorkMode, "work-mode", "", "Work mode override: interactive, auto, ultrawork")
 	rootCmd.PersistentFlags().BoolVar(&runtimeAutoApprove, "auto-approve", false, "Automatically approve tool actions allowed by the runtime policy")
 	rootCmd.PersistentFlags().StringSliceVar(&runtimeAllowPrefixes, "allow-prefix", nil, "Additional shell command prefixes to auto-approve")
+	rootCmd.PersistentFlags().BoolVar(&runtimeNoAltScreen, "no-alt-screen", true, "Run TUI without alternate screen buffer for easier terminal copy/select")
+	rootCmd.PersistentFlags().BoolVar(&runtimeNoMouse, "no-mouse", true, "Run TUI without mouse capture for easier text selection")
 	rootCmd.Flags().StringP("prompt", "p", "", "Prompt to run in non-interactive mode")
 
 	// Add format flag with validation logic

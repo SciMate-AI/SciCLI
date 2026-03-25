@@ -284,6 +284,17 @@ func (d *providerSetupDialogCmp) updateCredentialStep(msg tea.Msg) (tea.Model, t
 				d.errMsg = ""
 				return d, d.currentFocusCmd()
 			}
+		case msg.String() == "ctrl+v":
+			if d.shouldFocusCredentialInputs() {
+				active := d.activeCredentialInputs()
+				if err := util.PasteSingleLineTextInput(&active[d.credentialFocus]); err != nil {
+					d.errMsg = err.Error()
+					return d, nil
+				}
+				d.syncCredentialInputs(active)
+				d.errMsg = ""
+				return d, nil
+			}
 		case key.Matches(msg, providerSetupKeys.Up), key.Matches(msg, providerSetupKeys.BackTab):
 			if d.shouldFocusCredentialInputs() {
 				return d, d.focusCredentialInput((d.credentialFocus+len(d.activeCredentialInputs())-1)%len(d.activeCredentialInputs()))
@@ -457,8 +468,6 @@ func (d *providerSetupDialogCmp) initCredentialInputs() {
 	apiKey.Placeholder = "API key"
 	apiKey.Prompt = ""
 	apiKey.Width = 56
-	apiKey.EchoMode = textinput.EchoPassword
-	apiKey.EchoCharacter = '*'
 
 	model := textinput.New()
 	model.Placeholder = "Custom model"
