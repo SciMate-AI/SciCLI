@@ -588,6 +588,16 @@ func (a *agent) processEvent(ctx context.Context, sessionID string, assistantMsg
 			return context.Canceled
 		}
 		logging.ErrorPersist(event.Error.Error())
+		errText := strings.TrimSpace(event.Error.Error())
+		if errText != "" {
+			if existing := strings.TrimSpace(assistantMsg.Content().String()); existing != "" {
+				assistantMsg.SetContent(existing + "\n\nRequest failed:\n" + errText)
+			} else {
+				assistantMsg.SetContent("Request failed:\n" + errText)
+			}
+		}
+		assistantMsg.AddFinish(message.FinishReasonError)
+		_ = a.messages.Update(ctx, *assistantMsg)
 		return event.Error
 	case provider.EventComplete:
 		if event.Response.GeminiRawContent != nil {

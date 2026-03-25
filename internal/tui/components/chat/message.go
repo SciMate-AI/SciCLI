@@ -46,37 +46,26 @@ func toMarkdown(content string, focused bool, width int) string {
 
 func renderMessage(msg string, isUser bool, isFocused bool, width int, info ...string) string {
 	t := theme.CurrentTheme()
-
-	style := styles.BaseStyle().
-		Width(width - 1).
-		BorderLeft(true).
-		Foreground(t.TextMuted()).
-		BorderForeground(t.Primary()).
-		BorderStyle(lipgloss.ThickBorder())
-
+	contentWidth := max(12, width-4)
+	roleBadge := consoleBadge("scicli", t.BackgroundDarker(), t.Text())
+	headerMeta := consoleMuted("assistant")
 	if isUser {
-		style = style.BorderForeground(t.Secondary())
+		roleBadge = consoleBadge("operator", t.Secondary(), t.Background())
+		headerMeta = consoleMuted("prompt")
+	} else if isFocused {
+		roleBadge = consoleBadge("live", t.Primary(), t.Background())
+		headerMeta = consoleMuted("stream")
 	}
 
-	// Apply markdown formatting and handle background color
-	parts := []string{
-		styles.ForceReplaceBackgroundWithLipgloss(toMarkdown(msg, isFocused, width), t.Background()),
-	}
-
-	// Remove newline at the end
-	parts[0] = strings.TrimSuffix(parts[0], "\n")
-	if len(info) > 0 {
-		parts = append(parts, info...)
-	}
-
-	rendered := style.Render(
-		lipgloss.JoinVertical(
-			lipgloss.Left,
-			parts...,
-		),
+	header := lipgloss.JoinHorizontal(
+		lipgloss.Left,
+		roleBadge,
+		" ",
+		headerMeta,
 	)
-
-	return rendered
+	body := styles.ForceReplaceBackgroundWithLipgloss(toMarkdown(msg, isFocused, contentWidth), t.Background())
+	body = strings.TrimSuffix(body, "\n")
+	return consoleTranscriptBlock(width, header, body, info...)
 }
 
 func renderUserMessage(msg message.Message, isFocused bool, width int, position int) uiMessage {
@@ -84,7 +73,7 @@ func renderUserMessage(msg message.Message, isFocused bool, width int, position 
 	t := theme.CurrentTheme()
 	attachmentStyles := styles.BaseStyle().
 		MarginLeft(1).
-		Background(t.TextMuted()).
+		Background(t.BackgroundDarker()).
 		Foreground(t.Text())
 	for _, attachment := range msg.BinaryContent() {
 		file := filepath.Base(attachment.Path)
@@ -103,22 +92,20 @@ func renderUserMessage(msg message.Message, isFocused bool, width int, position 
 	} else {
 		content = renderMessage(msg.Content().String(), true, isFocused, width)
 	}
-	userMsg := uiMessage{
+	return uiMessage{
 		ID:          msg.ID,
 		messageType: userMessageType,
 		position:    position,
 		height:      lipgloss.Height(content),
 		content:     content,
 	}
-	return userMsg
 }
 
-// Returns multiple uiMessages because of the tool calls
 func renderAssistantMessage(
 	msg message.Message,
 	msgIndex int,
-	allMessages []message.Message, // we need this to get tool results and the user message
-	messagesService message.Service, // We need this to get the task tool messages
+	allMessages []message.Message,
+	messagesService message.Service,
 	focusedUIMessageId string,
 	isSummary bool,
 	expandTools bool,
@@ -132,61 +119,70 @@ func renderAssistantMessage(
 	finished := msg.IsFinished()
 	finishData := msg.FinishPart()
 	info := []string{}
+	fallbackContent := ""
 
 	t := theme.CurrentTheme()
 	baseStyle := styles.BaseStyle()
 
-	// Add finish info if available
 	if finished {
+		modelName := string(msg.Model)
+		if model, ok := models.SupportedModels[msg.Model]; ok {
+			modelName = model.Name
+		}
 		switch finishData.Reason {
 		case message.FinishReasonEndTurn:
 			took := formatTimestampDiff(msg.CreatedAt, finishData.Time)
-			info = append(info, baseStyle.
-				Width(width-1).
-				Foreground(t.TextMuted()).
-				Render(fmt.Sprintf(" %s (%s)", models.SupportedModels[msg.Model].Name, took)),
-			)
+			info = append(info, baseStyle.Foreground(t.TextMuted()).Render(modelName+" ("+took+")"))
 		case message.FinishReasonCanceled:
-			info = append(info, baseStyle.
-				Width(width-1).
-				Foreground(t.TextMuted()).
-				Render(fmt.Sprintf(" %s (%s)", models.SupportedModels[msg.Model].Name, "canceled")),
-			)
+			info = append(info, baseStyle.Foreground(t.TextMuted()).Render(modelName+" (canceled)"))
 		case message.FinishReasonError:
-			info = append(info, baseStyle.
-				Width(width-1).
-				Foreground(t.TextMuted()).
-				Render(fmt.Sprintf(" %s (%s)", models.SupportedModels[msg.Model].Name, "error")),
-			)
+			info = append(info, baseStyle.Foreground(t.Error()).Render(modelName+" (error)"))
+			if strings.TrimSpace(content) == "" {
+				fallbackContent = "Request failed before the model returned content."
+			}
 		case message.FinishReasonPermissionDenied:
-			info = append(info, baseStyle.
-				Width(width-1).
-				Foreground(t.TextMuted()).
-				Render(fmt.Sprintf(" %s (%s)", models.SupportedModels[msg.Model].Name, "permission denied")),
-			)
+			info = append(info, baseStyle.Foreground(t.Warning()).Render(modelName+" (permission denied)"))
+			if strings.TrimSpace(content) == "" {
+				fallbackContent = "Permission denied while executing this step."
+			}
+		case message.FinishReasonMaxTokens:
+			info = append(info, baseStyle.Foreground(t.Warning()).Render(modelName+" (max tokens)"))
+			if strings.TrimSpace(content) == "" {
+				fallbackContent = "Stopped because the response hit the token limit."
+			}
 		}
+	}
+
+	if strings.TrimSpace(content) == "" && fallbackContent != "" {
+		content = fallbackContent
 	}
 	if content != "" || (finished && finishData.Reason == message.FinishReasonEndTurn) {
 		if content == "" {
 			content = "*Finished without output*"
 		}
 		if isSummary {
-			info = append(info, baseStyle.Width(width-1).Foreground(t.TextMuted()).Render(" (summary)"))
+			info = append(info, consoleMuted("summary"))
 		}
 
-		content = renderMessage(content, false, true, width, info...)
+		rendered := renderMessage(content, false, msg.ID == focusedUIMessageId, width, info...)
 		messages = append(messages, uiMessage{
 			ID:          msg.ID,
 			messageType: assistantMessageType,
 			position:    position,
-			height:      lipgloss.Height(content),
-			content:     content,
+			height:      lipgloss.Height(rendered),
+			content:     rendered,
 		})
-		position += messages[0].height
-		position++ // for the space
+		position += messages[0].height + 1
 	} else if thinking && thinkingContent != "" {
-		// Render the thinking content
-		content = renderMessage(thinkingContent, false, msg.ID == focusedUIMessageId, width)
+		rendered := renderMessage(thinkingContent, false, msg.ID == focusedUIMessageId, width, consoleMuted("reasoning"))
+		messages = append(messages, uiMessage{
+			ID:          msg.ID,
+			messageType: assistantMessageType,
+			position:    position,
+			height:      lipgloss.Height(rendered),
+			content:     rendered,
+		})
+		position += messages[len(messages)-1].height + 1
 	}
 
 	for i, toolCall := range msg.ToolCalls() {
@@ -201,8 +197,7 @@ func renderAssistantMessage(
 			i+1,
 		)
 		messages = append(messages, toolCallContent)
-		position += toolCallContent.height
-		position++ // for the space
+		position += toolCallContent.height + 1
 	}
 	return messages
 }
@@ -274,7 +269,6 @@ func getToolAction(name string) string {
 	return "Working..."
 }
 
-// renders params, params[0] (params[1]=params[2] ....)
 func renderParams(paramsWidth int, params ...string) string {
 	if len(params) == 0 {
 		return ""
@@ -288,8 +282,6 @@ func renderParams(paramsWidth int, params ...string) string {
 		return mainParam
 	}
 	otherParams := params[1:]
-	// create pairs of key/value
-	// if odd number of params, the last one is a key without value
 	if len(otherParams)%2 != 0 {
 		otherParams = append(otherParams, "")
 	}
@@ -304,9 +296,8 @@ func renderParams(paramsWidth int, params ...string) string {
 	}
 
 	partsRendered := strings.Join(parts, ", ")
-	remainingWidth := paramsWidth - lipgloss.Width(partsRendered) - 5 // for the space
+	remainingWidth := paramsWidth - lipgloss.Width(partsRendered) - 5
 	if remainingWidth < 30 {
-		// No space for the params, just show the main
 		return mainParam
 	}
 
@@ -340,25 +331,19 @@ func renderToolParams(paramWidth int, toolCall message.ToolCall) string {
 	case agent.AgentToolName:
 		var params agent.AgentParams
 		json.Unmarshal([]byte(toolCall.Input), &params)
-		prompt := strings.ReplaceAll(params.Prompt, "\n", " ")
-		return renderParams(paramWidth, prompt)
+		return renderParams(paramWidth, strings.ReplaceAll(params.Prompt, "\n", " "))
 	case tools.BashToolName:
 		var params tools.BashParams
 		json.Unmarshal([]byte(toolCall.Input), &params)
-		command := strings.ReplaceAll(params.Command, "\n", " ")
-		return renderParams(paramWidth, command)
+		return renderParams(paramWidth, strings.ReplaceAll(params.Command, "\n", " "))
 	case tools.EditToolName:
 		var params tools.EditParams
 		json.Unmarshal([]byte(toolCall.Input), &params)
-		filePath := removeWorkingDirPrefix(params.FilePath)
-		return renderParams(paramWidth, filePath)
+		return renderParams(paramWidth, removeWorkingDirPrefix(params.FilePath))
 	case tools.FetchToolName:
 		var params tools.FetchParams
 		json.Unmarshal([]byte(toolCall.Input), &params)
-		url := params.URL
-		toolParams := []string{
-			url,
-		}
+		toolParams := []string{params.URL}
 		if params.Format != "" {
 			toolParams = append(toolParams, "format", params.Format)
 		}
@@ -369,10 +354,7 @@ func renderToolParams(paramWidth int, toolCall message.ToolCall) string {
 	case tools.GlobToolName:
 		var params tools.GlobParams
 		json.Unmarshal([]byte(toolCall.Input), &params)
-		pattern := params.Pattern
-		toolParams := []string{
-			pattern,
-		}
+		toolParams := []string{params.Pattern}
 		if params.Path != "" {
 			toolParams = append(toolParams, "path", params.Path)
 		}
@@ -380,10 +362,7 @@ func renderToolParams(paramWidth int, toolCall message.ToolCall) string {
 	case tools.GrepToolName:
 		var params tools.GrepParams
 		json.Unmarshal([]byte(toolCall.Input), &params)
-		pattern := params.Pattern
-		toolParams := []string{
-			pattern,
-		}
+		toolParams := []string{params.Pattern}
 		if params.Path != "" {
 			toolParams = append(toolParams, "path", params.Path)
 		}
@@ -409,10 +388,7 @@ func renderToolParams(paramWidth int, toolCall message.ToolCall) string {
 	case tools.ViewToolName:
 		var params tools.ViewParams
 		json.Unmarshal([]byte(toolCall.Input), &params)
-		filePath := removeWorkingDirPrefix(params.FilePath)
-		toolParams := []string{
-			filePath,
-		}
+		toolParams := []string{removeWorkingDirPrefix(params.FilePath)}
 		if params.Limit != 0 {
 			toolParams = append(toolParams, "limit", fmt.Sprintf("%d", params.Limit))
 		}
@@ -423,11 +399,9 @@ func renderToolParams(paramWidth int, toolCall message.ToolCall) string {
 	case tools.WriteToolName:
 		var params tools.WriteParams
 		json.Unmarshal([]byte(toolCall.Input), &params)
-		filePath := removeWorkingDirPrefix(params.FilePath)
-		return renderParams(paramWidth, filePath)
+		return renderParams(paramWidth, removeWorkingDirPrefix(params.FilePath))
 	default:
-		input := strings.ReplaceAll(toolCall.Input, "\n", " ")
-		params = renderParams(paramWidth, input)
+		params = renderParams(paramWidth, strings.ReplaceAll(toolCall.Input, "\n", " "))
 	}
 	return params
 }
@@ -483,25 +457,16 @@ func renderToolResponse(toolCall message.ToolCall, response message.ToolResult, 
 	if response.IsError {
 		errContent := fmt.Sprintf("Error: %s", strings.ReplaceAll(response.Content, "\n", " "))
 		errContent = ansi.Truncate(errContent, width-1, "...")
-		return baseStyle.
-			Width(width).
-			Foreground(t.Error()).
-			Render(errContent), 0
+		return baseStyle.Width(width).Foreground(t.Error()).Render(errContent), 0
 	}
 
 	resultContent, hiddenLines := renderDefaultToolContent(response, expanded)
 	switch toolCall.Name {
 	case agent.AgentToolName:
-		return styles.ForceReplaceBackgroundWithLipgloss(
-			toMarkdown(resultContent, false, width),
-			t.Background(),
-		), hiddenLines
+		return styles.ForceReplaceBackgroundWithLipgloss(toMarkdown(resultContent, false, width), t.Background()), hiddenLines
 	case tools.BashToolName:
 		resultContent = fmt.Sprintf("```bash\n%s\n```", resultContent)
-		return styles.ForceReplaceBackgroundWithLipgloss(
-			toMarkdown(resultContent, true, width),
-			t.Background(),
-		), hiddenLines
+		return styles.ForceReplaceBackgroundWithLipgloss(toMarkdown(resultContent, true, width), t.Background()), hiddenLines
 	case tools.EditToolName:
 		metadata := tools.EditResponseMetadata{}
 		json.Unmarshal([]byte(response.Metadata), &metadata)
@@ -519,56 +484,32 @@ func renderToolResponse(toolCall message.ToolCall, response message.ToolResult, 
 			mdFormat = "html"
 		}
 		resultContent = fmt.Sprintf("```%s\n%s\n```", mdFormat, resultContent)
-		return styles.ForceReplaceBackgroundWithLipgloss(
-			toMarkdown(resultContent, true, width),
-			t.Background(),
-		), hiddenLines
-	case tools.GlobToolName:
-		return baseStyle.Width(width).Foreground(t.TextMuted()).Render(resultContent), hiddenLines
-	case tools.GrepToolName:
-		return baseStyle.Width(width).Foreground(t.TextMuted()).Render(resultContent), hiddenLines
-	case tools.LSToolName:
-		return baseStyle.Width(width).Foreground(t.TextMuted()).Render(resultContent), hiddenLines
-	case tools.SourcegraphToolName:
+		return styles.ForceReplaceBackgroundWithLipgloss(toMarkdown(resultContent, true, width), t.Background()), hiddenLines
+	case tools.GlobToolName, tools.GrepToolName, tools.LSToolName, tools.SourcegraphToolName:
 		return baseStyle.Width(width).Foreground(t.TextMuted()).Render(resultContent), hiddenLines
 	case tools.ViewToolName:
 		metadata := tools.ViewResponseMetadata{}
 		json.Unmarshal([]byte(response.Metadata), &metadata)
 		ext := filepath.Ext(metadata.FilePath)
-		if ext == "" {
-			ext = ""
-		} else {
+		if ext != "" {
 			ext = strings.ToLower(ext[1:])
 		}
 		viewContent, viewHiddenLines := truncateToolContent(metadata.Content, expanded)
 		resultContent = fmt.Sprintf("```%s\n%s\n```", ext, viewContent)
-		return styles.ForceReplaceBackgroundWithLipgloss(
-			toMarkdown(resultContent, true, width),
-			t.Background(),
-		), viewHiddenLines
+		return styles.ForceReplaceBackgroundWithLipgloss(toMarkdown(resultContent, true, width), t.Background()), viewHiddenLines
 	case tools.WriteToolName:
 		params := tools.WriteParams{}
 		json.Unmarshal([]byte(toolCall.Input), &params)
-		metadata := tools.WriteResponseMetadata{}
-		json.Unmarshal([]byte(response.Metadata), &metadata)
 		ext := filepath.Ext(params.FilePath)
-		if ext == "" {
-			ext = ""
-		} else {
+		if ext != "" {
 			ext = strings.ToLower(ext[1:])
 		}
 		writeContent, writeHiddenLines := truncateToolContent(params.Content, expanded)
 		resultContent = fmt.Sprintf("```%s\n%s\n```", ext, writeContent)
-		return styles.ForceReplaceBackgroundWithLipgloss(
-			toMarkdown(resultContent, true, width),
-			t.Background(),
-		), writeHiddenLines
+		return styles.ForceReplaceBackgroundWithLipgloss(toMarkdown(resultContent, true, width), t.Background()), writeHiddenLines
 	default:
 		resultContent = fmt.Sprintf("```text\n%s\n```", resultContent)
-		return styles.ForceReplaceBackgroundWithLipgloss(
-			toMarkdown(resultContent, true, width),
-			t.Background(),
-		), hiddenLines
+		return styles.ForceReplaceBackgroundWithLipgloss(toMarkdown(resultContent, true, width), t.Background()), hiddenLines
 	}
 }
 
@@ -588,70 +529,33 @@ func renderToolMessage(
 
 	t := theme.CurrentTheme()
 	baseStyle := styles.BaseStyle()
-
-	style := baseStyle.
-		Width(width - 1).
-		BorderLeft(true).
-		BorderStyle(lipgloss.ThickBorder()).
-		PaddingLeft(1).
-		BorderForeground(t.TextMuted())
-
 	response := findToolResponse(toolCall.ID, allMessages)
-	toolNameText := baseStyle.Foreground(t.TextMuted()).
-		Render(fmt.Sprintf("%s: ", toolName(toolCall.Name)))
+
+	header := lipgloss.JoinHorizontal(
+		lipgloss.Left,
+		consoleBadge(toolName(toolCall.Name), t.BackgroundDarker(), t.Text()),
+		" ",
+		consoleMuted(renderToolParams(max(12, width/2), toolCall)),
+	)
+	if nested {
+		header = lipgloss.JoinHorizontal(lipgloss.Left, consoleMuted("->"), " ", header)
+	}
 
 	if !toolCall.Finished {
-		// Get a brief description of what the tool is doing
-		toolAction := getToolAction(toolCall.Name)
-
-		progressText := baseStyle.
-			Width(width - 2 - lipgloss.Width(toolNameText)).
-			Foreground(t.TextMuted()).
-			Render(fmt.Sprintf("%s", toolAction))
-
-		content := style.Render(lipgloss.JoinHorizontal(lipgloss.Left, toolNameText, progressText))
-		toolMsg := uiMessage{
+		content := consoleTranscriptBlock(
+			width,
+			header,
+			baseStyle.Foreground(t.TextMuted()).Render(getToolAction(toolCall.Name)),
+		)
+		return uiMessage{
 			messageType: toolMessageType,
 			position:    position,
 			height:      lipgloss.Height(content),
 			content:     content,
 		}
-		return toolMsg
 	}
 
-	params := renderToolParams(width-2-lipgloss.Width(toolNameText), toolCall)
-	responseContent := ""
-	hiddenLines := 0
-	if response != nil {
-		responseContent, hiddenLines = renderToolResponse(toolCall, *response, width-2, expandTools)
-		responseContent = strings.TrimSuffix(responseContent, "\n")
-	} else {
-		responseContent = baseStyle.
-			Italic(true).
-			Width(width - 2).
-			Foreground(t.TextMuted()).
-			Render("Waiting for response...")
-	}
-
-	parts := []string{}
-	if !nested {
-		formattedParams := baseStyle.
-			Width(width - 2 - lipgloss.Width(toolNameText)).
-			Foreground(t.TextMuted()).
-			Render(params)
-
-		parts = append(parts, lipgloss.JoinHorizontal(lipgloss.Left, toolNameText, formattedParams))
-	} else {
-		prefix := baseStyle.
-			Foreground(t.TextMuted()).
-			Render(" └ ")
-		formattedParams := baseStyle.
-			Width(width - 2 - lipgloss.Width(toolNameText)).
-			Foreground(t.TextMuted()).
-			Render(params)
-		parts = append(parts, lipgloss.JoinHorizontal(lipgloss.Left, prefix, toolNameText, formattedParams))
-	}
-
+	footers := []string{}
 	if toolCall.Name == agent.AgentToolName {
 		taskMessages, _ := messagesService.List(context.Background(), toolCall.ID)
 		toolCalls := []message.ToolCall{}
@@ -660,40 +564,37 @@ func renderToolMessage(
 		}
 		for _, call := range toolCalls {
 			rendered := renderToolMessage(call, []message.Message{}, messagesService, focusedUIMessageId, expandTools, true, width, 0)
-			parts = append(parts, rendered.content)
-		}
-	}
-	if responseContent != "" && !nested {
-		parts = append(parts, responseContent)
-		if hint := renderToolCollapseHint(width-2, hiddenLines); hint != "" {
-			parts = append(parts, hint)
+			footers = append(footers, rendered.content)
 		}
 	}
 
-	content := style.Render(
-		lipgloss.JoinVertical(
-			lipgloss.Left,
-			parts...,
-		),
-	)
-	if nested {
-		content = lipgloss.JoinVertical(
-			lipgloss.Left,
-			parts...,
-		)
+	if !nested {
+		if response != nil {
+			responseContent, hiddenLines := renderToolResponse(toolCall, *response, width-2, expandTools)
+			footers = append(footers, strings.TrimSuffix(responseContent, "\n"))
+			if hint := renderToolCollapseHint(width-2, hiddenLines); hint != "" {
+				footers = append(footers, hint)
+			}
+		} else {
+			footers = append(footers, baseStyle.
+				Italic(true).
+				Width(width-2).
+				Foreground(t.TextMuted()).
+				Render("Waiting for response..."))
+		}
 	}
-	toolMsg := uiMessage{
+
+	content := consoleTranscriptBlock(width, header, "", footers...)
+	return uiMessage{
 		messageType: toolMessageType,
 		position:    position,
 		height:      lipgloss.Height(content),
 		content:     content,
 	}
-	return toolMsg
 }
 
-// Helper function to format the time difference between two Unix timestamps
 func formatTimestampDiff(start, end int64) string {
-	diffSeconds := float64(end-start) / 1000.0 // Convert to seconds
+	diffSeconds := float64(end-start) / 1000.0
 	if diffSeconds < 1 {
 		return fmt.Sprintf("%dms", int(diffSeconds*1000))
 	}

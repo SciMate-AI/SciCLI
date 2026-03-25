@@ -3,6 +3,7 @@ package util
 import (
 	"time"
 
+	"github.com/SciMate-AI/scicli/internal/logging"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -13,6 +14,7 @@ func CmdHandler(msg tea.Msg) tea.Cmd {
 }
 
 func ReportError(err error) tea.Cmd {
+	logging.Error(err.Error())
 	return CmdHandler(InfoMsg{
 		Type: InfoTypeError,
 		Msg:  err.Error(),
@@ -35,6 +37,7 @@ func ReportInfo(info string) tea.Cmd {
 }
 
 func ReportWarn(warn string) tea.Cmd {
+	logging.Warn(warn)
 	return CmdHandler(InfoMsg{
 		Type: InfoTypeWarn,
 		Msg:  warn,

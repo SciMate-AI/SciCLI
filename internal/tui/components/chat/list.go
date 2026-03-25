@@ -7,8 +7,11 @@ import (
 	"strings"
 
 	"github.com/SciMate-AI/scicli/internal/app"
+	"github.com/SciMate-AI/scicli/internal/config"
+	"github.com/SciMate-AI/scicli/internal/llm/models"
 	"github.com/SciMate-AI/scicli/internal/message"
 	"github.com/SciMate-AI/scicli/internal/pubsub"
+	"github.com/SciMate-AI/scicli/internal/research"
 	"github.com/SciMate-AI/scicli/internal/session"
 	"github.com/SciMate-AI/scicli/internal/tui/components/dialog"
 	"github.com/SciMate-AI/scicli/internal/tui/styles"
@@ -25,6 +28,15 @@ type cacheItem struct {
 	width   int
 	content []uiMessage
 }
+
+type messagesOverviewLoadedMsg struct {
+	sessionID         string
+	researchSessionID string
+	researchInherited bool
+	researchTitle     string
+	researchState     research.SessionState
+}
+
 type messagesCmp struct {
 	app           *app.App
 	width, height int
@@ -39,6 +51,11 @@ type messagesCmp struct {
 	expandTools   bool
 	attachments   viewport.Model
 	contentLines  int
+
+	research          research.SessionState
+	researchSessionID string
+	researchInherited bool
+	researchTitle     string
 }
 type renderFinishedMsg struct{}
 
@@ -69,7 +86,7 @@ var messageKeys = MessageKeys{
 }
 
 func (m *messagesCmp) Init() tea.Cmd {
-	return tea.Batch(m.viewport.Init(), m.spinner.Tick)
+	return tea.Batch(m.viewport.Init(), m.spinner.Tick, m.loadOverviewCmd())
 }
 
 func (m *messagesCmp) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -81,7 +98,7 @@ func (m *messagesCmp) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case SessionSelectedMsg:
 		if msg.ID != m.session.ID {
 			cmd := m.SetSession(msg)
-			return m, cmd
+			return m, tea.Batch(cmd, m.loadOverviewCmd())
 		}
 		return m, nil
 	case SessionClearedMsg:
@@ -89,6 +106,10 @@ func (m *messagesCmp) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.messages = make([]message.Message, 0)
 		m.currentMsgID = ""
 		m.rendering = false
+		m.research = research.SessionState{}
+		m.researchSessionID = ""
+		m.researchInherited = false
+		m.researchTitle = ""
 		return m, nil
 
 	case tea.KeyMsg:
@@ -117,7 +138,22 @@ func (m *messagesCmp) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				delete(m.cachedContent, m.currentMsgID)
 				m.renderView()
 			}
+			return m, m.loadOverviewCmd()
 		}
+	case pubsub.Event[research.SessionState]:
+		if msg.Payload.SessionID == m.researchSessionID {
+			m.research = msg.Payload
+			return m, nil
+		}
+	case messagesOverviewLoadedMsg:
+		if msg.sessionID != m.session.ID {
+			return m, nil
+		}
+		m.research = msg.researchState
+		m.researchSessionID = msg.researchSessionID
+		m.researchInherited = msg.researchInherited
+		m.researchTitle = msg.researchTitle
+		return m, nil
 	case pubsub.Event[message.Message]:
 		needsRerender := false
 		if msg.Type == pubsub.CreatedEvent {
@@ -181,6 +217,24 @@ func (m *messagesCmp) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *messagesCmp) IsAgentWorking() bool {
 	return m.app.CoderAgent.IsSessionBusy(m.session.ID)
+}
+
+func (m *messagesCmp) loadOverviewCmd() tea.Cmd {
+	sessionID := m.session.ID
+	currentSession := m.session
+	if sessionID == "" {
+		return nil
+	}
+	return func() tea.Msg {
+		researchSessionID, inherited, title, state := loadResearchSnapshot(context.Background(), m.app, currentSession)
+		return messagesOverviewLoadedMsg{
+			sessionID:         sessionID,
+			researchSessionID: researchSessionID,
+			researchInherited: inherited,
+			researchTitle:     title,
+			researchState:     state,
+		}
+	}
 }
 
 func formatTimeDifference(unixTime1, unixTime2 int64) string {
@@ -252,14 +306,11 @@ func (m *messagesCmp) renderView() {
 	}
 
 	messages := make([]string, 0)
-	for _, v := range m.uiMessages {
-		messages = append(messages, lipgloss.JoinVertical(lipgloss.Left, v.content),
-			baseStyle.
-				Width(m.width).
-				Render(
-					"",
-				),
-		)
+	for i, v := range m.uiMessages {
+		if i > 0 {
+			messages = append(messages, consoleDivider(max(8, m.viewport.Width-2), ""))
+		}
+		messages = append(messages, lipgloss.JoinVertical(lipgloss.Left, v.content))
 	}
 
 	content := baseStyle.
@@ -276,6 +327,7 @@ func (m *messagesCmp) renderView() {
 
 func (m *messagesCmp) View() string {
 	baseStyle := styles.BaseStyle()
+	header := m.renderConsoleHeader()
 
 	if m.rendering {
 		return baseStyle.
@@ -283,6 +335,7 @@ func (m *messagesCmp) View() string {
 			Render(
 				lipgloss.JoinVertical(
 					lipgloss.Top,
+					header,
 					"Loading...",
 					m.working(),
 					m.footer(),
@@ -292,7 +345,7 @@ func (m *messagesCmp) View() string {
 	if len(m.messages) == 0 {
 		content := baseStyle.
 			Width(m.width).
-			Height(m.height - 1).
+			Height(max(1, m.height-3)).
 			Render(
 				m.initialScreen(),
 			)
@@ -302,8 +355,8 @@ func (m *messagesCmp) View() string {
 			Render(
 				lipgloss.JoinVertical(
 					lipgloss.Top,
+					header,
 					content,
-					"",
 					m.footer(),
 				),
 			)
@@ -314,6 +367,7 @@ func (m *messagesCmp) View() string {
 		Render(
 			lipgloss.JoinVertical(
 				lipgloss.Top,
+				header,
 				m.renderViewport(),
 				m.working(),
 				m.footer(),
@@ -370,7 +424,6 @@ func (m *messagesCmp) working() string {
 	text := ""
 	if m.IsAgentWorking() && len(m.messages) > 0 {
 		t := theme.CurrentTheme()
-		baseStyle := styles.BaseStyle()
 
 		task := "Thinking..."
 		lastMessage := m.messages[len(m.messages)-1]
@@ -382,11 +435,11 @@ func (m *messagesCmp) working() string {
 			task = "Generating..."
 		}
 		if task != "" {
-			text += baseStyle.
-				Width(m.width).
-				Foreground(t.Primary()).
-				Bold(true).
-				Render(fmt.Sprintf("%s %s ", m.spinner.View(), task))
+			text += consoleTranscriptBlock(
+				m.width,
+				lipgloss.JoinHorizontal(lipgloss.Left, consoleBadge("runtime", t.Primary(), t.Background()), " ", consoleMuted("active")),
+				fmt.Sprintf("%s %s", m.spinner.View(), task),
+			)
 		}
 	}
 	return text
@@ -429,15 +482,47 @@ func (m *messagesCmp) helpText() string {
 
 func (m *messagesCmp) initialScreen() string {
 	baseStyle := styles.BaseStyle()
+	t := theme.CurrentTheme()
 
-	return baseStyle.Width(m.width).Render(
-		lipgloss.JoinVertical(
-			lipgloss.Top,
-			header(m.width),
-			"",
-			lspsConfigured(m.width),
+	providerLine, modelLine := m.activeModelDetails()
+	objective := "No research objective yet"
+	nextStep := "/research set <objective>"
+	if strings.TrimSpace(m.research.Objective) != "" {
+		objective = m.research.Objective
+		nextStep = nextResearchAction(m.research)
+	}
+
+	steps := []string{
+		consoleBadge("01", t.Secondary(), t.Background()) + " Define objective: /research set <objective>",
+		consoleBadge("02", t.Secondary(), t.Background()) + " Create candidate: /experiment add <title>",
+		consoleBadge("03", t.Secondary(), t.Background()) + " Run, inspect tool output, then /experiment evaluate ...",
+		consoleBadge("04", t.Secondary(), t.Background()) + " Promote, evolve, compare, and capture artifacts from the same console",
+	}
+	shortcuts := []string{
+		consoleKey("Ctrl+K", "command palette"),
+		consoleKey("@", "path completion"),
+		consoleKey("Ctrl+N", "new session"),
+		consoleKey("Ctrl+I", "toggle inspector"),
+		consoleKey("Ctrl+L", "logs"),
+	}
+
+	return baseStyle.Width(m.width).Render(lipgloss.JoinVertical(
+		lipgloss.Top,
+		consoleSection(m.width, "EvoScientist-Style Console",
+			lipgloss.JoinHorizontal(lipgloss.Left, consoleBadge("scicli", t.Primary(), t.Background()), " ", baseStyle.Bold(true).Render("Scientific command center")),
+			consoleMuted("Single main path: define objective, run experiments, inspect tools, evaluate evidence, iterate."),
+			consoleDivider(m.width-4, "active runtime"),
+			consoleMuted(providerLine),
+			consoleMuted(modelLine),
+			consoleMuted("working dir: "+config.WorkingDirectory()),
 		),
-	)
+		consoleSection(m.width, "Current Objective",
+			baseStyle.Bold(true).Render(truncateString(objective, max(24, m.width*3))),
+			consoleMuted("Next action: "+nextStep),
+		),
+		consoleSection(m.width, "Workflow", steps...),
+		consoleSection(m.width, "Shortcuts", shortcuts...),
+	))
 }
 
 func (m *messagesCmp) rerender() {
@@ -454,7 +539,7 @@ func (m *messagesCmp) SetSize(width, height int) tea.Cmd {
 	m.width = width
 	m.height = height
 	m.viewport.Width = max(1, width-2)
-	m.viewport.Height = height - 2
+	m.viewport.Height = max(3, height-4)
 	m.attachments.Width = width + 40
 	m.attachments.Height = 3
 	m.rerender()
@@ -560,14 +645,14 @@ func (m *messagesCmp) footer() string {
 	left := m.scrollStatusText()
 	right := m.helpText()
 	if left == "" {
-		return baseStyle.Width(m.width).Render(right)
+		return consoleMuted(right)
 	}
 
 	space := m.width - lipgloss.Width(left) - lipgloss.Width(right)
 	if space < 1 {
-		return baseStyle.Width(m.width).Render(left + " " + right)
+		return baseStyle.Width(m.width).Render(left + "  " + right)
 	}
-	return baseStyle.Width(m.width).Render(left + strings.Repeat(" ", space) + right)
+	return consoleMuted(baseStyle.Width(m.width).Render(left + strings.Repeat(" ", space) + right))
 }
 
 func (m *messagesCmp) scrollStatusText() string {
@@ -599,5 +684,103 @@ func (m *messagesCmp) scrollStatusText() string {
 
 	return baseStyle.
 		Foreground(t.TextMuted()).
-		Render(fmt.Sprintf("%s%s history %s", up, down, position))
+		Render(fmt.Sprintf("%s%s transcript %s", up, down, position))
+}
+
+func (m *messagesCmp) renderConsoleHeader() string {
+	t := theme.CurrentTheme()
+	baseStyle := styles.BaseStyle()
+	title := "scicli"
+	if strings.TrimSpace(m.session.Title) != "" {
+		title = truncateString(m.session.Title, max(18, m.width/2))
+	}
+	providerLine, modelLine := m.activeModelDetails()
+	nextStep := "/research set <objective>"
+	if m.research.HasContent() {
+		nextStep = nextResearchAction(m.research)
+	}
+
+	stateBadge := consoleBadge("idle", t.BackgroundDarker(), t.Text())
+	switch {
+	case m.IsAgentWorking():
+		stateBadge = consoleBadge("running", t.Primary(), t.Background())
+	case len(m.messages) > 0:
+		last := m.messages[len(m.messages)-1]
+		switch last.FinishReason() {
+		case message.FinishReasonError:
+			stateBadge = consoleBadge("failed", t.Error(), t.Background())
+		case message.FinishReasonPermissionDenied:
+			stateBadge = consoleBadge("blocked", t.Warning(), t.Background())
+		case message.FinishReasonCanceled:
+			stateBadge = consoleBadge("canceled", t.Error(), t.Background())
+		case message.FinishReasonEndTurn:
+			stateBadge = consoleBadge("ready", t.Success(), t.Background())
+		}
+	}
+
+	stats := lipgloss.JoinHorizontal(
+		lipgloss.Left,
+		consoleBadge(fmt.Sprintf("%d msgs", len(m.messages)), t.BackgroundDarker(), t.Text()),
+		" ",
+		stateBadge,
+	)
+	left := lipgloss.JoinHorizontal(
+		lipgloss.Left,
+		consoleBadge("console", t.Primary(), t.Background()),
+		" ",
+		baseStyle.Bold(true).Render(title),
+		"  ",
+		consoleMuted(providerLine),
+		"  ",
+		consoleMuted(modelLine),
+	)
+	right := lipgloss.JoinHorizontal(
+		lipgloss.Left,
+		consoleMuted("next: "+truncateString(nextStep, max(12, m.width/3))),
+		"  ",
+		stats,
+	)
+	space := m.width - lipgloss.Width(left) - lipgloss.Width(right)
+	if space < 2 {
+		return lipgloss.JoinVertical(
+			lipgloss.Left,
+			left,
+			right,
+			consoleDivider(m.width, ""),
+		)
+	}
+	return lipgloss.JoinVertical(
+		lipgloss.Left,
+		left+strings.Repeat(" ", space)+right,
+		consoleDivider(m.width, ""),
+	)
+}
+
+func (m *messagesCmp) activeModelDetails() (string, string) {
+	cfg := config.Get()
+	providerLine := "provider: unconfigured"
+	modelLine := "model: unavailable"
+	if cfg == nil {
+		return providerLine, modelLine
+	}
+
+	agentCfg, ok := cfg.Agents[config.AgentCoder]
+	if !ok {
+		return providerLine, modelLine
+	}
+	model, ok := models.SupportedModels[agentCfg.Model]
+	if !ok {
+		return providerLine, modelLine
+	}
+	providerLine = "provider: " + string(model.Provider)
+	modelLine = "model: " + model.Name
+	if providerCfg, ok := cfg.Providers[model.Provider]; ok {
+		if strings.TrimSpace(providerCfg.BaseURL) != "" {
+			providerLine += " @ " + providerCfg.BaseURL
+		}
+		if model.Provider == models.ProviderOpenAICompatible && strings.TrimSpace(providerCfg.Model) != "" {
+			modelLine = "model: " + providerCfg.Model
+		}
+	}
+	return providerLine, modelLine
 }

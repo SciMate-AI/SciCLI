@@ -6,16 +6,18 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
+	"strings"
 	"time"
 
-	"github.com/openai/openai-go"
-	"github.com/openai/openai-go/option"
-	"github.com/openai/openai-go/shared"
 	"github.com/SciMate-AI/scicli/internal/config"
 	"github.com/SciMate-AI/scicli/internal/llm/models"
 	"github.com/SciMate-AI/scicli/internal/llm/tools"
 	"github.com/SciMate-AI/scicli/internal/logging"
 	"github.com/SciMate-AI/scicli/internal/message"
+	"github.com/openai/openai-go"
+	"github.com/openai/openai-go/option"
+	"github.com/openai/openai-go/shared"
 )
 
 type openaiOptions struct {
@@ -203,7 +205,7 @@ func (o *openaiClient) send(ctx context.Context, messages []message.Message, too
 		if err != nil {
 			retry, after, retryErr := o.shouldRetry(attempts, err)
 			if retryErr != nil {
-				return nil, retryErr
+				return nil, o.annotateRequestError(retryErr)
 			}
 			if retry {
 				logging.WarnPersist(fmt.Sprintf("Retrying due to rate limit... attempt %d of %d", attempts, maxRetries), logging.PersistTimeArg, time.Millisecond*time.Duration(after+100))
@@ -214,7 +216,7 @@ func (o *openaiClient) send(ctx context.Context, messages []message.Message, too
 					continue
 				}
 			}
-			return nil, retryErr
+			return nil, o.annotateRequestError(err)
 		}
 
 		content := ""
@@ -307,7 +309,7 @@ func (o *openaiClient) stream(ctx context.Context, messages []message.Message, t
 			// If there is an error we are going to see if we can retry the call
 			retry, after, retryErr := o.shouldRetry(attempts, err)
 			if retryErr != nil {
-				eventChan <- ProviderEvent{Type: EventError, Error: retryErr}
+				eventChan <- ProviderEvent{Type: EventError, Error: o.annotateRequestError(retryErr)}
 				close(eventChan)
 				return
 			}
@@ -325,7 +327,7 @@ func (o *openaiClient) stream(ctx context.Context, messages []message.Message, t
 					continue
 				}
 			}
-			eventChan <- ProviderEvent{Type: EventError, Error: retryErr}
+			eventChan <- ProviderEvent{Type: EventError, Error: o.annotateRequestError(err)}
 			close(eventChan)
 			return
 		}
@@ -422,4 +424,29 @@ func WithReasoningEffort(effort string) OpenAIOption {
 		}
 		options.reasoningEffort = defaultReasoningEffort
 	}
+}
+
+func (o *openaiClient) annotateRequestError(err error) error {
+	if err == nil {
+		return nil
+	}
+
+	baseURL := strings.TrimSpace(o.options.baseURL)
+	if baseURL == "" {
+		baseURL = "default"
+	}
+	if parsed, parseErr := url.Parse(baseURL); parseErr == nil && parsed.Host != "" {
+		baseURL = parsed.Host + parsed.Path
+	}
+
+	modelID := strings.TrimSpace(o.providerOptions.model.APIModel)
+	if modelID == "" {
+		modelID = string(o.providerOptions.model.ID)
+	}
+
+	msg := fmt.Sprintf("%s request failed (model=%s, baseURL=%s): %v", o.providerOptions.model.Provider, modelID, baseURL, err)
+	if o.providerOptions.model.Provider == models.ProviderOpenAICompatible {
+		msg += ". This endpoint must support OpenAI chat/completions and tool calling."
+	}
+	return fmt.Errorf("%s", msg)
 }

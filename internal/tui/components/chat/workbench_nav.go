@@ -87,11 +87,6 @@ func (m *workbenchNavCmp) View() string {
 	t := theme.CurrentTheme()
 	width := max(1, m.width)
 
-	title := baseStyle.
-		Foreground(t.Primary()).
-		Bold(true).
-		Render("Workbench")
-
 	sessionTitle := "(new session)"
 	if strings.TrimSpace(m.session.Title) != "" {
 		sessionTitle = m.session.Title
@@ -102,26 +97,37 @@ func (m *workbenchNavCmp) View() string {
 	}
 	activeSkills := len(m.app.Skills.Active(m.session.ID))
 	nextAction := nextResearchAction(m.research)
+	header := lipgloss.JoinHorizontal(
+		lipgloss.Left,
+		consoleBadge("command deck", t.Primary(), t.Background()),
+		" ",
+		baseStyle.Bold(true).Render("Scientific Workbench"),
+	)
 
-	sections := []string{
-		title,
-		repo(width),
-		cwd(width),
-		"",
-		baseStyle.Foreground(t.Primary()).Bold(true).Render("Context"),
-		baseStyle.Width(width).Render(truncateString(sessionTitle, width)),
-		baseStyle.Foreground(t.TextMuted()).Width(width).Render(fmt.Sprintf("type: %s", sessionType)),
-		baseStyle.Foreground(t.TextMuted()).Width(width).Render(fmt.Sprintf("mode: %s", config.Get().Automation.WorkMode)),
-		baseStyle.Foreground(t.TextMuted()).Width(width).Render(fmt.Sprintf("active skills: %d", activeSkills)),
-		"",
-		baseStyle.Foreground(t.Primary()).Bold(true).Render("Research Loop"),
-	}
+	sections := []string{header}
+	sections = append(sections, consoleSection(width, "Workspace",
+		logo(width),
+		consoleMuted("Mode: "+string(config.Get().Automation.WorkMode)),
+		consoleMuted("Repo: https://github.com/SciMate-AI/scicli"),
+		consoleMuted("CWD: "+config.WorkingDirectory()),
+	))
+	sections = append(sections, consoleSection(width, "Session",
+		baseStyle.Bold(true).Render(truncateString(sessionTitle, max(12, width-4))),
+		lipgloss.JoinHorizontal(
+			lipgloss.Left,
+			consoleBadge(sessionType, t.Secondary(), t.Background()),
+			" ",
+			consoleBadge(fmt.Sprintf("%d skills", activeSkills), t.BackgroundDarker(), t.Text()),
+		),
+		consoleMuted("Ctrl+N new session  Ctrl+K palette  /help command guide"),
+	))
 
 	if !m.research.HasContent() {
-		sections = append(sections,
-			baseStyle.Foreground(t.TextMuted()).Width(width).Render("No research objective yet"),
-			baseStyle.Width(width).Render("Start with /research set <objective>"),
-		)
+		sections = append(sections, consoleSection(width, "Research Loop",
+			consoleMuted("No research objective recorded yet."),
+			baseStyle.Render("/research set <objective>"),
+			consoleMuted("This becomes the anchor for experiments, evaluation and provenance."),
+		))
 	} else {
 		meta := []string{
 			"stage " + strings.ToUpper(string(m.research.Stage)),
@@ -129,64 +135,58 @@ func (m *workbenchNavCmp) View() string {
 			fmt.Sprintf("%d criteria", len(m.research.SuccessCriteria)),
 		}
 		if strings.TrimSpace(m.research.PromotedExperimentID) != "" {
-			meta = append(meta, "promoted "+shortResearchID(m.research.PromotedExperimentID))
+			meta = append(meta, "best "+shortResearchID(m.research.PromotedExperimentID))
 		}
-		sections = append(sections,
-			baseStyle.Width(width).Render(truncateString(m.research.Objective, max(12, width))),
-			baseStyle.Foreground(t.TextMuted()).Width(width).Render(strings.Join(meta, "  ")),
-		)
+		body := []string{
+			baseStyle.Render(truncateString(m.research.Objective, max(12, width*3))),
+			consoleMuted(strings.Join(meta, "  |  ")),
+		}
 		if m.researchInherited {
 			source := "Inherited from parent chat"
 			if strings.TrimSpace(m.researchTitle) != "" {
 				source += ": " + m.researchTitle
 			}
-			sections = append(sections, baseStyle.Foreground(t.TextMuted()).Width(width).Render(truncateString(source, max(12, width))))
+			body = append(body, consoleMuted(truncateString(source, max(12, width*2))))
 		}
-		sections = append(sections, baseStyle.Width(width).Render("Next: "+truncateString(nextAction, max(12, width-6))))
+		body = append(body,
+			consoleDivider(width-4, "next"),
+			baseStyle.Bold(true).Render(truncateString(nextAction, max(12, width-4))),
+		)
+		sections = append(sections, consoleSection(width, "Research Loop", body...))
 	}
 
 	if plan, ok := activeExperiment(m.research); ok {
-		sections = append(sections, "", baseStyle.Foreground(t.Primary()).Bold(true).Render("Active Candidate"))
-		sections = append(sections, zone.Mark(workbenchNavExperimentZoneID(plan.ID), lipgloss.JoinVertical(lipgloss.Left, m.renderExperimentCard(width, plan, true)...)))
+		sections = append(sections, zone.Mark(workbenchNavExperimentZoneID(plan.ID), m.renderExperimentCard(width, "Active Candidate", plan, true)))
 	}
 	if plan, ok := promotedExperiment(m.research); ok && plan.ID != m.research.ActiveExperimentID {
-		sections = append(sections, "", baseStyle.Foreground(t.Primary()).Bold(true).Render("Promoted Candidate"))
-		sections = append(sections, zone.Mark(workbenchNavExperimentZoneID(plan.ID), lipgloss.JoinVertical(lipgloss.Left, m.renderExperimentCard(width, plan, false)...)))
+		sections = append(sections, zone.Mark(workbenchNavExperimentZoneID(plan.ID), m.renderExperimentCard(width, "Promoted Candidate", plan, false)))
 	}
 
 	queue := queuedExperiments(m.research)
-	sections = append(sections, "", baseStyle.Foreground(t.Primary()).Bold(true).Render("Queue"))
+	queueBody := []string{}
 	if len(queue) == 0 {
-		sections = append(sections, baseStyle.Foreground(t.TextMuted()).Width(width).Render("No queued follow-up candidates"))
+		queueBody = append(queueBody, consoleMuted("No queued follow-up candidates"))
 	} else {
 		maxItems := min(len(queue), 4)
 		for i := 0; i < maxItems; i++ {
 			plan := queue[i]
-			label := shortResearchID(plan.ID) + fmt.Sprintf(" G%d ", plan.Generation) + truncateString(plan.Title, max(10, width-18))
-			flags := experimentFlags(m.research, plan)
-			if len(flags) > 0 {
-				label += " [" + strings.Join(flags, ", ") + "]"
-			}
-			block := []string{baseStyle.Width(width).Render(label)}
-			detail := string(plan.Status)
+			label := shortResearchID(plan.ID) + fmt.Sprintf("  G%d  ", plan.Generation) + truncateString(plan.Title, max(10, width-18))
+			detail := strings.ToUpper(string(plan.Status))
 			if plan.LatestEval != nil {
-				detail += fmt.Sprintf("  %.2f %s", plan.LatestEval.Score, strings.ToUpper(string(plan.LatestEval.Decision)))
+				detail += fmt.Sprintf("  |  %.2f %s", plan.LatestEval.Score, strings.ToUpper(string(plan.LatestEval.Decision)))
 			}
-			block = append(block,
-				baseStyle.Foreground(t.TextMuted()).Width(width).Render(truncateString(detail, max(12, width))),
-				baseStyle.Foreground(t.TextMuted()).Width(width).Render("Click to activate"),
-			)
-			sections = append(sections, zone.Mark(workbenchNavExperimentZoneID(plan.ID), lipgloss.JoinVertical(lipgloss.Left, block...)))
+			queueBody = append(queueBody, zone.Mark(workbenchNavExperimentZoneID(plan.ID), lipgloss.JoinVertical(
+				lipgloss.Left,
+				baseStyle.Bold(true).Render(label),
+				consoleMuted(detail),
+			)))
 		}
 		if len(queue) > maxItems {
-			sections = append(sections, baseStyle.Foreground(t.TextMuted()).Width(width).Render(fmt.Sprintf("+%d more queued candidates", len(queue)-maxItems)))
+			queueBody = append(queueBody, consoleMuted(fmt.Sprintf("+%d more queued candidates", len(queue)-maxItems)))
 		}
 	}
+	sections = append(sections, consoleSection(width, "Queue", queueBody...))
 
-	sections = append(sections,
-		"",
-		baseStyle.Foreground(t.Primary()).Bold(true).Render("Quick Actions"),
-	)
 	quickActions := []researchWorkbenchAction{
 		{
 			ID:      "command-palette",
@@ -229,12 +229,12 @@ func (m *workbenchNavCmp) View() string {
 			Reason:  "Current session has no parent.",
 		},
 	}
-	chips := make([]string, 0, len(quickActions))
+	actionCards := make([]string, 0, len(quickActions))
 	for _, action := range quickActions {
-		chips = append(chips, renderWorkbenchNavActionChip(action))
+		actionCards = append(actionCards, renderWorkbenchNavActionChip(action, width))
 	}
-	sections = append(sections, lipgloss.JoinHorizontal(lipgloss.Left, chips...))
-	sections = append(sections, baseStyle.Width(width).Foreground(t.TextMuted()).Render("Click experiments to activate them. Click actions to run them."))
+	sections = append(sections, consoleSection(width, "Quick Actions", actionCards...))
+	sections = append(sections, consoleMuted("Click experiments to activate them. Click an action card to run it."))
 
 	return baseStyle.
 		Width(width).
@@ -304,13 +304,18 @@ func (m *workbenchNavCmp) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	return nil
 }
 
-func (m *workbenchNavCmp) renderExperimentCard(width int, plan research.ExperimentPlan, showNextAction bool) []string {
+func (m *workbenchNavCmp) renderExperimentCard(width int, title string, plan research.ExperimentPlan, showNextAction bool) string {
 	baseStyle := styles.BaseStyle()
 	t := theme.CurrentTheme()
 
-	lines := []string{
-		baseStyle.Width(width).Render(truncateString(plan.Title, max(12, width))),
-	}
+	header := lipgloss.JoinHorizontal(
+		lipgloss.Left,
+		consoleBadge(title, t.Primary(), t.Background()),
+		" ",
+		baseStyle.Bold(true).Render(truncateString(plan.Title, max(12, width-20))),
+	)
+
+	lines := []string{header}
 
 	meta := []string{
 		shortResearchID(plan.ID),
@@ -321,39 +326,43 @@ func (m *workbenchNavCmp) renderExperimentCard(width int, plan research.Experime
 	if len(flags) > 0 {
 		meta = append(meta, strings.Join(flags, "/"))
 	}
-	lines = append(lines, baseStyle.Foreground(t.TextMuted()).Width(width).Render(truncateString(strings.Join(meta, "  "), max(12, width))))
+	lines = append(lines, consoleMuted(truncateString(strings.Join(meta, "  |  "), max(12, width*2))))
 
 	if plan.LatestEval != nil {
-		lines = append(lines, baseStyle.Foreground(t.TextMuted()).Width(width).Render(
-			truncateString(fmt.Sprintf("score %.2f  %s", plan.LatestEval.Score, strings.ToUpper(string(plan.LatestEval.Decision))), max(12, width)),
+		lines = append(lines, consoleMuted(
+			truncateString(fmt.Sprintf("score %.2f  |  %s", plan.LatestEval.Score, strings.ToUpper(string(plan.LatestEval.Decision))), max(12, width*2)),
 		))
 	}
 	if len(plan.Runs) > 0 {
-		lines = append(lines, baseStyle.Foreground(t.TextMuted()).Width(width).Render(
-			truncateString(fmt.Sprintf("runs %d  latest %s", len(plan.Runs), plan.Runs[0].Title), max(12, width)),
+		lines = append(lines, consoleMuted(
+			truncateString(fmt.Sprintf("runs %d  |  latest %s", len(plan.Runs), plan.Runs[0].Title), max(12, width*2)),
 		))
 	}
 	if showNextAction {
-		lines = append(lines, baseStyle.Width(width).Render("Next: "+truncateString(nextResearchAction(m.research), max(12, width-6))))
+		lines = append(lines,
+			consoleDivider(width-4, "next"),
+			baseStyle.Bold(true).Render(truncateString(nextResearchAction(m.research), max(12, width-4))),
+		)
 	}
-	lines = append(lines, baseStyle.Foreground(t.TextMuted()).Width(width).Render("Click to activate"))
-	return lines
+	lines = append(lines, consoleMuted("Click to activate"))
+	return consoleSection(width, "", lines...)
 }
 
-func renderWorkbenchNavActionChip(action researchWorkbenchAction) string {
+func renderWorkbenchNavActionChip(action researchWorkbenchAction, width int) string {
 	t := theme.CurrentTheme()
-	style := lipgloss.NewStyle().
-		Padding(0, 1).
-		MarginRight(1).
-		Background(t.BackgroundDarker()).
-		Foreground(t.Text())
-
+	labelStyle := lipgloss.NewStyle()
 	if action.Enabled {
-		style = style.Background(t.Secondary()).Foreground(t.Background()).Bold(true)
+		labelStyle = labelStyle.Background(t.Secondary()).Foreground(t.Background()).Bold(true)
 	} else {
-		style = style.Foreground(t.TextMuted())
+		labelStyle = labelStyle.Background(t.BackgroundDarker()).Foreground(t.TextMuted())
 	}
-	return zone.Mark(workbenchNavActionZoneID(action.ID), style.Render(action.Label))
+	label := labelStyle.Padding(0, 1).Render(action.Label)
+	detail := action.Reason
+	if action.Enabled {
+		detail = action.Command
+	}
+	card := consoleSection(width, "", label, consoleMuted(truncateString(detail, max(12, width*2))))
+	return zone.Mark(workbenchNavActionZoneID(action.ID), card)
 }
 
 func workbenchNavExperimentZoneID(experimentID string) string {

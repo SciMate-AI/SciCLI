@@ -184,25 +184,24 @@ func (d *providerSetupDialogCmp) View() string {
 	t := theme.CurrentTheme()
 	baseStyle := styles.BaseStyle()
 
-	width := 68
+	width := 74
 	if d.width > 0 {
-		width = max(56, min(84, d.width-10))
+		width = max(60, min(92, d.width-10))
 	}
 
-	title := baseStyle.
-		Foreground(t.Primary()).
-		Bold(true).
-		Width(width).
-		Padding(0, 1).
-		Render("Configure Provider")
+	title := lipgloss.JoinHorizontal(
+		lipgloss.Left,
+		baseStyle.Foreground(t.Primary()).Bold(true).Render("Provider Setup"),
+		"  ",
+		d.renderStepBadge(),
+	)
 
 	content := []string{
-		title,
+		baseStyle.Width(width).Padding(0, 1).Render(title),
 		baseStyle.Width(width).Padding(0, 1).Foreground(t.TextMuted()).
-			Render("Add or edit provider credentials, then choose the coder model."),
+			Render("Configure a provider after onboarding, then bind the coder agent to it."),
 		baseStyle.Width(width).Render(""),
-		baseStyle.Width(width).Padding(0, 1).Foreground(t.TextMuted()).
-			Render(d.stepIndicator()),
+		baseStyle.Width(width).Padding(0, 1).Render(d.renderContextBanner(width-2)),
 		baseStyle.Width(width).Render(""),
 	}
 
@@ -226,7 +225,7 @@ func (d *providerSetupDialogCmp) View() string {
 	return baseStyle.Padding(1, 2).
 		Border(lipgloss.RoundedBorder()).
 		BorderBackground(t.Background()).
-		BorderForeground(t.TextMuted()).
+		BorderForeground(t.BorderFocused()).
 		Width(lipgloss.Width(body) + 4).
 		Render(body)
 }
@@ -362,26 +361,12 @@ func (d *providerSetupDialogCmp) updateModelStep(msg tea.Msg) (tea.Model, tea.Cm
 
 func (d *providerSetupDialogCmp) renderProviderStep(width int) []string {
 	lines := []string{
-		styles.BaseStyle().Width(width).Padding(0, 1).Render("Step 1/3: Choose a provider"),
-		styles.BaseStyle().Width(width).Padding(0, 1).Foreground(theme.CurrentTheme().TextMuted()).
-			Render("Up/Down to move, Enter to continue."),
+		d.renderSectionTitle(width, "Choose Provider", "Up/Down selects. Enter continues."),
 		styles.BaseStyle().Width(width).Render(""),
 	}
 
 	for idx, provider := range d.providers {
-		prefix := "  "
-		if idx == d.selectedProvider {
-			prefix = "> "
-		}
-
-		suffix := ""
-		if config.ProviderReady(provider.Provider) {
-			suffix = "  [ready]"
-		} else if provider.DetectedCredential {
-			suffix = "  [detected " + provider.DetectedCredentialID + "]"
-		}
-
-		lines = append(lines, styles.BaseStyle().Width(width).Padding(0, 1).Render(prefix+provider.Label+suffix))
+		lines = append(lines, d.renderProviderRow(width, idx, provider))
 	}
 
 	return lines
@@ -390,9 +375,9 @@ func (d *providerSetupDialogCmp) renderProviderStep(width int) []string {
 func (d *providerSetupDialogCmp) renderCredentialStep(width int) []string {
 	current := d.currentProvider()
 	lines := []string{
-		styles.BaseStyle().Width(width).Padding(0, 1).Render("Step 2/3: Credentials"),
-		styles.BaseStyle().Width(width).Padding(0, 1).Foreground(theme.CurrentTheme().TextMuted()).
-			Render("Tab moves between fields. Enter continues to model selection."),
+		d.renderSectionTitle(width, "Credentials", "Tab cycles fields. Enter continues to model selection."),
+		styles.BaseStyle().Width(width).Render(""),
+		d.renderProviderSummary(width, current),
 		styles.BaseStyle().Width(width).Render(""),
 	}
 
@@ -402,35 +387,17 @@ func (d *providerSetupDialogCmp) renderCredentialStep(width int) []string {
 			modeLabel = "Enter API key manually"
 		}
 		lines = append(lines, styles.BaseStyle().Width(width).Padding(0, 1).
-			Render("Left/Right toggles mode. Current: "+modeLabel))
-		lines = append(lines, styles.BaseStyle().Width(width).Render(""))
-	}
-
-	if current.RequiresBaseURL {
-		lines = append(lines, styles.BaseStyle().Width(width).Padding(0, 1).
-			Foreground(theme.CurrentTheme().TextMuted()).Render("Base URL: "+current.BaseURLHint))
-	}
-	if current.RequiresModel {
-		lines = append(lines, styles.BaseStyle().Width(width).Padding(0, 1).
-			Foreground(theme.CurrentTheme().TextMuted()).Render("Custom model: "+current.ModelHint))
-	}
-	if current.CredentialHint != "" {
-		lines = append(lines, styles.BaseStyle().Width(width).Padding(0, 1).
-			Foreground(theme.CurrentTheme().TextMuted()).Render("Credential: "+current.CredentialHint))
-	}
-	if current.RequiresBaseURL || current.RequiresModel || current.CredentialHint != "" {
+			Render("Mode: "+modeLabel+"  |  Left/Right toggles"))
 		lines = append(lines, styles.BaseStyle().Width(width).Render(""))
 	}
 
 	if !d.shouldFocusCredentialInputs() {
-		lines = append(lines, styles.BaseStyle().Width(width).Padding(0, 1).
-			Render("Using detected credential. Press Enter to continue."))
+		lines = append(lines, d.renderHintBox(width, "Using detected credential. Press Enter to continue."))
 		return lines
 	}
 
-	for _, input := range d.activeCredentialInputs() {
-		input.Width = max(24, width-4)
-		lines = append(lines, styles.BaseStyle().Width(width).Padding(0, 1).Render(input.View()))
+	for _, block := range d.renderCredentialBlocks(width) {
+		lines = append(lines, block)
 	}
 
 	return lines
@@ -439,9 +406,9 @@ func (d *providerSetupDialogCmp) renderCredentialStep(width int) []string {
 func (d *providerSetupDialogCmp) renderModelStep(width int) []string {
 	modelsForProvider := config.OnboardingModels(d.currentProvider().Provider)
 	lines := []string{
-		styles.BaseStyle().Width(width).Padding(0, 1).Render("Step 3/3: Choose the coder model"),
-		styles.BaseStyle().Width(width).Padding(0, 1).Foreground(theme.CurrentTheme().TextMuted()).
-			Render("Up/Down to move, Enter to save."),
+		d.renderSectionTitle(width, "Coder Model", "Up/Down selects. Enter saves."),
+		styles.BaseStyle().Width(width).Render(""),
+		d.renderHintBox(width, "SciCLI expects OpenAI-compatible endpoints to implement chat/completions with tool calling. Many simple relay endpoints do not."),
 		styles.BaseStyle().Width(width).Render(""),
 	}
 
@@ -453,11 +420,7 @@ func (d *providerSetupDialogCmp) renderModelStep(width int) []string {
 	maxVisible := min(10, len(modelsForProvider))
 	end := min(d.modelScrollOffset+maxVisible, len(modelsForProvider))
 	for idx := d.modelScrollOffset; idx < end; idx++ {
-		prefix := "  "
-		if idx == d.selectedModel {
-			prefix = "> "
-		}
-		lines = append(lines, styles.BaseStyle().Width(width).Padding(0, 1).Render(prefix+modelsForProvider[idx].Name))
+		lines = append(lines, d.renderModelRow(width, idx, modelsForProvider[idx].Name))
 	}
 
 	return lines
@@ -666,4 +629,172 @@ func (d *providerSetupDialogCmp) keepModelSelectionVisible(total int) {
 
 func NewProviderSetupDialogCmp() ProviderSetupDialog {
 	return &providerSetupDialogCmp{}
+}
+
+func (d *providerSetupDialogCmp) renderStepBadge() string {
+	t := theme.CurrentTheme()
+	return styles.Padded().
+		Background(t.Primary()).
+		Foreground(t.Background()).
+		Bold(true).
+		Render(d.stepIndicator())
+}
+
+func (d *providerSetupDialogCmp) renderContextBanner(width int) string {
+	t := theme.CurrentTheme()
+	current := d.currentProvider()
+	label := "Selected: none"
+	if current.Label != "" {
+		label = "Selected: " + current.Label
+	}
+	return lipgloss.NewStyle().
+		Width(width).
+		Padding(0, 1).
+		Background(t.BackgroundDarker()).
+		Foreground(t.Text()).
+		Render(label)
+}
+
+func (d *providerSetupDialogCmp) renderSectionTitle(width int, title string, subtitle string) string {
+	t := theme.CurrentTheme()
+	base := styles.BaseStyle()
+	lines := []string{
+		base.Width(width).Padding(0, 1).Bold(true).Render(title),
+	}
+	if strings.TrimSpace(subtitle) != "" {
+		lines = append(lines, base.Width(width).Padding(0, 1).Foreground(t.TextMuted()).Render(subtitle))
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, lines...)
+}
+
+func (d *providerSetupDialogCmp) renderProviderRow(width int, idx int, provider config.OnboardingProvider) string {
+	t := theme.CurrentTheme()
+	selected := idx == d.selectedProvider
+	rowWidth := width - 2
+	label := provider.Label
+	if selected {
+		label = "› " + label
+	} else {
+		label = "  " + label
+	}
+
+	badges := make([]string, 0, 2)
+	if config.ProviderReady(provider.Provider) {
+		badges = append(badges, d.renderBadge("READY", t.Success(), t.Background()))
+	} else if provider.DetectedCredential {
+		badges = append(badges, d.renderBadge("DETECTED", t.Info(), t.Background()))
+	}
+	if provider.Provider == models.ProviderOpenAICompatible {
+		badges = append(badges, d.renderBadge("CUSTOM", t.Primary(), t.Background()))
+	}
+
+	style := lipgloss.NewStyle().
+		Width(rowWidth).
+		Padding(0, 1).
+		Border(lipgloss.NormalBorder()).
+		BorderForeground(t.TextMuted()).
+		Foreground(t.Text()).
+		Background(t.Background())
+	if selected {
+		style = style.BorderForeground(t.Primary()).Background(t.BackgroundDarker())
+	}
+
+	line := label
+	if len(badges) > 0 {
+		line += "  " + strings.Join(badges, " ")
+	}
+	return style.Render(line)
+}
+
+func (d *providerSetupDialogCmp) renderProviderSummary(width int, provider config.OnboardingProvider) string {
+	lines := []string{provider.Label}
+	if provider.CredentialHint != "" {
+		lines = append(lines, "Credential: "+provider.CredentialHint)
+	}
+	if provider.RequiresBaseURL {
+		lines = append(lines, "Base URL: "+provider.BaseURLHint)
+	}
+	if provider.RequiresModel {
+		lines = append(lines, "Model: "+provider.ModelHint)
+	}
+	return d.renderHintBox(width, strings.Join(lines, "\n"))
+}
+
+func (d *providerSetupDialogCmp) renderCredentialBlocks(width int) []string {
+	current := d.currentProvider()
+	blocks := make([]string, 0, 3)
+	inputWidth := max(28, width-10)
+
+	if current.RequiresBaseURL {
+		d.credentialInputs[0].Width = inputWidth
+		blocks = append(blocks, d.renderInputBlock(width, "Base URL", d.currentProvider().BaseURLHint, d.credentialInputs[0].View()))
+	}
+	if current.SupportsManualAPIKey && (!current.DetectedCredential || !d.useDetectedCredential) {
+		d.credentialInputs[1].Width = inputWidth
+		hint := current.CredentialHint
+		if hint == "" {
+			hint = "Paste the provider key used for Authorization: Bearer"
+		}
+		blocks = append(blocks, d.renderInputBlock(width, "API Key", hint, d.credentialInputs[1].View()))
+	}
+	if current.RequiresModel {
+		d.credentialInputs[2].Width = inputWidth
+		blocks = append(blocks, d.renderInputBlock(width, "Upstream Model", d.currentProvider().ModelHint, d.credentialInputs[2].View()))
+	}
+
+	return blocks
+}
+
+func (d *providerSetupDialogCmp) renderInputBlock(width int, label string, hint string, inputView string) string {
+	t := theme.CurrentTheme()
+	base := styles.BaseStyle()
+	parts := []string{
+		base.Bold(true).Render(label),
+	}
+	if strings.TrimSpace(hint) != "" {
+		parts = append(parts, base.Foreground(t.TextMuted()).Render(hint))
+	}
+	parts = append(parts, inputView)
+	return lipgloss.NewStyle().
+		Width(width - 2).
+		Padding(0, 1).
+		Border(lipgloss.NormalBorder()).
+		BorderForeground(t.TextMuted()).
+		Render(strings.Join(parts, "\n"))
+}
+
+func (d *providerSetupDialogCmp) renderHintBox(width int, content string) string {
+	t := theme.CurrentTheme()
+	return lipgloss.NewStyle().
+		Width(width - 2).
+		Padding(0, 1).
+		Background(t.BackgroundDarker()).
+		Foreground(t.TextMuted()).
+		Render(content)
+}
+
+func (d *providerSetupDialogCmp) renderModelRow(width int, idx int, name string) string {
+	t := theme.CurrentTheme()
+	selected := idx == d.selectedModel
+	style := lipgloss.NewStyle().
+		Width(width - 2).
+		Padding(0, 1).
+		Border(lipgloss.NormalBorder()).
+		BorderForeground(t.TextMuted()).
+		Foreground(t.Text())
+	label := "  " + name
+	if selected {
+		style = style.BorderForeground(t.Primary()).Background(t.Primary()).Foreground(t.Background()).Bold(true)
+		label = "› " + name
+	}
+	return style.Render(label)
+}
+
+func (d *providerSetupDialogCmp) renderBadge(label string, bg lipgloss.TerminalColor, fg lipgloss.TerminalColor) string {
+	return lipgloss.NewStyle().
+		Padding(0, 1).
+		Background(bg).
+		Foreground(fg).
+		Bold(true).
+		Render(label)
 }

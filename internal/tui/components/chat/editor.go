@@ -8,10 +8,6 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/textarea"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/SciMate-AI/scicli/internal/app"
 	"github.com/SciMate-AI/scicli/internal/logging"
 	"github.com/SciMate-AI/scicli/internal/message"
@@ -21,6 +17,10 @@ import (
 	"github.com/SciMate-AI/scicli/internal/tui/styles"
 	"github.com/SciMate-AI/scicli/internal/tui/theme"
 	"github.com/SciMate-AI/scicli/internal/tui/util"
+	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/textarea"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 type editorCmp struct {
@@ -218,30 +218,38 @@ func (m *editorCmp) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *editorCmp) View() string {
 	t := theme.CurrentTheme()
-
-	// Style the prompt with theme colors
-	style := lipgloss.NewStyle().
-		Padding(0, 0, 0, 1).
-		Bold(true).
-		Foreground(t.Primary())
-
-	if len(m.attachments) == 0 {
-		return lipgloss.JoinHorizontal(lipgloss.Top, style.Render(">"), m.textarea.View())
-	}
-	m.textarea.SetHeight(m.height - 1)
-	return lipgloss.JoinVertical(lipgloss.Top,
-		m.attachmentsContent(),
-		lipgloss.JoinHorizontal(lipgloss.Top, style.Render(">"),
-			m.textarea.View()),
+	baseStyle := styles.BaseStyle()
+	status := lipgloss.JoinHorizontal(
+		lipgloss.Left,
+		consoleMuted("enter send"),
+		"  ",
+		consoleMuted("\\ + enter newline"),
+		"  ",
+		consoleMuted("ctrl+e editor"),
 	)
+	prompt := baseStyle.Bold(true).Foreground(t.Primary()).Render(">")
+	if m.app.CoderAgent.IsSessionBusy(m.session.ID) {
+		prompt = baseStyle.Bold(true).Foreground(t.Warning()).Render("!")
+	}
+	inputRow := lipgloss.JoinHorizontal(lipgloss.Top, prompt, " ", m.textarea.View())
+	lines := []string{
+		consoleDivider(m.width, ""),
+		lipgloss.JoinHorizontal(lipgloss.Left, consoleBadge("shell", t.BackgroundDarker(), t.Text()), " ", status),
+	}
+
+	if len(m.attachments) > 0 {
+		lines = append(lines, consoleMuted("attachments:")+" "+m.attachmentsContent())
+	}
+	lines = append(lines, inputRow)
+	lines = append(lines, consoleMuted("/research /experiment /artifact /tasks /parent"))
+	return baseStyle.Width(m.width).Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
 }
 
 func (m *editorCmp) SetSize(width, height int) tea.Cmd {
 	m.width = width
 	m.height = height
-	m.textarea.SetWidth(width - 3) // account for the prompt and padding right
-	m.textarea.SetHeight(height)
-	m.textarea.SetWidth(width)
+	m.textarea.SetHeight(max(1, height-3))
+	m.textarea.SetWidth(max(12, width-4))
 	return nil
 }
 
@@ -254,7 +262,7 @@ func (m *editorCmp) attachmentsContent() string {
 	t := theme.CurrentTheme()
 	attachmentStyles := styles.BaseStyle().
 		MarginLeft(1).
-		Background(t.TextMuted()).
+		Background(t.BackgroundDarker()).
 		Foreground(t.Text())
 	for i, attachment := range m.attachments {
 		var filename string
