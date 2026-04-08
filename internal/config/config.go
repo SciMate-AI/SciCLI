@@ -106,15 +106,6 @@ type SkillsConfig struct {
 	Disabled []string `json:"disabled,omitempty"`
 }
 
-type SupabaseConfig struct {
-	URL     string `json:"url,omitempty"`
-	AnonKey string `json:"anonKey,omitempty"`
-}
-
-type AuthConfig struct {
-	Supabase SupabaseConfig `json:"supabase,omitempty"`
-}
-
 // Config is the main configuration structure for the application.
 type Config struct {
 	Data         Data                              `json:"data"`
@@ -123,7 +114,6 @@ type Config struct {
 	Providers    map[models.ModelProvider]Provider `json:"providers,omitempty"`
 	LSP          map[string]LSPConfig              `json:"lsp,omitempty"`
 	Agents       map[AgentName]Agent               `json:"agents,omitempty"`
-	Auth         AuthConfig                        `json:"auth,omitempty"`
 	Debug        bool                              `json:"debug,omitempty"`
 	DebugLSP     bool                              `json:"debugLSP,omitempty"`
 	ContextPaths []string                          `json:"contextPaths,omitempty"`
@@ -143,11 +133,6 @@ const (
 	defaultThemeName     = "scicli"
 
 	MaxTokensFallbackDefault = 4096
-)
-
-const (
-	DefaultSupabaseURL     = "https://ltwikvvzbuuuigzkqggs.supabase.co"
-	DefaultSupabaseAnonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imx0d2lrdnZ6YnV1dWlnemtxZ2dzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njk1NjU4NDEsImV4cCI6MjA4NTE0MTg0MX0.V4oVqYAjDQ3xeiCvCI1iora-WklFdXJAmbpIOia_Eq4"
 )
 
 var defaultContextPaths = []string{
@@ -284,8 +269,6 @@ func setDefaults(debug bool) {
 	viper.SetDefault("permissions.allowCommandPrefixes", []string{})
 	viper.SetDefault("skills.paths", []string{})
 	viper.SetDefault("skills.disabled", []string{})
-	viper.SetDefault("auth.supabase.url", envOrDefault("SCICLI_SUPABASE_URL", DefaultSupabaseURL))
-	viper.SetDefault("auth.supabase.anonKey", envOrDefault("SCICLI_SUPABASE_ANON_KEY", DefaultSupabaseAnonKey))
 	viper.SetDefault("mcpServers", map[string]any{})
 
 	defaultShell := DefaultShellConfig()
@@ -1246,19 +1229,6 @@ func DataDirectory() string {
 		panic("config not loaded")
 	}
 	return cfg.Data.Directory
-}
-
-func RequireSupabase() (SupabaseConfig, error) {
-	if cfg == nil {
-		return SupabaseConfig{}, fmt.Errorf("config not loaded")
-	}
-	if strings.TrimSpace(cfg.Auth.Supabase.URL) == "" {
-		return SupabaseConfig{}, fmt.Errorf("supabase url is not configured")
-	}
-	if strings.TrimSpace(cfg.Auth.Supabase.AnonKey) == "" {
-		return SupabaseConfig{}, fmt.Errorf("supabase anon key is not configured")
-	}
-	return cfg.Auth.Supabase, nil
 }
 
 // WorkingDirectory returns the current working directory from the configuration.

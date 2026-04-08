@@ -55,17 +55,19 @@ type skillListItem struct {
 
 func (s skillListItem) Render(selected bool, width int) string {
 	t := theme.CurrentTheme()
-	base := styles.BaseStyle().Width(width).Padding(0, 1)
-	titleStyle := base.Foreground(t.Text())
+	base := styles.BaseStyle().Width(width)
+	titleStyle := base.Foreground(t.TextMuted())
 	descStyle := base.Foreground(t.TextMuted())
+	prefix := "  "
 	if selected {
-		titleStyle = titleStyle.Background(t.Primary()).Foreground(t.Background()).Bold(true)
-		descStyle = descStyle.Background(t.Primary()).Foreground(t.Background())
+		prefix = "> "
+		titleStyle = titleStyle.Foreground(t.Text()).Bold(true)
+		descStyle = descStyle.Foreground(t.Text())
 	}
 	return lipgloss.JoinVertical(
 		lipgloss.Left,
-		titleStyle.Render(skillHeadline(s.skill)),
-		descStyle.Render(skillSubline(s.skill)),
+		titleStyle.Render(prefix+skillHeadline(s.skill)),
+		descStyle.Render("  "+skillSubline(s.skill)),
 	)
 }
 
@@ -180,11 +182,11 @@ func (s *skillDialogCmp) View() string {
 	s.listView.SetMaxWidth(maxWidth)
 	s.filterInput.Width = maxWidth - 2
 	s.installInput.Width = maxWidth - 2
-	title := base.Foreground(t.Primary()).Bold(true).Width(maxWidth).Padding(0, 1).Render(fmt.Sprintf("Skills (%d)", len(s.items)))
+	title := base.Foreground(t.Primary()).Bold(true).Width(maxWidth).Render(fmt.Sprintf("Skills (%d)", len(s.items)))
 
 	searchBlock := lipgloss.JoinVertical(
 		lipgloss.Left,
-		base.Width(maxWidth).Foreground(t.TextMuted()).Render("Search"),
+		base.Width(maxWidth).Foreground(t.TextMuted()).Render("SEARCH"),
 		base.Width(maxWidth).Render(s.filterInput.View()),
 	)
 
@@ -201,7 +203,7 @@ func (s *skillDialogCmp) View() string {
 	}
 	if s.installMode {
 		contentParts = append(contentParts,
-			base.Width(maxWidth).Render(""),
+			"",
 			base.Width(maxWidth).Foreground(t.TextMuted()).Render("Install skill from local path or GitHub tree URL"),
 			base.Width(maxWidth).Render(s.installInput.View()),
 		)
@@ -209,16 +211,10 @@ func (s *skillDialogCmp) View() string {
 	content := lipgloss.JoinVertical(
 		lipgloss.Left,
 		append(contentParts,
-			base.Width(maxWidth).Render(""),
 			base.Width(maxWidth).Foreground(t.TextMuted()).Render(footerText),
 		)...,
 	)
-	return base.Padding(1, 2).
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(t.TextMuted()).
-		BorderBackground(t.Background()).
-		Width(lipgloss.Width(content) + 4).
-		Render(content)
+	return lipgloss.PlaceHorizontal(max(maxWidth, s.width), lipgloss.Center, base.Width(maxWidth).Render(content))
 }
 
 func (s *skillDialogCmp) BindingKeys() []key.Binding {

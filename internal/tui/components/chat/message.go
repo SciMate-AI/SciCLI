@@ -46,48 +46,46 @@ func toMarkdown(content string, focused bool, width int) string {
 
 func renderMessage(msg string, isUser bool, isFocused bool, width int, info ...string) string {
 	t := theme.CurrentTheme()
-	contentWidth := max(12, width-4)
-	roleBadge := consoleBadge("scicli", t.BackgroundDarker(), t.Text())
-	headerMeta := consoleMuted("assistant")
+	baseStyle := styles.BaseStyle()
+	contentWidth := max(12, width)
+	roleLabel := "Assistant"
+	roleStyle := baseStyle.Bold(true).Foreground(t.TextMuted())
 	if isUser {
-		roleBadge = consoleBadge("operator", t.Secondary(), t.Background())
-		headerMeta = consoleMuted("prompt")
+		roleLabel = "You"
+		roleStyle = roleStyle.Foreground(t.Primary())
 	} else if isFocused {
-		roleBadge = consoleBadge("live", t.Primary(), t.Background())
-		headerMeta = consoleMuted("stream")
+		roleStyle = roleStyle.Foreground(t.Text())
 	}
 
-	header := lipgloss.JoinHorizontal(
-		lipgloss.Left,
-		roleBadge,
-		" ",
-		headerMeta,
-	)
+	headerParts := []string{roleStyle.Render(strings.ToUpper(roleLabel))}
+	for _, item := range info {
+		if strings.TrimSpace(item) != "" {
+			headerParts = append(headerParts, "  ")
+			headerParts = append(headerParts, item)
+		}
+	}
+	header := lipgloss.JoinHorizontal(lipgloss.Left, headerParts...)
 	body := styles.ForceReplaceBackgroundWithLipgloss(toMarkdown(msg, isFocused, contentWidth), t.Background())
 	body = strings.TrimSuffix(body, "\n")
-	return consoleTranscriptBlock(width, header, body, info...)
+	return consoleTranscriptBlock(width, header, body)
 }
 
 func renderUserMessage(msg message.Message, isFocused bool, width int, position int) uiMessage {
 	var styledAttachments []string
-	t := theme.CurrentTheme()
-	attachmentStyles := styles.BaseStyle().
-		MarginLeft(1).
-		Background(t.BackgroundDarker()).
-		Foreground(t.Text())
+	attachmentStyles := styles.BaseStyle().Foreground(theme.CurrentTheme().TextMuted())
 	for _, attachment := range msg.BinaryContent() {
 		file := filepath.Base(attachment.Path)
 		var filename string
 		if len(file) > 10 {
-			filename = fmt.Sprintf(" %s %s...", styles.DocumentIcon, file[0:7])
+			filename = fmt.Sprintf("%s %s...", styles.DocumentIcon, file[0:7])
 		} else {
-			filename = fmt.Sprintf(" %s %s", styles.DocumentIcon, file)
+			filename = fmt.Sprintf("%s %s", styles.DocumentIcon, file)
 		}
 		styledAttachments = append(styledAttachments, attachmentStyles.Render(filename))
 	}
 	content := ""
 	if len(styledAttachments) > 0 {
-		attachmentContent := styles.BaseStyle().Width(width).Render(lipgloss.JoinHorizontal(lipgloss.Left, styledAttachments...))
+		attachmentContent := styles.BaseStyle().Width(width).Render("attachments  " + strings.Join(styledAttachments, "  "))
 		content = renderMessage(msg.Content().String(), true, isFocused, width, attachmentContent)
 	} else {
 		content = renderMessage(msg.Content().String(), true, isFocused, width)
@@ -161,7 +159,7 @@ func renderAssistantMessage(
 			content = "*Finished without output*"
 		}
 		if isSummary {
-			info = append(info, consoleMuted("summary"))
+			info = append(info, baseStyle.Foreground(t.TextMuted()).Render("summary"))
 		}
 
 		rendered := renderMessage(content, false, msg.ID == focusedUIMessageId, width, info...)
@@ -174,7 +172,13 @@ func renderAssistantMessage(
 		})
 		position += messages[0].height + 1
 	} else if thinking && thinkingContent != "" {
-		rendered := renderMessage(thinkingContent, false, msg.ID == focusedUIMessageId, width, consoleMuted("reasoning"))
+		reasoningInfo := lipgloss.JoinHorizontal(
+			lipgloss.Left,
+			consoleOutlineBadge("reasoning", t.TextMuted()),
+			"  ",
+			baseStyle.Foreground(t.TextMuted()).Render("working notes"),
+		)
+		rendered := renderMessage(thinkingContent, false, msg.ID == focusedUIMessageId, width, reasoningInfo)
 		messages = append(messages, uiMessage{
 			ID:          msg.ID,
 			messageType: assistantMessageType,
@@ -530,15 +534,18 @@ func renderToolMessage(
 	t := theme.CurrentTheme()
 	baseStyle := styles.BaseStyle()
 	response := findToolResponse(toolCall.ID, allMessages)
+	toolLabel := strings.ToLower(toolName(toolCall.Name))
 
 	header := lipgloss.JoinHorizontal(
 		lipgloss.Left,
-		consoleBadge(toolName(toolCall.Name), t.BackgroundDarker(), t.Text()),
-		" ",
-		consoleMuted(renderToolParams(max(12, width/2), toolCall)),
+		consoleOutlineBadge(toolLabel, t.Secondary()),
 	)
+	params := renderToolParams(max(12, width/2), toolCall)
+	if strings.TrimSpace(params) != "" {
+		header = lipgloss.JoinHorizontal(lipgloss.Left, header, "  ", baseStyle.Foreground(t.TextMuted()).Render(params))
+	}
 	if nested {
-		header = lipgloss.JoinHorizontal(lipgloss.Left, consoleMuted("->"), " ", header)
+		header = lipgloss.JoinHorizontal(lipgloss.Left, baseStyle.Foreground(t.TextMuted()).Render("->"), " ", header)
 	}
 
 	if !toolCall.Finished {
@@ -584,7 +591,17 @@ func renderToolMessage(
 		}
 	}
 
-	content := consoleTranscriptBlock(width, header, "", footers...)
+	content := lipgloss.NewStyle().
+		Width(max(1, width)).
+		BorderLeft(true).
+		BorderStyle(lipgloss.NormalBorder()).
+		BorderForeground(t.BackgroundSecondary()).
+		PaddingLeft(1).
+		Render(lipgloss.JoinVertical(
+			lipgloss.Left,
+			header,
+			lipgloss.NewStyle().PaddingLeft(1).Render(strings.Join(footers, "\n")),
+		))
 	return uiMessage{
 		messageType: toolMessageType,
 		position:    position,

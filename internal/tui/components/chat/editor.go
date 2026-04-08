@@ -31,6 +31,10 @@ type editorCmp struct {
 	textarea    textarea.Model
 	attachments []message.Attachment
 	deleteMode  bool
+	slashItems  []slashCommand
+	slashIndex  int
+	slashQuery  string
+	slashHidden bool
 }
 
 type EditorKeyMaps struct {
@@ -129,6 +133,7 @@ func (m *editorCmp) send() tea.Cmd {
 	attachments := m.attachments
 
 	m.attachments = nil
+	m.refreshSlashSuggestions()
 	if value == "" {
 		return nil
 	}
@@ -145,11 +150,13 @@ func (m *editorCmp) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case dialog.ThemeChangedMsg:
 		m.textarea = CreateTextArea(&m.textarea)
+		m.refreshSlashSuggestions()
 	case dialog.CompletionSelectedMsg:
 		existingValue := m.textarea.Value()
 		modifiedValue := strings.Replace(existingValue, msg.SearchString, msg.CompletionValue, 1)
 
 		m.textarea.SetValue(modifiedValue)
+		m.refreshSlashSuggestions()
 		return m, nil
 	case SessionSelectedMsg:
 		if msg.ID != m.session.ID {
@@ -196,14 +203,40 @@ func (m *editorCmp) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if key.Matches(msg, DeleteKeyMaps.Escape) {
 			m.deleteMode = false
+			if len(m.slashItems) > 0 {
+				m.slashHidden = true
+				m.slashItems = nil
+				m.slashIndex = 0
+				m.slashQuery = slashQuery(m.textarea.Value())
+			}
 			return m, nil
+		}
+		if len(m.slashItems) > 0 {
+			switch msg.String() {
+			case "up":
+				m.moveSlashSelection(-1)
+				return m, nil
+			case "down":
+				m.moveSlashSelection(1)
+				return m, nil
+			case "tab":
+				if item, ok := m.selectedSlashCommand(); ok {
+					m.applySlashCommand(item)
+					return m, nil
+				}
+			}
 		}
 		// Hanlde Enter key
 		if m.textarea.Focused() && key.Matches(msg, editorMaps.Send) {
+			if item, ok := m.selectedSlashCommand(); ok && m.shouldCompleteSlashOnEnter(item) {
+				m.applySlashCommand(item)
+				return m, nil
+			}
 			value := m.textarea.Value()
 			if len(value) > 0 && value[len(value)-1] == '\\' {
 				// If the last character is a backslash, remove it and add a newline
 				m.textarea.SetValue(value[:len(value)-1] + "\n")
+				m.refreshSlashSuggestions()
 				return m, nil
 			} else {
 				// Otherwise, send the message
@@ -213,43 +246,57 @@ func (m *editorCmp) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	}
 	m.textarea, cmd = m.textarea.Update(msg)
+	m.refreshSlashSuggestions()
 	return m, cmd
 }
 
 func (m *editorCmp) View() string {
 	t := theme.CurrentTheme()
 	baseStyle := styles.BaseStyle()
-	status := lipgloss.JoinHorizontal(
-		lipgloss.Left,
-		consoleMuted("enter send"),
-		"  ",
-		consoleMuted("\\ + enter newline"),
-		"  ",
-		consoleMuted("ctrl+e editor"),
-	)
+	contextLine := m.renderContextLine()
+	statusParts := []string{
+		"Enter send",
+		"\\ + Enter newline",
+		"Ctrl+E editor",
+	}
+	if len(m.slashItems) > 0 {
+		statusParts = append([]string{"Tab accept", "Up/Down choose", "Esc close"}, statusParts...)
+	}
+	status := strings.Join(statusParts, "  ")
 	prompt := baseStyle.Bold(true).Foreground(t.Primary()).Render(">")
 	if m.app.CoderAgent.IsSessionBusy(m.session.ID) {
 		prompt = baseStyle.Bold(true).Foreground(t.Warning()).Render("!")
 	}
 	inputRow := lipgloss.JoinHorizontal(lipgloss.Top, prompt, " ", m.textarea.View())
-	lines := []string{
-		consoleDivider(m.width, ""),
-		lipgloss.JoinHorizontal(lipgloss.Left, consoleBadge("shell", t.BackgroundDarker(), t.Text()), " ", status),
-	}
+	lines := []string{contextLine}
 
 	if len(m.attachments) > 0 {
-		lines = append(lines, consoleMuted("attachments:")+" "+m.attachmentsContent())
+		lines = append(lines, consoleMuted("attachments")+"  "+m.attachmentsContent())
 	}
 	lines = append(lines, inputRow)
-	lines = append(lines, consoleMuted("/research /experiment /artifact /tasks /parent"))
-	return baseStyle.Width(m.width).Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
+	if suggestions := m.renderSlashSuggestions(); suggestions != "" {
+		lines = append(lines, suggestions)
+	}
+	lines = append(lines, consoleMuted(status))
+
+	columnWidth := codexColumnWidth(m.width)
+	box := lipgloss.NewStyle().
+		Width(max(24, columnWidth)).
+		Padding(1, 0, 0, 0).
+		BorderTop(true).
+		BorderStyle(lipgloss.NormalBorder()).
+		BorderForeground(t.BorderDim()).
+		Background(t.Background()).
+		Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
+	return baseStyle.Width(m.width).Render(codexCenter(m.width, box))
 }
 
 func (m *editorCmp) SetSize(width, height int) tea.Cmd {
 	m.width = width
 	m.height = height
-	m.textarea.SetHeight(max(1, height-3))
-	m.textarea.SetWidth(max(12, width-4))
+	columnWidth := codexColumnWidth(width)
+	m.textarea.SetHeight(max(1, height-5))
+	m.textarea.SetWidth(max(12, columnWidth-6))
 	return nil
 }
 
@@ -259,24 +306,20 @@ func (m *editorCmp) GetSize() (int, int) {
 
 func (m *editorCmp) attachmentsContent() string {
 	var styledAttachments []string
-	t := theme.CurrentTheme()
-	attachmentStyles := styles.BaseStyle().
-		MarginLeft(1).
-		Background(t.BackgroundDarker()).
-		Foreground(t.Text())
+	attachmentStyles := styles.BaseStyle().Foreground(theme.CurrentTheme().TextMuted())
 	for i, attachment := range m.attachments {
 		var filename string
 		if len(attachment.FileName) > 10 {
-			filename = fmt.Sprintf(" %s %s...", styles.DocumentIcon, attachment.FileName[0:7])
+			filename = fmt.Sprintf("%s %s...", styles.DocumentIcon, attachment.FileName[0:7])
 		} else {
-			filename = fmt.Sprintf(" %s %s", styles.DocumentIcon, attachment.FileName)
+			filename = fmt.Sprintf("%s %s", styles.DocumentIcon, attachment.FileName)
 		}
 		if m.deleteMode {
-			filename = fmt.Sprintf("%d%s", i, filename)
+			filename = fmt.Sprintf("%d:%s", i, filename)
 		}
 		styledAttachments = append(styledAttachments, attachmentStyles.Render(filename))
 	}
-	content := lipgloss.JoinHorizontal(lipgloss.Left, styledAttachments...)
+	content := strings.Join(styledAttachments, "  ")
 	return content
 }
 
@@ -303,7 +346,8 @@ func CreateTextArea(existing *textarea.Model) textarea.Model {
 	ta.FocusedStyle.Placeholder = styles.BaseStyle().Background(bgColor).Foreground(textMutedColor)
 	ta.FocusedStyle.Text = styles.BaseStyle().Background(bgColor).Foreground(textColor)
 
-	ta.Prompt = " "
+	ta.Prompt = ""
+	ta.Placeholder = "Type a request or / for commands"
 	ta.ShowLineNumbers = false
 	ta.CharLimit = -1
 
@@ -319,8 +363,141 @@ func CreateTextArea(existing *textarea.Model) textarea.Model {
 
 func NewEditorCmp(app *app.App) tea.Model {
 	ta := CreateTextArea(nil)
-	return &editorCmp{
+	editor := &editorCmp{
 		app:      app,
 		textarea: ta,
 	}
+	editor.refreshSlashSuggestions()
+	return editor
+}
+
+func (m *editorCmp) refreshSlashSuggestions() {
+	query := slashQuery(m.textarea.Value())
+	if query != m.slashQuery {
+		m.slashHidden = false
+	}
+	m.slashQuery = query
+	if m.slashHidden || query == "" {
+		m.slashItems = nil
+		m.slashIndex = 0
+		return
+	}
+	m.slashItems = filterSlashCommands(m.textarea.Value())
+	if len(m.slashItems) == 0 {
+		m.slashIndex = 0
+		return
+	}
+	if m.slashIndex >= len(m.slashItems) {
+		m.slashIndex = len(m.slashItems) - 1
+	}
+	if m.slashIndex < 0 {
+		m.slashIndex = 0
+	}
+}
+
+func (m *editorCmp) moveSlashSelection(delta int) {
+	if len(m.slashItems) == 0 {
+		return
+	}
+	m.slashIndex = (m.slashIndex + delta + len(m.slashItems)) % len(m.slashItems)
+}
+
+func (m *editorCmp) selectedSlashCommand() (slashCommand, bool) {
+	if len(m.slashItems) == 0 || m.slashIndex < 0 || m.slashIndex >= len(m.slashItems) {
+		return slashCommand{}, false
+	}
+	return m.slashItems[m.slashIndex], true
+}
+
+func (m *editorCmp) shouldCompleteSlashOnEnter(item slashCommand) bool {
+	query := slashQuery(m.textarea.Value())
+	if query == "" || strings.Contains(query, "\n") {
+		return false
+	}
+	normalizedInsert := strings.ToLower(strings.TrimSpace(item.InsertText))
+	if item.RequiresArgs {
+		return !slashCommandHasArguments(m.textarea.Value(), item)
+	}
+	return query != normalizedInsert
+}
+
+func (m *editorCmp) applySlashCommand(item slashCommand) {
+	m.slashHidden = false
+	m.textarea.SetValue(item.InsertText)
+	m.textarea.SetCursor(len(item.InsertText))
+	m.refreshSlashSuggestions()
+}
+
+func (m *editorCmp) renderSlashSuggestions() string {
+	if len(m.slashItems) == 0 || m.width <= 0 {
+		return ""
+	}
+
+	t := theme.CurrentTheme()
+	baseStyle := styles.BaseStyle()
+	visible := min(len(m.slashItems), 7)
+	selected, _ := m.selectedSlashCommand()
+	header := baseStyle.Foreground(t.TextMuted()).Render("COMMANDS")
+	if selected.Category != "" {
+		header += baseStyle.Foreground(t.TextMuted()).Render("  " + strings.ToUpper(selected.Category))
+	}
+	lines := []string{header}
+	commandWidth := max(18, min(m.width/2, 42))
+
+	for i := 0; i < visible; i++ {
+		item := m.slashItems[i]
+		prefix := "  "
+		commandStyle := baseStyle.Foreground(t.TextMuted())
+		descStyle := baseStyle.Foreground(t.TextMuted())
+		if i == m.slashIndex {
+			prefix = "> "
+			commandStyle = commandStyle.Foreground(t.Primary()).Bold(true)
+			descStyle = descStyle.Foreground(t.Text())
+		}
+
+		commandLabel := truncateString(item.DisplayCommand(), commandWidth)
+		description := truncateString(item.Description, max(16, m.width-commandWidth-8))
+		row := prefix + commandStyle.Render(commandLabel)
+		if description != "" && m.width-commandWidth > 12 {
+			padding := max(2, commandWidth-lipgloss.Width(commandLabel)+2)
+			row += strings.Repeat(" ", padding) + descStyle.Render(description)
+		}
+		lines = append(lines, row)
+	}
+	if len(m.slashItems) > visible {
+		lines = append(lines, baseStyle.Foreground(t.TextMuted()).Render(fmt.Sprintf("  +%d more commands", len(m.slashItems)-visible)))
+	}
+	if usage := selected.DisplayCommand(); usage != "" {
+		lines = append(lines, "")
+		lines = append(lines, baseStyle.Foreground(t.TextMuted()).Render("USAGE"))
+		lines = append(lines, baseStyle.Foreground(t.Text()).Render(truncateString(usage, max(16, m.width-10))))
+	}
+
+	return lipgloss.NewStyle().
+		MaxWidth(max(24, codexColumnWidth(m.width)-4)).
+		BorderLeft(true).
+		BorderForeground(t.BorderDim()).
+		PaddingLeft(1).
+		Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
+}
+
+func (m *editorCmp) renderContextLine() string {
+	t := theme.CurrentTheme()
+	baseStyle := styles.BaseStyle().Foreground(t.TextMuted())
+	sessionLabel := "new session"
+	if strings.TrimSpace(m.session.Title) != "" {
+		sessionLabel = truncateString(m.session.Title, max(12, m.width/3))
+	}
+	modeLabel := "ready"
+	if m.app.CoderAgent.IsSessionBusy(m.session.ID) {
+		modeLabel = "running"
+	}
+	modelLabel := activeModelShellLabel(max(18, m.width/3))
+	return baseStyle.Render(strings.Join([]string{
+		"session " + sessionLabel,
+		modelLabel,
+		modeLabel,
+		"/ commands",
+		"@ paths",
+	}, "  "))
 }

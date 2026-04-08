@@ -44,12 +44,14 @@ type taskListItem struct {
 
 func (t taskListItem) Render(selected bool, width int) string {
 	themeColors := theme.CurrentTheme()
-	baseStyle := styles.BaseStyle().Width(width).Padding(0, 1)
-	titleStyle := baseStyle.Foreground(themeColors.Text())
+	baseStyle := styles.BaseStyle().Width(width)
+	titleStyle := baseStyle.Foreground(themeColors.TextMuted())
 	descStyle := baseStyle.Foreground(themeColors.TextMuted())
+	prefix := "  "
 	if selected {
-		titleStyle = titleStyle.Background(themeColors.Primary()).Foreground(themeColors.Background()).Bold(true)
-		descStyle = descStyle.Background(themeColors.Primary()).Foreground(themeColors.Background())
+		prefix = "> "
+		titleStyle = titleStyle.Foreground(themeColors.Text()).Bold(true)
+		descStyle = descStyle.Foreground(themeColors.Text())
 	}
 
 	title := t.session.Title
@@ -58,8 +60,8 @@ func (t taskListItem) Render(selected bool, width int) string {
 	}
 	return lipgloss.JoinVertical(
 		lipgloss.Left,
-		titleStyle.Render(title),
-		descStyle.Render(renderTaskMeta(t.session)),
+		titleStyle.Render(prefix+title),
+		descStyle.Render("  "+renderTaskMeta(t.session)),
 	)
 }
 
@@ -113,7 +115,6 @@ func (t *taskDialogCmp) View() string {
 		Foreground(themeColors.Primary()).
 		Bold(true).
 		Width(maxWidth).
-		Padding(0, 1).
 		Render(fmt.Sprintf("Delegated Tasks (%d)", len(t.tasks)))
 
 	parentLine := "Current session"
@@ -125,18 +126,12 @@ func (t *taskDialogCmp) View() string {
 		lipgloss.Left,
 		title,
 		baseStyle.Width(maxWidth).Foreground(themeColors.TextMuted()).Render(parentLine),
-		baseStyle.Width(maxWidth).Render(""),
+		"",
 		baseStyle.Width(maxWidth).Render(t.listView.View()),
-		baseStyle.Width(maxWidth).Render(""),
 		baseStyle.Width(maxWidth).Foreground(themeColors.TextMuted()).Render("Enter opens the delegated task session."),
 	)
 
-	return baseStyle.Padding(1, 2).
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(themeColors.TextMuted()).
-		BorderBackground(themeColors.Background()).
-		Width(lipgloss.Width(content) + 4).
-		Render(content)
+	return lipgloss.PlaceHorizontal(max(maxWidth, t.width), lipgloss.Center, baseStyle.Width(maxWidth).Render(content))
 }
 
 func (t *taskDialogCmp) BindingKeys() []key.Binding {

@@ -20,7 +20,7 @@ type StartCompactSessionMsg struct{}
 
 const (
 	numVisibleModels = 10
-	maxDialogWidth   = 40
+	maxDialogWidth   = 56
 )
 
 type ModelSelectedMsg struct {
@@ -190,50 +190,55 @@ func (m *modelDialogCmp) switchProvider(offset int) {
 func (m *modelDialogCmp) View() string {
 	t := theme.CurrentTheme()
 	baseStyle := styles.BaseStyle()
+	width := maxDialogWidth
+	if m.width > 0 {
+		width = max(44, min(72, m.width-10))
+	}
 
 	providerName := strings.ToUpper(string(m.provider)[:1]) + string(m.provider[1:])
 	if !config.ProviderReady(m.provider) {
 		providerName += " [setup required]"
 	}
-	title := baseStyle.
-		Foreground(t.Primary()).
-		Bold(true).
-		Width(maxDialogWidth).
-		Padding(0, 0, 1).
-		Render(fmt.Sprintf("Provider: %s", providerName))
+	title := baseStyle.Foreground(t.Primary()).Bold(true).Width(width).Render("Provider / model")
+	context := lipgloss.NewStyle().
+		Width(width).
+		BorderLeft(true).
+		BorderForeground(t.BorderDim()).
+		PaddingLeft(1).
+		Foreground(t.TextMuted()).
+		Render(fmt.Sprintf("provider  %s", providerName))
 
 	endIdx := min(m.scrollOffset+numVisibleModels, len(m.models))
 	modelItems := make([]string, 0, endIdx-m.scrollOffset)
 	for i := m.scrollOffset; i < endIdx; i++ {
-		itemStyle := baseStyle.Width(maxDialogWidth)
+		prefix := "  "
+		itemStyle := baseStyle.Width(width).Foreground(t.TextMuted())
 		if i == m.selectedIdx {
-			itemStyle = itemStyle.Background(t.Primary()).
-				Foreground(t.Background()).
-				Bold(true)
+			prefix = "> "
+			itemStyle = itemStyle.Foreground(t.Text()).Bold(true)
 		}
-		modelItems = append(modelItems, itemStyle.Render(m.models[i].Name))
+		modelItems = append(modelItems, itemStyle.Render(prefix+m.models[i].Name))
 	}
 
 	footer := baseStyle.
 		Foreground(t.TextMuted()).
-		Width(maxDialogWidth).
+		Width(width).
 		Render(m.getScrollIndicators())
 
 	content := lipgloss.JoinVertical(
 		lipgloss.Left,
 		title,
-		baseStyle.Width(maxDialogWidth).Render(m.headerText()),
-		baseStyle.Width(maxDialogWidth).Render(""),
-		baseStyle.Width(maxDialogWidth).Render(lipgloss.JoinVertical(lipgloss.Left, modelItems...)),
+		baseStyle.Width(width).Foreground(t.TextMuted()).Render(m.headerText()),
+		"",
+		context,
+		"",
+		baseStyle.Width(width).Render(m.renderProviderStrip(width)),
+		"",
+		baseStyle.Width(width).Render(lipgloss.JoinVertical(lipgloss.Left, modelItems...)),
 		footer,
 	)
 
-	return baseStyle.Padding(1, 2).
-		Border(lipgloss.RoundedBorder()).
-		BorderBackground(t.Background()).
-		BorderForeground(t.TextMuted()).
-		Width(lipgloss.Width(content) + 4).
-		Render(content)
+	return lipgloss.PlaceHorizontal(max(width, m.width), lipgloss.Center, baseStyle.Width(width).Render(content))
 }
 
 func (m *modelDialogCmp) getScrollIndicators() string {
@@ -368,9 +373,34 @@ func getModelsForProvider(provider models.ModelProvider) []models.Model {
 
 func (m *modelDialogCmp) headerText() string {
 	if config.ProviderReady(m.provider) {
-		return "Select Provider / Model"
+		return "Left/Right switches provider. Up/Down selects model. Enter confirms."
 	}
-	return "Press Enter to configure this provider"
+	return "Enter opens provider setup for this provider."
+}
+
+func (m *modelDialogCmp) renderProviderStrip(width int) string {
+	t := theme.CurrentTheme()
+	baseStyle := styles.BaseStyle()
+	if len(m.availableProviders) == 0 {
+		return ""
+	}
+
+	lines := make([]string, 0, len(m.availableProviders))
+	for idx, provider := range m.availableProviders {
+		label := "  " + string(provider)
+		style := baseStyle.Width(width).Foreground(t.TextMuted())
+		if idx == m.hScrollOffset {
+			label = "> " + string(provider)
+			style = baseStyle.Width(width).Foreground(t.Text()).Bold(true)
+		}
+		lines = append(lines, style.Render(label))
+	}
+
+	return lipgloss.NewStyle().
+		BorderLeft(true).
+		BorderForeground(t.BorderDim()).
+		PaddingLeft(1).
+		Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
 }
 
 func NewModelDialogCmp() ModelDialog {

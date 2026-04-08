@@ -10,7 +10,7 @@
 - Use `opencode` as the CLI and agent baseline.
 - Do not port VS Code-only systems from `scimate-vscode` such as webviews, the plan engine, or the fallback workspace/terminal/patch tools created for the extension host.
 - Original proposal items that were later reduced or removed:
-  - Supabase auth with register/login/logout/status
+  - built-in account auth flows
   - token refresh and token-aware remote MCP calls
   - built-in SciMate MCP server presets
   - CAE run, log, and artifact commands
@@ -22,11 +22,9 @@
 - Rebrand the `opencode` baseline to `scicli` at the CLI/config/data-directory level.
 - Keep the existing `opencode` local coding tools, permissions, sessions, and MCP tool exposure for the agent.
 - Original configuration additions under consideration:
-  - `auth.supabase.url`
-  - `auth.supabase.anonKey`
   - built-in MCP defaults for `cae-agent`, `origin`, and `rdkit`
 - Original auth additions under consideration:
-  - Supabase password signup/login
+  - password signup/login
   - refresh-token based renewal
   - local token persistence
 - Original MCP additions under consideration:

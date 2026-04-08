@@ -45,19 +45,18 @@ func (s sessionListItem) Render(selected bool, width int) string {
 
 	itemStyle := baseStyle.
 		Width(width).
-		Padding(0, 1)
+		Foreground(t.TextMuted())
+	prefix := "  "
 	if selected {
-		itemStyle = itemStyle.
-			Background(t.Primary()).
-			Foreground(t.Background()).
-			Bold(true)
+		prefix = "> "
+		itemStyle = itemStyle.Foreground(t.Text()).Bold(true)
 	}
 
 	title := s.session.Title
 	if title == "" {
 		title = "(untitled session)"
 	}
-	return itemStyle.Render(title)
+	return itemStyle.Render(prefix + title)
 }
 
 type sessionKeyMap struct {
@@ -111,12 +110,7 @@ func (s *sessionDialogCmp) View() string {
 	baseStyle := styles.BaseStyle()
 
 	if len(s.sessions) == 0 {
-		return baseStyle.Padding(1, 2).
-			Border(lipgloss.RoundedBorder()).
-			BorderBackground(t.Background()).
-			BorderForeground(t.TextMuted()).
-			Width(40).
-			Render("No sessions available")
+		return lipgloss.PlaceHorizontal(max(40, s.width), lipgloss.Center, baseStyle.Width(40).Render("No sessions available"))
 	}
 
 	maxWidth := 40
@@ -136,23 +130,15 @@ func (s *sessionDialogCmp) View() string {
 		Foreground(t.Primary()).
 		Bold(true).
 		Width(maxWidth).
-		Padding(0, 1).
 		Render(fmt.Sprintf("Switch Session (%d)", len(s.sessions)))
 
 	content := lipgloss.JoinVertical(
 		lipgloss.Left,
 		title,
-		baseStyle.Width(maxWidth).Render(""),
 		baseStyle.Width(maxWidth).Render(s.listView.View()),
-		baseStyle.Width(maxWidth).Render(""),
 	)
 
-	return baseStyle.Padding(1, 2).
-		Border(lipgloss.RoundedBorder()).
-		BorderBackground(t.Background()).
-		BorderForeground(t.TextMuted()).
-		Width(lipgloss.Width(content) + 4).
-		Render(content)
+	return lipgloss.PlaceHorizontal(max(maxWidth, s.width), lipgloss.Center, baseStyle.Width(maxWidth).Render(content))
 }
 
 func (s *sessionDialogCmp) BindingKeys() []key.Binding {

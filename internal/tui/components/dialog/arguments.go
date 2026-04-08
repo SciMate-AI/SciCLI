@@ -75,7 +75,7 @@ func NewMultiArgumentsDialogCmp(commandID, content string, argNames []string) Mu
 		ti.PlaceholderStyle = ti.PlaceholderStyle.Background(t.Background())
 		ti.PromptStyle = ti.PromptStyle.Background(t.Background())
 		ti.TextStyle = ti.TextStyle.Background(t.Background())
-		
+
 		// Only focus the first input initially
 		if i == 0 {
 			ti.Focus()
@@ -89,11 +89,11 @@ func NewMultiArgumentsDialogCmp(commandID, content string, argNames []string) Mu
 	}
 
 	return MultiArgumentsDialogCmp{
-		inputs:    inputs,
-		keys:      argumentsDialogKeyMap{},
-		commandID: commandID,
-		content:   content,
-		argNames:  argNames,
+		inputs:     inputs,
+		keys:       argumentsDialogKeyMap{},
+		commandID:  commandID,
+		content:    content,
+		argNames:   argNames,
 		focusIndex: 0,
 	}
 }
@@ -108,7 +108,7 @@ func (m MultiArgumentsDialogCmp) Init() tea.Cmd {
 			m.inputs[i].Blur()
 		}
 	}
-	
+
 	return textinput.Blink
 }
 
@@ -187,15 +187,11 @@ func (m MultiArgumentsDialogCmp) View() string {
 		Foreground(t.Primary()).
 		Bold(true).
 		Width(maxWidth).
-		Padding(0, 1).
-		Background(t.Background()).
-		Render("Command Arguments")
+		Render("Command arguments")
 
 	explanation := lipgloss.NewStyle().
-		Foreground(t.Text()).
+		Foreground(t.TextMuted()).
 		Width(maxWidth).
-		Padding(0, 1).
-		Background(t.Background()).
 		Render("This command requires multiple arguments. Please enter values for each:")
 
 	// Create input fields for each argument
@@ -204,22 +200,22 @@ func (m MultiArgumentsDialogCmp) View() string {
 		// Highlight the label of the focused input
 		labelStyle := lipgloss.NewStyle().
 			Width(maxWidth).
-			Padding(1, 1, 0, 1).
-			Background(t.Background())
-			
+			Padding(1, 0, 0, 0)
+
 		if i == m.focusIndex {
 			labelStyle = labelStyle.Foreground(t.Primary()).Bold(true)
 		} else {
 			labelStyle = labelStyle.Foreground(t.TextMuted())
 		}
-		
+
 		label := labelStyle.Render(m.argNames[i] + ":")
 
 		field := lipgloss.NewStyle().
 			Foreground(t.Text()).
 			Width(maxWidth).
-			Padding(0, 1).
-			Background(t.Background()).
+			BorderLeft(true).
+			BorderForeground(t.BorderDim()).
+			PaddingLeft(1).
 			Render(input.View())
 
 		inputFields[i] = lipgloss.JoinVertical(lipgloss.Left, label, field)
@@ -236,13 +232,7 @@ func (m MultiArgumentsDialogCmp) View() string {
 		elements...,
 	)
 
-	return baseStyle.Padding(1, 2).
-		Border(lipgloss.RoundedBorder()).
-		BorderBackground(t.Background()).
-		BorderForeground(t.TextMuted()).
-		Background(t.Background()).
-		Width(lipgloss.Width(content) + 4).
-		Render(content)
+	return lipgloss.PlaceHorizontal(max(maxWidth, m.width), lipgloss.Center, baseStyle.Width(maxWidth).Render(content))
 }
 
 // SetSize sets the size of the component.

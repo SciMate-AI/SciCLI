@@ -118,16 +118,11 @@ func (m statusCmp) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 var helpWidget = ""
 
-// getHelpWidget returns the help widget with current theme colors
 func getHelpWidget() string {
 	t := theme.CurrentTheme()
-	helpText := "ctrl+? help"
-
-	return styles.Padded().
-		Background(t.TextMuted()).
-		Foreground(t.BackgroundDarker()).
-		Bold(true).
-		Render(helpText)
+	return styles.BaseStyle().
+		Foreground(t.TextMuted()).
+		Render("ctrl+? help")
 }
 
 func formatTokensAndCost(tokens, contextWindow int64, cost float64) string {
@@ -166,44 +161,28 @@ func (m statusCmp) View() string {
 	t := theme.CurrentTheme()
 	modelID := config.Get().Agents[config.AgentCoder].Model
 	model := models.SupportedModels[modelID]
+	baseStyle := styles.BaseStyle()
 
-	// Initialize the help widget
-	status := getHelpWidget()
-	modeWidget := m.workMode()
-	skillWidget := ""
-	if m.session.ID != "" && m.skillsSvc != nil {
-		skillWidget = m.skillSummary()
-	}
-	inspectorWidget := m.inspectorSummary()
-	taskWidget := m.taskSummary()
-	approvalWidget := ""
-	if m.permission != nil && m.permission.PendingCount() > 0 {
-		approvalWidget = m.pendingApprovals()
-	}
-
-	tokenInfoWidth := 0
+	leftParts := []string{getHelpWidget()}
 	if m.session.ID != "" {
 		totalTokens := m.session.PromptTokens + m.session.CompletionTokens
 		tokens := formatTokensAndCost(totalTokens, model.ContextWindow, m.session.Cost)
-		tokensStyle := styles.Padded().
-			Background(t.Text()).
-			Foreground(t.BackgroundSecondary())
 		percentage := (float64(totalTokens) / float64(model.ContextWindow)) * 100
 		if percentage > 80 {
-			tokensStyle = tokensStyle.Background(t.Warning())
+			leftParts = append(leftParts, baseStyle.Foreground(t.Warning()).Render(tokens))
+		} else {
+			leftParts = append(leftParts, baseStyle.Foreground(t.TextMuted()).Render(tokens))
 		}
-		tokenInfoWidth = lipgloss.Width(tokens) + 2
-		status += tokensStyle.Render(tokens)
+	}
+	if diagnostics := strings.TrimSpace(m.projectDiagnostics()); diagnostics != "" {
+		leftParts = append(leftParts, diagnostics)
 	}
 
-	diagnostics := styles.Padded().
-		Background(t.BackgroundDarker()).
-		Render(m.projectDiagnostics())
-
-	availableWidht := max(0, m.width-lipgloss.Width(helpWidget)-lipgloss.Width(m.model())-lipgloss.Width(modeWidget)-lipgloss.Width(skillWidget)-lipgloss.Width(inspectorWidget)-lipgloss.Width(taskWidget)-lipgloss.Width(approvalWidget)-lipgloss.Width(diagnostics)-tokenInfoWidth)
-
 	if m.info.Msg != "" {
-		infoStyle := styles.Padded().
+		left := strings.Join(leftParts, "  ")
+		right := strings.Join(m.rightStatusParts(), "  ")
+		availableWidht := max(0, m.width-lipgloss.Width(left)-lipgloss.Width(right)-2)
+		infoStyle := baseStyle.
 			Foreground(t.Background()).
 			Width(availableWidht)
 
@@ -222,23 +201,21 @@ func (m statusCmp) View() string {
 		if len(msg) > infoWidth && infoWidth > 0 {
 			msg = msg[:infoWidth] + "..."
 		}
-		status += infoStyle.Render(msg)
-	} else {
-		status += styles.Padded().
-			Foreground(t.Text()).
-			Background(t.BackgroundSecondary()).
-			Width(availableWidht).
-			Render(truncateString("cwd: "+config.WorkingDirectory(), availableWidht-2))
+		leftParts = append(leftParts, infoStyle.Render(msg))
+	} else if cwd := strings.TrimSpace(config.WorkingDirectory()); cwd != "" {
+		leftParts = append(leftParts, baseStyle.Foreground(t.TextMuted()).Render("cwd "+truncateString(cwd, max(12, m.width/3))))
 	}
 
-	status += diagnostics
-	status += taskWidget
-	status += inspectorWidget
-	status += skillWidget
-	status += approvalWidget
-	status += modeWidget
-	status += m.model()
-	return status
+	left := strings.Join(leftParts, "  ")
+	right := strings.Join(m.rightStatusParts(), "  ")
+	if right == "" {
+		return baseStyle.Width(m.width).Render(left)
+	}
+	space := m.width - lipgloss.Width(left) - lipgloss.Width(right)
+	if space < 2 {
+		return baseStyle.Width(m.width).Render(truncateString(left, max(0, m.width-lipgloss.Width(right)-2)) + "  " + right)
+	}
+	return baseStyle.Width(m.width).Render(left + strings.Repeat(" ", space) + right)
 }
 
 func (m *statusCmp) projectDiagnostics() string {
@@ -283,35 +260,31 @@ func (m *statusCmp) projectDiagnostics() string {
 	}
 
 	if len(errorDiagnostics) == 0 && len(warnDiagnostics) == 0 && len(hintDiagnostics) == 0 && len(infoDiagnostics) == 0 {
-		return "No diagnostics"
+		return ""
 	}
 
 	diagnostics := []string{}
 
 	if len(errorDiagnostics) > 0 {
 		errStr := lipgloss.NewStyle().
-			Background(t.BackgroundDarker()).
 			Foreground(t.Error()).
 			Render(fmt.Sprintf("%s %d", styles.ErrorIcon, len(errorDiagnostics)))
 		diagnostics = append(diagnostics, errStr)
 	}
 	if len(warnDiagnostics) > 0 {
 		warnStr := lipgloss.NewStyle().
-			Background(t.BackgroundDarker()).
 			Foreground(t.Warning()).
 			Render(fmt.Sprintf("%s %d", styles.WarningIcon, len(warnDiagnostics)))
 		diagnostics = append(diagnostics, warnStr)
 	}
 	if len(hintDiagnostics) > 0 {
 		hintStr := lipgloss.NewStyle().
-			Background(t.BackgroundDarker()).
 			Foreground(t.Text()).
 			Render(fmt.Sprintf("%s %d", styles.HintIcon, len(hintDiagnostics)))
 		diagnostics = append(diagnostics, hintStr)
 	}
 	if len(infoDiagnostics) > 0 {
 		infoStr := lipgloss.NewStyle().
-			Background(t.BackgroundDarker()).
 			Foreground(t.Info()).
 			Render(fmt.Sprintf("%s %d", styles.InfoIcon, len(infoDiagnostics)))
 		diagnostics = append(diagnostics, infoStr)
@@ -339,18 +312,16 @@ func (m statusCmp) model() string {
 	}
 	model := models.SupportedModels[coder.Model]
 
-	return styles.Padded().
-		Background(t.Secondary()).
-		Foreground(t.Background()).
+	return styles.BaseStyle().
+		Foreground(t.Text()).
 		Render(model.Name)
 }
 
 func (m statusCmp) workMode() string {
 	t := theme.CurrentTheme()
-	return styles.Padded().
-		Background(t.Primary()).
-		Foreground(t.Background()).
-		Render("Mode: " + string(config.Get().Automation.WorkMode))
+	return styles.BaseStyle().
+		Foreground(t.TextMuted()).
+		Render("mode " + string(config.Get().Automation.WorkMode))
 }
 
 func (m statusCmp) skillSummary() string {
@@ -485,10 +456,17 @@ func (m statusCmp) selectedTaskRun() (taskrun.Run, bool) {
 
 func (m statusCmp) pendingApprovals() string {
 	t := theme.CurrentTheme()
-	return styles.Padded().
-		Background(t.Warning()).
-		Foreground(t.Background()).
-		Render(fmt.Sprintf("Approvals: %d", m.permission.PendingCount()))
+	return styles.BaseStyle().
+		Foreground(t.Warning()).
+		Render(fmt.Sprintf("approvals %d", m.permission.PendingCount()))
+}
+
+func (m statusCmp) rightStatusParts() []string {
+	parts := []string{m.workMode(), m.model()}
+	if m.permission != nil && m.permission.PendingCount() > 0 {
+		parts = append(parts, m.pendingApprovals())
+	}
+	return parts
 }
 
 func truncateString(value string, width int) string {

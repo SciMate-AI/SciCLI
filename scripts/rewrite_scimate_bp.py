@@ -1,0 +1,1060 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+
+from docx import Document
+from docx.enum.table import WD_TABLE_ALIGNMENT
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml.ns import qn
+from docx.shared import Cm, Pt
+
+
+ROOT = Path(__file__).resolve().parents[1]
+DOCX_PATH = ROOT / "SciMate商业计划书_BP.docx"
+MARKDOWN_PATH = ROOT / "docs" / "scimate-bp-hpc-route-2026.md"
+SOURCES_PATH = ROOT / "docs" / "scimate-bp-sources.md"
+
+
+@dataclass(frozen=True)
+class Source:
+    title: str
+    org: str
+    date: str
+    url: str
+    usage: str
+
+
+SOURCES: list[Source] = [
+    Source(
+        title="HPC and AI Market Update SC24",
+        org="Hyperion Research",
+        date="2024-11",
+        url="https://hyperionresearch.com/wp-content/uploads/2024/11/Hyperion-Research-HPC-and-AI-Market-Update-SC24-1.pdf",
+        usage="用于论证 HPC-AI 市场快速增长，以及 AI 负载正在成为高性能计算基础设施的核心增量。",
+    ),
+    Source(
+        title="Hyperion Research Announces a 36.7% Increase in the HPC-AI Market Size",
+        org="InsideHPC / Hyperion Research",
+        date="2024-08-05",
+        url="https://insidehpc.com/2024/08/hyperion-research-announces-a-36-7-increase-in-the-hpc-ai-market-size/",
+        usage="用于引用 36.7% 同比增长与 2028 年新增市场预期。",
+    ),
+    Source(
+        title="Selection of the First Seven AI Factories to Drive Europe’s Leadership in AI",
+        org="EuroHPC JU",
+        date="2024-12-10",
+        url="https://www.eurohpc-ju.europa.eu/selection-first-seven-ai-factories-drive-europes-leadership-ai-2024-12-10_en",
+        usage="用于证明 AI + 超算已经成为区域级基础设施建设方向。",
+    ),
+    Source(
+        title="AI Factories",
+        org="EuroHPC JU",
+        date="2025",
+        url="https://www.eurohpc-ju.europa.eu/ai-factories_en",
+        usage="用于补充 EuroHPC 对 AI 工厂定位、资源组织和服务目标的官方定义。",
+    ),
+    Source(
+        title="Department of Energy Announces $68 Million in Funding for Artificial Intelligence for Scientific Discovery",
+        org="U.S. Department of Energy Office of Science",
+        date="2024-03-13",
+        url="https://www.energy.gov/science/articles/department-energy-announces-68-million-funding-artificial-intelligence-scientific",
+        usage="用于论证 AI for Science 已进入国家科研预算与专项资助阶段。",
+    ),
+    Source(
+        title="Artificial Intelligence for Science",
+        org="U.S. Department of Energy Office of Science",
+        date="2025",
+        url="https://www.energy.gov/science/artificial-intelligence-science",
+        usage="用于支持 AI for accelerated simulation、surrogate modeling 和科学发现方向。",
+    ),
+    Source(
+        title="PhysicsNeMo",
+        org="NVIDIA Developer",
+        date="2025",
+        url="https://developer.nvidia.com/physicsnemo",
+        usage="用于论证神经算子与物理 AI 正在进入工业仿真与数字孪生实践。",
+    ),
+    Source(
+        title="Fourier Neural Operator for Parametric Partial Differential Equations",
+        org="OpenReview",
+        date="2021-02-17",
+        url="https://openreview.net/forum?id=c8P9NQVtmnO",
+        usage="用于神经算子技术路线的学术起点与方法依据。",
+    ),
+    Source(
+        title="2024年全国教育事业发展统计公报",
+        org="中华人民共和国教育部",
+        date="2025-06-11",
+        url="https://www.moe.gov.cn/jyb_sjzl/sjzl_fztjgb/202506/t20250611_1193760.html",
+        usage="用于论证我国高等教育和研究生群体规模，以及高校科研软件市场基础。",
+    ),
+    Source(
+        title="科技部启动“人工智能驱动的科学研究”专项部署工作",
+        org="中华人民共和国科学技术部",
+        date="2023-03-27",
+        url="https://www.most.gov.cn/gnwkjdt/202303/t20230327_185250.html",
+        usage="用于政策顺风与 AI4Science 进入国家科技部署的论证。",
+    ),
+    Source(
+        title="Ansys Announces Q4 and FY 2024 Financial Results",
+        org="Ansys Investor Relations",
+        date="2025-02-19",
+        url="https://investors.ansys.com/news-releases/news-release-details/ansys-announces-q4-and-fy-2024-financial-results/",
+        usage="用于说明传统仿真软件市场规模大、客户付费能力已被验证。",
+    ),
+    Source(
+        title="Altair Announces Fourth Quarter and Full Year 2024 Financial Results",
+        org="Altair Investor Relations",
+        date="2025-02-20",
+        url="https://investor.altair.com/news-releases/news-release-details/altair-announces-fourth-quarter-and-full-year-2024-financial",
+        usage="用于佐证工程仿真与计算软件商业市场持续存在。",
+    ),
+]
+
+BLOCKS: list[dict] = [
+    {
+        "heading": "一、执行摘要",
+        "level": 1,
+        "blocks": [
+            {
+                "type": "paragraph",
+                "text": (
+                    "SciMate 的新定位不是“科研聊天入口”，而是面向材料/化学仿真的 HPC 自动化与物理 AI 平台。"
+                    "公司以 SciCLI 作为本地与集群侧的自动化入口，以 HPC-Skills 作为领域工作流与专家策略层，"
+                    "先解决 VASP/DFT 和相关 PDE 仿真在真实课题组中的“不会配、跑不稳、难复现、难沉淀数据”的刚性痛点，"
+                    "再把自动化执行过程中形成的高质量数据资产转化为神经算子与科学基础模型的训练底座。"
+                ),
+            },
+            {
+                "type": "paragraph",
+                "text": (
+                    "项目分三阶段推进。第一阶段建立 HPC 自动化产品，围绕材料/化学仿真提供任务生成、提交、重试、参数扫描、"
+                    "结果解析和可追溯归档；第二阶段把自动化过程沉淀为可训练的数据资产，面向热传导、扩散、相场、电化学和材料过程模拟等 PDE 场景训练神经算子；"
+                    "第三阶段基于快速、大规模、高精度的神经算子能力，向物理规律理解、逆向设计和工业数字孪生延展。"
+                ),
+            },
+            {
+                "type": "bullets",
+                "items": [
+                    "首发行业：材料/化学仿真，优先切入高校课题组与研究院团队。",
+                    "商业形态：开源底座 + 商业订阅 + 私有化部署 + 数据/模型服务。",
+                    "三年目标：形成 60 个以上付费课题组、10 个校级/院级平台客户、6 个企业与模型项目客户，营业收入达到 2,850 万元。",
+                    "融资计划：本轮拟融资 800 万元人民币，用于 HPC 自动化研发、数据工程、神经算子训练与试点交付。",
+                ],
+            },
+        ],
+    },
+    {"heading": "二、项目概述与愿景", "level": 1, "blocks": []},
+    {
+        "heading": "2.1 项目愿景",
+        "level": 2,
+        "blocks": [
+            {
+                "type": "paragraph",
+                "text": (
+                    "SciMate 的愿景是成为科研计算自动化基础设施，而不是又一个通用 AI 界面。"
+                    "我们希望把科研人员从软件配置、脚本拼装、作业调度、失败重跑和结果整理中解放出来，"
+                    "让研究团队把时间投入到科学问题、参数假设和结论验证本身。"
+                ),
+            },
+            {
+                "type": "paragraph",
+                "text": (
+                    "长期看，SciMate 不止解决“自动化跑仿真”，还要解决“如何持续产生可训练的科学数据，并把这些数据再变成可泛化的物理模型”。"
+                    "这意味着平台会从工具层逐步走向数据层与模型层，形成真正的技术复利。"
+                ),
+            },
+        ],
+    },
+    {
+        "heading": "2.2 项目定位",
+        "level": 2,
+        "blocks": [
+            {
+                "type": "paragraph",
+                "text": (
+                    "SciMate 当前的产品定位是“面向材料/化学仿真的 Scientific HPC Automation Platform”。"
+                    "第一阶段围绕 VASP/DFT、材料性质计算、参数扫描、后处理和课题组工作流标准化构建产品；"
+                    "第二阶段逐步接入更适合神经算子学习的 PDE 类任务，如热传输、扩散、相场和电化学场模拟；"
+                    "第三阶段则形成面向物理场预测、逆向设计与工艺优化的 operator-as-a-product 能力。"
+                ),
+            },
+        ],
+    },
+    {
+        "heading": "2.3 三阶段发展路线",
+        "level": 2,
+        "blocks": [
+            {
+                "type": "table",
+                "rows": [
+                    ["阶段", "时间", "目标", "核心产品与能力", "关键指标"],
+                    [
+                        "阶段一：HPC 自动化",
+                        "0-18 个月",
+                        "建立可交付产品并切入课题组",
+                        "SciCLI + HPC-Skills；VASP/DFT 工作流模板；作业提交、失败重试、参数扫描、结果归档",
+                        "50+ 稳定工作流；10 个付费团队；月自动化任务数 > 500",
+                    ],
+                    [
+                        "阶段二：数据资产化",
+                        "12-30 个月",
+                        "将自动化运行沉淀为标准化训练数据",
+                        "结构化 metadata、样本版本管理、基准集、主动学习队列、结果验证与标签清洗",
+                        "1 万+ 标准化样本；2 个垂直 benchmark；可复训数据闭环形成",
+                    ],
+                    [
+                        "阶段三：神经算子与物理 AI",
+                        "24-48 个月",
+                        "形成高精度 surrogate 与逆向设计能力",
+                        "FNO/PINO/多尺度 operator；秒级推理；不确定性评估；逆向搜索",
+                        "关键场景 100-1000 倍加速；形成可售卖模型服务",
+                    ],
+                ],
+            },
+        ],
+    },
+    {
+        "heading": "2.4 核心痛点",
+        "level": 2,
+        "blocks": [
+            {
+                "type": "bullets",
+                "items": [
+                    "HPC 与材料仿真软件安装、配置和调优成本高，新成员上手慢。",
+                    "VASP/DFT 与多物理场任务往往依赖经验脚本，课题组知识难复用。",
+                    "批量参数扫描和收敛策略管理复杂，失败任务重跑浪费大量时间与算力。",
+                    "结果、日志、输入文件和后处理产物分散，难以形成可追溯、可训练的数据资产。",
+                    "传统仿真精度高但速度慢，通用 AI 速度快但缺少物理约束，二者之间存在明显空白带。",
+                ],
+            },
+        ],
+    },
+    {"heading": "三、行业背景与市场分析", "level": 1, "blocks": []},
+    {
+        "heading": "3.1 行业驱动因素",
+        "level": 2,
+        "blocks": [
+            {
+                "type": "paragraph",
+                "text": (
+                    "行业已经从“科研软件数字化”进入“AI + HPC 基础设施化”阶段。Hyperion Research 在 2024 年市场更新中指出，"
+                    "HPC-AI 市场规模同比增长 36.7%，预计到 2028 年将新增约 136 亿美元市场空间。"
+                    "这意味着高性能计算系统不再只是传统仿真载体，而正在成为 AI 训练与科学发现的基础平台。"
+                ),
+            },
+            {
+                "type": "paragraph",
+                "text": (
+                    "政策与基础设施侧同样在加速。EuroHPC 已于 2024 年底启动首批 7 个 AI Factories，"
+                    "将 AI 优化的超级计算机、数据、软件和服务组织为一体化能力。DOE Office of Science 则在 2024 年宣布 6,800 万美元 AI for Science 资助，"
+                    "明确把 accelerated simulation、surrogate models 和科学发现纳入重点投入方向。"
+                ),
+            },
+            {
+                "type": "paragraph",
+                "text": (
+                    "商业验证也已经存在。传统仿真软件并非小市场，Ansys 官方披露 FY2024 收入达到 25.448 亿美元，"
+                    "说明工程与科研仿真客户长期愿意为高价值计算软件付费。SciMate 的机会不在于复制传统 CAE，而在于用自动化、数据闭环与 operator 模型改写成本结构和使用方式。"
+                ),
+            },
+        ],
+    },
+    {
+        "heading": "3.2 市场规模判断（TAM / SAM / SOM）",
+        "level": 2,
+        "blocks": [
+            {
+                "type": "paragraph",
+                "text": (
+                    "本项目的市场估算采用“第三方趋势 + 自下而上测算”两套口径。趋势部分用于判断赛道是否成立，"
+                    "自下而上部分用于推算创业阶段可服务市场和三年内可达收入边界。"
+                ),
+            },
+            {
+                "type": "table",
+                "rows": [
+                    ["层级", "口径", "估算方法", "规模判断"],
+                    [
+                        "TAM",
+                        "全球 HPC-AI 与科学计算自动化",
+                        "参考 Hyperion、EuroHPC、DOE、NVIDIA 等公开资料，HPC-AI 持续高速增长，神经算子与物理 AI 正从科研走向工业仿真",
+                        "大市场，且仍在上行阶段",
+                    ],
+                    [
+                        "SAM",
+                        "中国高校/科研院所材料化学仿真 + 校级平台 + 部分企业研发",
+                        "按 2,000 个重点课题组 × 8 万元/年 + 200 个平台 × 50 万元/年 + 100 个企业团队 × 150 万元/年 + 50 个模型项目 × 80 万元/年估算",
+                        "约 4.5 亿元/年",
+                    ],
+                    [
+                        "SOM",
+                        "三年内可触达市场",
+                        "目标拿下 60 个课题组、10 个平台客户、6 个企业与模型项目客户",
+                        "对应 2,000-3,000 万元/年收入空间",
+                    ],
+                ],
+            },
+            {
+                "type": "paragraph",
+                "text": (
+                    "上述 SAM 与 SOM 为创业期经营假设，不等同于第三方统计口径。它们的目的不是夸大市场，而是验证："
+                    "即使只聚焦材料/化学仿真这一窄切口，SciMate 也足以支撑一个数千万元级别的早期业务，并为后续 operator 业务提供数据和客户基础。"
+                ),
+            },
+        ],
+    },
+    {
+        "heading": "3.3 目标客户画像",
+        "level": 2,
+        "blocks": [
+            {
+                "type": "table",
+                "rows": [
+                    ["客户类型", "主要角色", "核心需求", "付费意愿"],
+                    [
+                        "高校课题组",
+                        "PI、博士后、博士生",
+                        "自动化跑任务、减少脚本维护、提升复现性、沉淀组内方法学",
+                        "高，是第一优先客户",
+                    ],
+                    [
+                        "校级/院级平台",
+                        "超算平台主管、学院技术负责人",
+                        "统一工作流、降低支持成本、提高机器利用率、形成标准服务目录",
+                        "高，单客价值显著",
+                    ],
+                    [
+                        "研究院与新材料企业",
+                        "算法工程师、CAE/材料研发团队",
+                        "缩短仿真周期、建立内部数据资产、加速工艺与配方优化",
+                        "中高，是第二阶段放量客户",
+                    ],
+                ],
+            },
+        ],
+    },
+    {
+        "heading": "3.4 市场进入时机",
+        "level": 2,
+        "blocks": [
+            {
+                "type": "bullets",
+                "items": [
+                    "政策顺风已出现，AI4Science 不再停留在概念验证阶段。",
+                    "开源和本地化工具成熟度提升，高校对可控、可部署、可二次开发方案的接受度提高。",
+                    "传统仿真软件价格高、自动化弱，课题组存在明确的替代与增强需求。",
+                    "神经算子在学术上已成体系、在工业上已有先行验证，但面向科研团队的产品化仍稀缺。",
+                ],
+            },
+        ],
+    },
+    {"heading": "四、产品与服务体系", "level": 1, "blocks": []},
+    {
+        "heading": "4.1 产品体系总览",
+        "level": 2,
+        "blocks": [
+            {
+                "type": "table",
+                "rows": [
+                    ["产品层", "定位", "当前阶段", "商业价值"],
+                    [
+                        "SciCLI",
+                        "本地与集群侧自动化入口",
+                        "已有基础能力",
+                        "承载任务编排、执行、日志、权限和研究状态管理",
+                    ],
+                    [
+                        "HPC-Skills",
+                        "领域工作流和专家策略层",
+                        "重点建设",
+                        "沉淀 VASP/DFT 与 PDE 仿真的专业 know-how，形成复用模板",
+                    ],
+                    [
+                        "SciMate Data & Operator",
+                        "数据资产与神经算子层",
+                        "阶段二/三建设",
+                        "把运行数据变成训练集，把训练集变成高价值模型服务",
+                    ],
+                ],
+            },
+        ],
+    },
+    {
+        "heading": "4.2 第一阶段产品能力：HPC 自动化",
+        "level": 2,
+        "blocks": [
+            {
+                "type": "bullets",
+                "items": [
+                    "任务定义：从结构、组分、边界条件或课题模板生成标准化计算任务。",
+                    "输入构建：自动生成或校验 INCAR、POSCAR、KPOINTS、POTCAR 及相关配置。",
+                    "作业调度：对接 Slurm/PBS 等调度系统，支持提交、排队、监控、失败重试和重跑。",
+                    "参数扫描：支持 k 点、截断能、收敛阈值和材料参数的批量扫描与对比。",
+                    "后处理：自动提取能量、带隙、态密度、应力、场分布等关键结果并生成标准化报告。",
+                    "可追溯归档：保存输入版本、软件版本、运行日志、资源消耗、结果摘要与验证状态。",
+                ],
+            },
+        ],
+    },
+    {
+        "heading": "4.3 第二阶段产品能力：数据资产层",
+        "level": 2,
+        "blocks": [
+            {
+                "type": "paragraph",
+                "text": (
+                    "SciMate 的数据层不是把原始文件简单存盘，而是把每一次仿真统一编码为可训练样本。"
+                    "最小样本单元应同时包含输入、求解器版本、边界条件、结果张量、评估指标和可信标记，以便后续直接进入训练与评测。"
+                ),
+            },
+            {
+                "type": "bullets",
+                "items": [
+                    "统一 schema：结构/网格/边界条件/材料参数/求解器参数/结果张量。",
+                    "样本治理：异常过滤、重复任务识别、标签置信度分级。",
+                    "主动学习：优先调度最能提升模型边界的样本。",
+                    "benchmark：形成阶段性公开基准，建立行业影响力。",
+                ],
+            },
+        ],
+    },
+    {
+        "heading": "4.4 第三阶段产品能力：神经算子与物理 AI",
+        "level": 2,
+        "blocks": [
+            {
+                "type": "paragraph",
+                "text": (
+                    "神经算子层的目标不是替代所有传统仿真，而是先在高重复、参数空间大、对速度敏感的场景提供 surrogate。"
+                    "首批场景包括热传导、扩散、相场、电化学与材料过程相关的 PDE 任务。"
+                ),
+            },
+            {
+                "type": "bullets",
+                "items": [
+                    "面向 PDE 的 operator 学习：FNO、PINO 及其改进模型。",
+                    "目标形态：秒级预测、多工况批量评估、逆向参数搜索、不确定性估计。",
+                    "商业化方式：模型订阅、推理引擎授权、企业定制加速模块。",
+                ],
+            },
+        ],
+    },
+    {"heading": "五、技术架构与可行性", "level": 1, "blocks": []},
+    {
+        "heading": "5.1 技术架构",
+        "level": 2,
+        "blocks": [
+            {
+                "type": "paragraph",
+                "text": (
+                    "整体架构遵循“本地优先 + 集群兼容 + 数据闭环 + 模型演进”原则。"
+                    "其核心不是某一种协议，而是把任务定义、执行、验证、归档和训练样本抽象成统一流水线。"
+                ),
+            },
+            {
+                "type": "table",
+                "rows": [
+                    ["层级", "说明"],
+                    ["交互层", "SciCLI 提供本地终端入口、任务视图、权限控制、执行日志和研究状态。"],
+                    ["工作流层", "HPC-Skills 提供领域模板、参数策略、校验规则、失败修复建议和报告结构。"],
+                    ["执行层", "对接本地工作站、校内集群与企业私有算力，兼容调度系统和批处理模式。"],
+                    ["数据层", "统一记录输入、求解器版本、结果、验证状态和资源消耗。"],
+                    ["模型层", "使用标准化数据训练神经算子和物理 AI 模型，并回流到推理服务。"],
+                ],
+            },
+        ],
+    },
+    {
+        "heading": "5.2 核心技术壁垒",
+        "level": 2,
+        "blocks": [
+            {
+                "type": "bullets",
+                "items": [
+                    "工作流壁垒：HPC-Skills 沉淀的是领域知识、经验策略和收敛规则，而不是通用脚本拼接。",
+                    "数据壁垒：平台天然掌握高质量、强标签、可追溯的训练数据生成链路。",
+                    "模型壁垒：只有建立在真实科研流程之上的 operator 数据集，才能形成有效的行业模型。",
+                    "部署壁垒：高校和研究院偏好本地或私有化部署，通用云工具无法直接覆盖这一要求。",
+                ],
+            },
+        ],
+    },
+    {
+        "heading": "5.3 可行性基础",
+        "level": 2,
+        "blocks": [
+            {
+                "type": "paragraph",
+                "text": (
+                    "SciMate 不是从零开始构想。当前 SciCLI 已具备终端式 agent、会话与任务状态、权限控制、技能加载、"
+                    "本地工具调用等基础能力；HPC-Skills 则承载垂直领域工作流和专家知识。"
+                    "现阶段需要完成的是从“通用科研代理底座”向“材料/化学仿真自动化产品”收敛，而不是重新发明整套系统。"
+                ),
+            },
+        ],
+    },
+    {
+        "heading": "5.4 部署策略",
+        "level": 2,
+        "blocks": [
+            {
+                "type": "bullets",
+                "items": [
+                    "高校课题组：本地工作站 + 校内超算集群。",
+                    "学院/研究院平台：私有化部署，统一纳管调度系统和工作流模板。",
+                    "企业客户：局域网或私有云部署，满足数据和知识产权隔离要求。",
+                    "训练阶段：在可控算力环境进行数据清洗、训练和评测，不依赖单一公有云。",
+                ],
+            },
+        ],
+    },
+    {"heading": "六、商业模式与盈利策略", "level": 1, "blocks": []},
+    {
+        "heading": "6.1 商业模式",
+        "level": 2,
+        "blocks": [
+            {
+                "type": "paragraph",
+                "text": (
+                    "SciMate 采取“开源底座扩大影响力，商业服务实现变现”的模式。"
+                    "开源层负责形成用户扩散、方法学透明度和社区势能；商业层负责交付稳定工作流、部署、训练数据治理和模型服务。"
+                ),
+            },
+        ],
+    },
+    {
+        "heading": "6.2 收入结构",
+        "level": 2,
+        "blocks": [
+            {
+                "type": "table",
+                "rows": [
+                    ["收入来源", "定价建议", "目标客户", "备注"],
+                    ["课题组订阅", "6.8-12.8 万元/年", "高校课题组", "提供标准工作流、升级与技术支持"],
+                    ["平台部署", "30-80 万元/年", "学院/研究院/超算平台", "提供统一工作流、权限与运维管理"],
+                    ["企业版与私有化", "80-300 万元/项目", "新材料/化工企业", "按部署复杂度和集成范围定价"],
+                    ["实施与培训服务", "15-100 万元/项目", "高校和企业", "导入现有脚本、培训团队、构建模板"],
+                    ["数据/模型服务", "按项目或按调用计费", "研究院与企业", "阶段二、三核心增量收入"],
+                ],
+            },
+        ],
+    },
+    {
+        "heading": "6.3 单位经济模型",
+        "level": 2,
+        "blocks": [
+            {
+                "type": "bullets",
+                "items": [
+                    "早期毛利率偏低，原因是实施与交付占比高；随着模板复用和平台部署比例提高，毛利率将持续改善。",
+                    "课题组订阅是获客产品，平台部署和模型服务是利润产品。",
+                    "数据资产一旦形成，神经算子层将具备更高软件毛利和更强网络效应。",
+                ],
+            },
+        ],
+    },
+    {
+        "heading": "6.4 关键经营指标（KPI）",
+        "level": 2,
+        "blocks": [
+            {
+                "type": "bullets",
+                "items": [
+                    "付费课题组数与净收入留存率。",
+                    "月自动化任务数、任务成功率与平均人工节省时长。",
+                    "复用工作流数量与新增模板生成效率。",
+                    "沉淀的标准化样本数与 benchmark 完成度。",
+                    "神经算子在目标场景中的加速比与误差指标。",
+                ],
+            },
+        ],
+    },
+    {"heading": "七、竞争格局与差异化", "level": 1, "blocks": []},
+    {
+        "heading": "7.1 竞争格局",
+        "level": 2,
+        "blocks": [
+            {
+                "type": "table",
+                "rows": [
+                    ["类别", "代表产品", "优势", "短板", "SciMate 的切入点"],
+                    [
+                        "传统商业仿真软件",
+                        "ANSYS、COMSOL、Materials Studio、Gaussian",
+                        "成熟、可靠、品牌强",
+                        "价格高、自动化能力弱、难形成训练数据闭环",
+                        "用自动化与私有部署切入，用 operator 层改写速度与成本",
+                    ],
+                    [
+                        "通用 AI 编程代理",
+                        "ChatGPT、Cursor、各类 CLI agent",
+                        "交互自然、通用性强",
+                        "缺少材料/HPC 领域知识和稳定交付能力",
+                        "以 HPC-Skills 和可复现流水线建立专业壁垒",
+                    ],
+                    [
+                        "课题组自建脚本",
+                        "内部 bash/python 脚本",
+                        "便宜、灵活、贴近需求",
+                        "不可维护、不可扩展、人员变动风险高",
+                        "把个人经验转化为可持续产品",
+                    ],
+                    [
+                        "单点材料 AI 平台",
+                        "若干 SaaS 或材料预测工具",
+                        "在单任务上可能更快",
+                        "不掌握底层工作流与原始数据生产环节",
+                        "先掌握计算入口，再掌握数据与模型",
+                    ],
+                ],
+            },
+        ],
+    },
+    {
+        "heading": "7.2 核心差异化",
+        "level": 2,
+        "blocks": [
+            {
+                "type": "bullets",
+                "items": [
+                    "从第一天就围绕材料/化学仿真工作流设计，而不是泛科研入口。",
+                    "把“自动化”与“数据资产化”放在同一产品链条中，天然为神经算子训练服务。",
+                    "采用本地优先和私有化友好的架构，更适合高校与研究院的实际环境。",
+                    "开源底座降低试用门槛，商业服务承担稳定交付与价值变现。",
+                ],
+            },
+        ],
+    },
+    {"heading": "八、市场进入与增长策略", "level": 1, "blocks": []},
+    {
+        "heading": "8.1 第一阶段获客策略：课题组切入",
+        "level": 2,
+        "blocks": [
+            {
+                "type": "bullets",
+                "items": [
+                    "聚焦计算材料、催化、电化学、材料加工等实验-计算结合度高的课题组。",
+                    "以明确 ROI 的场景切入：VASP 自动化、参数扫描、结果报告标准化、组内模板沉淀。",
+                    "优先寻找愿意共建 benchmark 的灯塔客户，形成案例与口碑。",
+                ],
+            },
+        ],
+    },
+    {
+        "heading": "8.2 渠道策略",
+        "level": 2,
+        "blocks": [
+            {
+                "type": "bullets",
+                "items": [
+                    "开源仓库与技术内容：通过公开 workflow、案例和 benchmark 获得学术扩散。",
+                    "高校合作：与超算平台、材料学院、研究院联合试点。",
+                    "培训与顾问：以工作坊、课程、课题组内训导入商业客户。",
+                    "行业伙伴：与 HPC 服务商、集群集成商、科研软件生态建立协作。",
+                ],
+            },
+        ],
+    },
+    {
+        "heading": "8.3 三年增长路径",
+        "level": 2,
+        "blocks": [
+            {
+                "type": "table",
+                "rows": [
+                    ["阶段", "目标", "重点动作"],
+                    ["0-12 个月", "完成产品验证", "拿下 5-10 个灯塔课题组，建立 VASP/DFT 交付口碑"],
+                    ["12-24 个月", "完成平台化销售", "进入学院/研究院平台，建立标准部署方案和培训体系"],
+                    ["24-36 个月", "打开模型收入", "用 benchmark 与 operator 原型切入企业和高价值研究合作"],
+                ],
+            },
+        ],
+    },
+    {"heading": "九、实施路线图", "level": 1, "blocks": []},
+    {
+        "heading": "9.1 里程碑规划",
+        "level": 2,
+        "blocks": [
+            {
+                "type": "table",
+                "rows": [
+                    ["时间", "里程碑", "关键产出"],
+                    ["0-6 个月", "MVP 成型", "完成 VASP/DFT 自动化骨架、任务编排和结果归档"],
+                    ["6-12 个月", "首批付费客户", "形成 5-10 个稳定交付案例和课题组模板"],
+                    ["12-18 个月", "平台版上线", "支持平台级部署、统一模板管理、日志和权限审计"],
+                    ["18-30 个月", "数据层完成", "形成标准化样本管线和至少 2 个 benchmark"],
+                    ["24-36 个月", "operator 原型商用", "在热传导/扩散/相场等任务实现可验证加速"],
+                ],
+            },
+        ],
+    },
+    {"heading": "十、财务预测与融资需求", "level": 1, "blocks": []},
+    {
+        "heading": "10.1 三年财务预测",
+        "level": 2,
+        "blocks": [
+            {
+                "type": "table",
+                "rows": [
+                    ["指标", "2026E", "2027E", "2028E"],
+                    ["付费课题组", "10", "28", "60"],
+                    ["平台/研究院部署", "2", "5", "10"],
+                    ["企业/专项项目", "3", "6", "12"],
+                    ["营业收入（万元）", "280", "980", "2850"],
+                    ["综合毛利率", "55%", "63%", "72%"],
+                    ["研发与交付投入（万元）", "620", "1180", "2100"],
+                    ["净利润（万元）", "-340", "-200", "750"],
+                ],
+            },
+            {
+                "type": "paragraph",
+                "text": (
+                    "财务预测遵循审慎原则。前两年主要以产品化建设和客户落地为目标，盈利能力并非首要考核指标；"
+                    "到第三年，随着标准化模板、平台部署和模型服务收入占比提升，整体业务进入可持续增长区间。"
+                ),
+            },
+        ],
+    },
+    {
+        "heading": "10.2 融资需求",
+        "level": 2,
+        "blocks": [
+            {
+                "type": "paragraph",
+                "text": "本轮拟融资 800 万元人民币，对应 18 个月 runway，主要用于完成从自动化产品到数据闭环的关键跨越。",
+            },
+            {
+                "type": "table",
+                "rows": [
+                    ["用途", "占比", "说明"],
+                    ["HPC 自动化研发", "35%", "VASP/DFT 工作流、调度系统、结果验证、私有部署能力"],
+                    ["数据工程与 benchmark", "25%", "样本标准化、清洗、标注与基准集建设"],
+                    ["神经算子与模型研发", "20%", "PDE 数据集、训练、评测与推理原型"],
+                    ["试点客户交付", "10%", "部署、培训、实施和案例建设"],
+                    ["算力与基础设施", "10%", "训练、存储、CI 与内部测试资源"],
+                ],
+            },
+        ],
+    },
+    {"heading": "十一、风险分析与应对", "level": 1, "blocks": []},
+    {
+        "heading": "11.1 主要风险",
+        "level": 2,
+        "blocks": [
+            {
+                "type": "bullets",
+                "items": [
+                    "技术风险：不同课题组工作流差异大，标准化难度高。",
+                    "交付风险：早期客户定制化需求可能拉高实施成本。",
+                    "数据风险：训练样本如果缺少一致性与可信标记，神经算子效果难以稳定。",
+                    "商业风险：高校采购周期长，需平衡科研合作与商业落地节奏。",
+                    "竞争风险：传统软件和通用 AI 工具都可能向自动化方向延展。",
+                ],
+            },
+        ],
+    },
+    {
+        "heading": "11.2 应对策略",
+        "level": 2,
+        "blocks": [
+            {
+                "type": "bullets",
+                "items": [
+                    "先聚焦少数高价值场景，不追求过早覆盖全部学科。",
+                    "用模板化和 benchmark 化压缩交付成本，避免项目制失控。",
+                    "从第一天建立样本治理与验证标准，为后续模型训练打基础。",
+                    "采用开源底座 + 私有部署的方式，兼顾扩散和商业交付。",
+                ],
+            },
+        ],
+    },
+    {"heading": "十二、团队与组织", "level": 1, "blocks": []},
+    {
+        "heading": "12.1 核心团队框架",
+        "level": 2,
+        "blocks": [
+            {
+                "type": "paragraph",
+                "text": "当前文档保留团队框架位，建议按以下能力结构补全真实成员信息：",
+            },
+            {
+                "type": "table",
+                "rows": [
+                    ["角色", "建议背景", "核心职责"],
+                    ["项目负责人 / CEO", "科研创业或产业化背景", "战略、融资、合作与核心客户拓展"],
+                    ["技术负责人 / CTO", "Agent 系统、HPC、分布式系统背景", "平台架构、自动化执行与稳定性"],
+                    ["科学负责人", "材料/化学/计算物理背景", "工作流定义、方法验证、benchmark 设计"],
+                    ["产品与交付负责人", "科研产品或 B2B 软件背景", "客户导入、模板沉淀、交付体系建设"],
+                ],
+            },
+        ],
+    },
+    {
+        "heading": "12.2 团队优势",
+        "level": 2,
+        "blocks": [
+            {
+                "type": "bullets",
+                "items": [
+                    "交叉学科组合：兼具 AI、HPC、材料/化学仿真与产品化能力。",
+                    "贴近真实使用场景：从课题组一线问题出发，而不是抽象平台设想。",
+                    "开源与商业并行：既能建立社区影响力，也能承接高价值交付。",
+                ],
+            },
+        ],
+    },
+    {
+        "heading": "附录 A：关键术语",
+        "level": 1,
+        "blocks": [
+            {
+                "type": "table",
+                "rows": [
+                    ["术语", "说明"],
+                    ["HPC", "High Performance Computing，高性能计算。"],
+                    ["DFT", "Density Functional Theory，密度泛函理论。"],
+                    ["VASP", "常用第一性原理计算软件，用于材料电子结构与性质计算。"],
+                    ["PDE", "Partial Differential Equation，偏微分方程。"],
+                    ["Neural Operator", "直接学习函数到函数映射的模型，用于 PDE surrogate 与多工况预测。"],
+                    ["FNO", "Fourier Neural Operator，神经算子代表方法之一。"],
+                    ["Benchmark", "用于验证工作流和模型能力的标准任务集合。"],
+                    ["Active Learning", "主动学习，通过优先选择高价值样本提升数据效率。"],
+                ],
+            },
+        ],
+    },
+    {
+        "heading": "附录 B：核心外部依据与数据来源",
+        "level": 1,
+        "blocks": [
+            {
+                "type": "paragraph",
+                "text": "本 BP 中的市场、政策与技术判断基于公开资料与创业阶段经营假设两部分。以下来源用于支撑宏观趋势与关键事实：",
+            },
+            {"type": "source_list"},
+        ],
+    },
+]
+def set_run_font(run, size: int | None = None, bold: bool = False) -> None:
+    run.bold = bold
+    run.font.name = "Microsoft YaHei"
+    run._element.rPr.rFonts.set(qn("w:eastAsia"), "Microsoft YaHei")
+    if size is not None:
+        run.font.size = Pt(size)
+
+
+def set_paragraph_text(paragraph, text: str, size: int = 11, bold: bool = False) -> None:
+    run = paragraph.add_run(text)
+    set_run_font(run, size=size, bold=bold)
+
+
+def add_markdown_paragraph(lines: list[str], text: str) -> None:
+    lines.append(text)
+    lines.append("")
+
+
+def add_markdown_table(lines: list[str], rows: list[list[str]]) -> None:
+    header = "| " + " | ".join(rows[0]) + " |"
+    sep = "| " + " | ".join(["---"] * len(rows[0])) + " |"
+    lines.append(header)
+    lines.append(sep)
+    for row in rows[1:]:
+        lines.append("| " + " | ".join(row) + " |")
+    lines.append("")
+
+
+def apply_doc_defaults(doc: Document) -> None:
+    section = doc.sections[0]
+    section.top_margin = Cm(2.54)
+    section.bottom_margin = Cm(2.54)
+    section.left_margin = Cm(2.8)
+    section.right_margin = Cm(2.2)
+    for style_name in ["Normal", "Heading 1", "Heading 2", "Heading 3"]:
+        style = doc.styles[style_name]
+        style.font.name = "Microsoft YaHei"
+        style._element.rPr.rFonts.set(qn("w:eastAsia"), "Microsoft YaHei")
+
+
+def add_title_page(doc: Document) -> None:
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p.paragraph_format.space_before = Pt(120)
+    p.paragraph_format.space_after = Pt(18)
+    set_paragraph_text(p, "SciMate 商业计划书 BP", size=24, bold=True)
+
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p.paragraph_format.space_after = Pt(10)
+    set_paragraph_text(p, "面向材料/化学仿真的 HPC 自动化与物理 AI 平台", size=14)
+
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p.paragraph_format.space_after = Pt(10)
+    set_paragraph_text(p, "版本：2026 年 3 月重写版", size=12)
+
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p.paragraph_format.space_after = Pt(10)
+    set_paragraph_text(
+        p,
+        "本版本围绕“ HPC 自动化 -> 数据资产 -> 神经算子 ”路线重写。",
+        size=10,
+    )
+
+    doc.add_page_break()
+
+
+def add_toc_page(doc: Document) -> None:
+    p = doc.add_paragraph()
+    set_paragraph_text(p, "目录", size=18, bold=True)
+    p.paragraph_format.space_after = Pt(12)
+    for block in BLOCKS:
+        if block["level"] == 1:
+            p = doc.add_paragraph(style="List Bullet")
+            p.paragraph_format.left_indent = Cm(0.6)
+            set_paragraph_text(p, block["heading"], size=11)
+    doc.add_page_break()
+
+
+def add_heading(doc: Document, text: str, level: int) -> None:
+    p = doc.add_paragraph(style=f"Heading {min(level, 3)}")
+    p.paragraph_format.space_before = Pt(8)
+    p.paragraph_format.space_after = Pt(6)
+    run = p.add_run(text)
+    set_run_font(run, size={1: 16, 2: 13, 3: 11}.get(level, 11), bold=True)
+
+
+def add_table(doc: Document, rows: list[list[str]]) -> None:
+    table = doc.add_table(rows=len(rows), cols=len(rows[0]))
+    table.style = "Table Grid"
+    table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    table.autofit = True
+    for i, row in enumerate(rows):
+        for j, value in enumerate(row):
+            cell = table.cell(i, j)
+            cell.text = ""
+            p = cell.paragraphs[0]
+            set_paragraph_text(p, value, size=10, bold=(i == 0))
+    doc.add_paragraph()
+
+
+def add_source_list_to_doc(doc: Document) -> None:
+    for source in SOURCES:
+        p = doc.add_paragraph(style="List Number")
+        text = f"{source.title} | {source.org} | {source.date}\n{source.url}\n用途：{source.usage}"
+        set_paragraph_text(p, text, size=10)
+
+
+def render_docx() -> None:
+    doc = Document()
+    apply_doc_defaults(doc)
+    doc.core_properties.title = "SciMate 商业计划书 BP"
+    doc.core_properties.subject = "HPC 自动化与物理 AI"
+    doc.core_properties.comments = "由 scripts/rewrite_scimate_bp.py 自动生成"
+    add_title_page(doc)
+    add_toc_page(doc)
+
+    first_level_seen = False
+    for block in BLOCKS:
+        if block["level"] == 1 and first_level_seen:
+            doc.add_page_break()
+        if block["level"] == 1:
+            first_level_seen = True
+        add_heading(doc, block["heading"], block["level"])
+        for item in block["blocks"]:
+            if item["type"] == "paragraph":
+                p = doc.add_paragraph()
+                p.paragraph_format.first_line_indent = Cm(0.74)
+                p.paragraph_format.line_spacing = 1.35
+                set_paragraph_text(p, item["text"], size=11)
+            elif item["type"] == "bullets":
+                for bullet in item["items"]:
+                    p = doc.add_paragraph(style="List Bullet")
+                    p.paragraph_format.left_indent = Cm(0.6)
+                    p.paragraph_format.line_spacing = 1.25
+                    set_paragraph_text(p, bullet, size=11)
+            elif item["type"] == "table":
+                add_table(doc, item["rows"])
+            elif item["type"] == "source_list":
+                add_source_list_to_doc(doc)
+
+    doc.save(DOCX_PATH)
+
+
+def render_markdown() -> None:
+    lines: list[str] = [
+        "# SciMate 商业计划书 BP",
+        "",
+        "> 面向材料/化学仿真的 HPC 自动化与物理 AI 平台",
+        "",
+        "> 版本：2026 年 3 月重写版",
+        "",
+        "> 本版本围绕“ HPC 自动化 -> 数据资产 -> 神经算子 ”路线重写。",
+        "",
+        "## 目录",
+        "",
+    ]
+    for block in BLOCKS:
+        if block["level"] == 1:
+            lines.append(f"- {block['heading']}")
+    lines.append("")
+
+    for block in BLOCKS:
+        lines.append(f"{'#' * (block['level'] + 1)} {block['heading']}")
+        lines.append("")
+        for item in block["blocks"]:
+            if item["type"] == "paragraph":
+                add_markdown_paragraph(lines, item["text"])
+            elif item["type"] == "bullets":
+                for bullet in item["items"]:
+                    lines.append(f"- {bullet}")
+                lines.append("")
+            elif item["type"] == "table":
+                add_markdown_table(lines, item["rows"])
+            elif item["type"] == "source_list":
+                for idx, source in enumerate(SOURCES, start=1):
+                    lines.append(f"{idx}. **{source.title}**")
+                    lines.append(f"   - 机构：{source.org}")
+                    lines.append(f"   - 日期：{source.date}")
+                    lines.append(f"   - 链接：{source.url}")
+                    lines.append(f"   - 用途：{source.usage}")
+                lines.append("")
+    MARKDOWN_PATH.write_text("\n".join(lines), encoding="utf-8")
+
+
+def render_sources_markdown() -> None:
+    lines = [
+        "# SciMate BP Sources",
+        "",
+        "以下来源用于支撑 `SciMate商业计划书_BP.docx` 的 2026 年 3 月 HPC 路线改写版本。",
+        "",
+    ]
+    for idx, source in enumerate(SOURCES, start=1):
+        lines.extend(
+            [
+                f"## {idx}. {source.title}",
+                "",
+                f"- 机构：{source.org}",
+                f"- 日期：{source.date}",
+                f"- 链接：{source.url}",
+                f"- 用途：{source.usage}",
+                "",
+            ]
+        )
+    SOURCES_PATH.write_text("\n".join(lines), encoding="utf-8")
+
+
+def main() -> None:
+    MARKDOWN_PATH.parent.mkdir(parents=True, exist_ok=True)
+    render_markdown()
+    render_sources_markdown()
+    render_docx()
+    print(f"generated: {DOCX_PATH}")
+    print(f"generated: {MARKDOWN_PATH}")
+    print(f"generated: {SOURCES_PATH}")
+
+
+if __name__ == "__main__":
+    main()

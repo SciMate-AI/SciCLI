@@ -30,19 +30,20 @@ func (ci *CompletionItem) Render(selected bool, width int) string {
 	baseStyle := styles.BaseStyle()
 
 	itemStyle := baseStyle.
-		Width(width).
+		Width(max(1, width)).
 		Padding(0, 1)
 
+	prefix := "  "
+	valueStyle := itemStyle.Foreground(t.TextMuted())
+
 	if selected {
-		itemStyle = itemStyle.
-			Background(t.Background()).
+		prefix = "> "
+		valueStyle = itemStyle.
 			Foreground(t.Primary()).
 			Bold(true)
 	}
 
-	title := itemStyle.Render(
-		ci.GetValue(),
-	)
+	title := prefix + valueStyle.Render(ci.GetValue())
 
 	return title
 }
@@ -208,28 +209,34 @@ func (c *completionDialogCmp) View() string {
 	t := theme.CurrentTheme()
 	baseStyle := styles.BaseStyle()
 
-	maxWidth := 40
+	maxWidth := 28
 
 	completions := c.listView.GetItems()
 
 	for _, cmd := range completions {
 		title := cmd.DisplayValue()
-		if len(title) > maxWidth-4 {
-			maxWidth = len(title) + 4
+		if len(title) > maxWidth-6 {
+			maxWidth = len(title) + 6
 		}
 	}
 
 	c.listView.SetMaxWidth(maxWidth)
 
-	return baseStyle.Padding(0, 0).
-		Border(lipgloss.NormalBorder()).
-		BorderBottom(false).
-		BorderRight(false).
-		BorderLeft(false).
-		BorderBackground(t.Background()).
-		BorderForeground(t.TextMuted()).
-		Width(c.width).
-		Render(c.listView.View())
+	panelWidth := min(max(28, maxWidth), max(28, c.width-2))
+	header := baseStyle.Foreground(t.TextMuted()).Render("PATHS")
+	panel := baseStyle.
+		Width(panelWidth).
+		BorderLeft(true).
+		BorderTop(true).
+		BorderForeground(t.BorderDim()).
+		Padding(0, 1).
+		Render(lipgloss.JoinVertical(
+			lipgloss.Left,
+			header,
+			c.listView.View(),
+		))
+
+	return lipgloss.PlaceHorizontal(c.width, lipgloss.Left, panel)
 }
 
 func (c *completionDialogCmp) SetWidth(width int) {

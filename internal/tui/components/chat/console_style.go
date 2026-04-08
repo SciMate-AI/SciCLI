@@ -8,6 +8,27 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+const codexTranscriptMaxWidth = 104
+
+func codexColumnWidth(width int) int {
+	if width <= 0 {
+		return 0
+	}
+	return min(max(56, width-6), codexTranscriptMaxWidth)
+}
+
+func codexCenter(width int, content string) string {
+	if width <= 0 {
+		return content
+	}
+	columnWidth := min(width, codexColumnWidth(width))
+	return lipgloss.PlaceHorizontal(
+		width,
+		lipgloss.Center,
+		lipgloss.NewStyle().Width(max(1, columnWidth)).Render(content),
+	)
+}
+
 func consoleSection(width int, title string, body ...string) string {
 	t := theme.CurrentTheme()
 	base := styles.BaseStyle()
@@ -43,6 +64,15 @@ func consoleBadge(label string, bg, fg lipgloss.AdaptiveColor) string {
 		Render(strings.ToUpper(strings.TrimSpace(label)))
 }
 
+func consoleOutlineBadge(label string, fg lipgloss.AdaptiveColor) string {
+	return lipgloss.NewStyle().
+		Padding(0, 1).
+		Foreground(fg).
+		Border(lipgloss.NormalBorder()).
+		BorderForeground(fg).
+		Render(strings.ToUpper(strings.TrimSpace(label)))
+}
+
 func consoleMuted(text string) string {
 	return styles.BaseStyle().
 		Foreground(theme.CurrentTheme().TextMuted()).
@@ -75,16 +105,23 @@ func consoleDivider(width int, label string) string {
 }
 
 func consoleTranscriptBlock(width int, header string, body string, footer ...string) string {
+	t := theme.CurrentTheme()
 	base := styles.BaseStyle().Width(max(1, width))
 	lines := []string{header}
 	if strings.TrimSpace(body) != "" {
-		lines = append(lines, lipgloss.NewStyle().PaddingLeft(2).Render(strings.TrimSuffix(body, "\n")))
+		lines = append(lines, lipgloss.NewStyle().PaddingLeft(1).Render(strings.TrimSuffix(body, "\n")))
 	}
 	for _, item := range footer {
 		if strings.TrimSpace(item) == "" {
 			continue
 		}
-		lines = append(lines, lipgloss.NewStyle().PaddingLeft(2).Render(item))
+		lines = append(lines, lipgloss.NewStyle().PaddingLeft(1).Render(item))
 	}
-	return base.Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
+	return lipgloss.NewStyle().
+		Width(max(1, width)).
+		BorderLeft(true).
+		BorderStyle(lipgloss.NormalBorder()).
+		BorderForeground(t.BorderDim()).
+		PaddingLeft(1).
+		Render(base.Render(lipgloss.JoinVertical(lipgloss.Left, lines...)))
 }

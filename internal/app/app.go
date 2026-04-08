@@ -17,8 +17,11 @@ import (
 	"github.com/SciMate-AI/scicli/internal/logging"
 	"github.com/SciMate-AI/scicli/internal/lsp"
 	"github.com/SciMate-AI/scicli/internal/message"
+	"github.com/SciMate-AI/scicli/internal/orchestrator"
 	"github.com/SciMate-AI/scicli/internal/permission"
 	"github.com/SciMate-AI/scicli/internal/research"
+	runtimex "github.com/SciMate-AI/scicli/internal/runtime"
+	"github.com/SciMate-AI/scicli/internal/scientistbench"
 	"github.com/SciMate-AI/scicli/internal/session"
 	"github.com/SciMate-AI/scicli/internal/skills"
 	"github.com/SciMate-AI/scicli/internal/taskrun"
@@ -26,13 +29,18 @@ import (
 )
 
 type App struct {
-	Sessions    session.Service
-	Messages    message.Service
-	History     history.Service
-	Permissions permission.Service
-	Research    research.Service
+	Sessions        session.Service
+	Messages        message.Service
+	History         history.Service
+	Permissions     permission.Service
+	Research        research.Service
+	ScientistBench  scientistbench.Service
+	RuntimeRegistry runtimex.Service
+	RuntimeExecutor runtimex.Executor
+	RuntimeRunner   runtimex.Runner
 
-	CoderAgent agent.Service
+	CoderAgent   agent.Service
+	Orchestrator orchestrator.Service
 
 	LSPClients map[string]*lsp.Client
 	Skills     skills.Service
@@ -43,6 +51,10 @@ type App struct {
 	watcherCancelFuncs []context.CancelFunc
 	cancelFuncsMutex   sync.Mutex
 	watcherWG          sync.WaitGroup
+
+	scientistBenchContinuationMu sync.Mutex
+	scientistBenchContinuation   map[string]struct{}
+	scientistBenchStarter        func(context.Context, string) (ScientistBenchNodeRun, error)
 }
 
 func New(ctx context.Context, conn *sql.DB) (*App, error) {
@@ -52,13 +64,14 @@ func New(ctx context.Context, conn *sql.DB) (*App, error) {
 	files := history.NewService(q, conn)
 
 	app := &App{
-		Sessions:    sessions,
-		Messages:    messages,
-		History:     files,
-		Permissions: permission.NewPermissionService(),
-		LSPClients:  make(map[string]*lsp.Client),
-		Skills:      skills.NewService(),
-		TaskRuns:    taskrun.NewService(conn),
+		Sessions:                   sessions,
+		Messages:                   messages,
+		History:                    files,
+		Permissions:                permission.NewPermissionService(),
+		LSPClients:                 make(map[string]*lsp.Client),
+		Skills:                     skills.NewService(),
+		TaskRuns:                   taskrun.NewService(conn),
+		scientistBenchContinuation: make(map[string]struct{}),
 	}
 
 	researchSvc, err := research.NewService()
@@ -66,6 +79,16 @@ func New(ctx context.Context, conn *sql.DB) (*App, error) {
 		return nil, err
 	}
 	app.Research = researchSvc
+
+	scientistBenchSvc, err := scientistbench.NewService()
+	if err != nil {
+		return nil, err
+	}
+	app.ScientistBench = scientistBenchSvc
+	app.Orchestrator = orchestrator.NewService()
+	app.RuntimeRegistry = runtimex.NewService()
+	app.RuntimeExecutor = runtimex.NewExecutor()
+	app.RuntimeRunner = runtimex.NewRunner(app.Permissions)
 
 	// Initialize theme based on configuration
 	app.initTheme()

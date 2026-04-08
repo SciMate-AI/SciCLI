@@ -9,11 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/textinput"
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/SciMate-AI/scicli/internal/app"
 	"github.com/SciMate-AI/scicli/internal/config"
 	"github.com/SciMate-AI/scicli/internal/logging"
@@ -22,6 +17,11 @@ import (
 	"github.com/SciMate-AI/scicli/internal/tui/styles"
 	"github.com/SciMate-AI/scicli/internal/tui/theme"
 	"github.com/SciMate-AI/scicli/internal/tui/util"
+	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/viewport"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 const (
@@ -265,7 +265,7 @@ func (f *filepickerCmp) View() string {
 
 	adjustedWidth := maxWidth
 	for _, file := range f.dirs {
-		if len(file.Name()) > adjustedWidth-4 { // Account for padding
+		if len(file.Name()) > adjustedWidth-4 {
 			adjustedWidth = len(file.Name()) + 4
 		}
 	}
@@ -284,31 +284,25 @@ func (f *filepickerCmp) View() string {
 	}
 
 	endIdx := min(startIdx+maxVisibleDirs, len(f.dirs))
-
 	for i := startIdx; i < endIdx; i++ {
 		file := f.dirs[i]
-		itemStyle := styles.BaseStyle().Width(adjustedWidth)
-
+		itemStyle := styles.BaseStyle().Width(adjustedWidth).Foreground(t.TextMuted())
+		prefix := "  "
 		if i == f.cursor {
-			itemStyle = itemStyle.
-				Background(t.Primary()).
-				Foreground(t.Background()).
-				Bold(true)
+			prefix = "> "
+			itemStyle = itemStyle.Foreground(t.Text()).Bold(true)
 		}
-		filename := file.Name()
 
+		filename := file.Name()
 		if len(filename) > adjustedWidth-4 {
 			filename = filename[:adjustedWidth-7] + "..."
 		}
 		if file.IsDir() {
-			filename = filename + "/"
+			filename += "/"
 		}
-		// No need to reassign filename if it's not changing
-
-		files = append(files, itemStyle.Padding(0, 1).Render(filename))
+		files = append(files, itemStyle.Render(prefix+filename))
 	}
 
-	// Pad to always show exactly 21 lines
 	for len(files) < maxVisibleDirs {
 		files = append(files, styles.BaseStyle().Width(adjustedWidth).Render(""))
 	}
@@ -318,38 +312,33 @@ func (f *filepickerCmp) View() string {
 		Width(adjustedWidth).
 		Render(f.cwd.View())
 
-	viewportstyle := lipgloss.NewStyle().
-		Width(f.viewport.Width).
-		Background(t.Background()).
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(t.TextMuted()).
-		BorderBackground(t.Background()).
-		Padding(2).
-		Render(f.viewport.View())
-	var insertExitText string
+	insertExitText := "Press i to start typing path"
 	if f.IsCWDFocused() {
 		insertExitText = "Press esc to exit typing path"
-	} else {
-		insertExitText = "Press i to start typing path"
 	}
 
 	content := lipgloss.JoinVertical(
 		lipgloss.Left,
+		styles.BaseStyle().Width(adjustedWidth).Foreground(t.Primary()).Bold(true).Render("File picker"),
+		styles.BaseStyle().Width(adjustedWidth).Foreground(t.TextMuted()).Render("Enter selects. h/l moves directories. i edits path."),
+		"",
 		currentPath,
-		styles.BaseStyle().Width(adjustedWidth).Render(""),
+		"",
 		styles.BaseStyle().Width(adjustedWidth).Render(lipgloss.JoinVertical(lipgloss.Left, files...)),
-		styles.BaseStyle().Width(adjustedWidth).Render(""),
+		"",
 		styles.BaseStyle().Foreground(t.TextMuted()).Width(adjustedWidth).Render(insertExitText),
+		"",
+		lipgloss.NewStyle().
+			Width(adjustedWidth).
+			BorderLeft(true).
+			BorderForeground(t.BorderDim()).
+			PaddingLeft(1).
+			Foreground(t.TextMuted()).
+			Render(f.viewport.View()),
 	)
 
 	f.cwd.SetValue(f.cwd.Value())
-	contentStyle := styles.BaseStyle().Padding(1, 2).
-		Border(lipgloss.RoundedBorder()).
-		BorderBackground(t.Background()).
-		BorderForeground(t.TextMuted()).
-		Width(lipgloss.Width(content) + 4)
-
-	return lipgloss.JoinHorizontal(lipgloss.Center, contentStyle.Render(content), viewportstyle)
+	return lipgloss.PlaceHorizontal(max(adjustedWidth, f.width), lipgloss.Center, styles.BaseStyle().Width(adjustedWidth).Render(content))
 }
 
 type FilepickerCmp interface {

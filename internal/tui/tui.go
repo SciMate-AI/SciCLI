@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/SciMate-AI/scicli/internal/app"
-	"github.com/SciMate-AI/scicli/internal/auth"
 	"github.com/SciMate-AI/scicli/internal/config"
 	"github.com/SciMate-AI/scicli/internal/llm/agent"
 	"github.com/SciMate-AI/scicli/internal/logging"
@@ -46,11 +45,6 @@ type showModelDialogMsg struct{}
 type focusInspectorGlobalMsg struct{}
 type openLatestTaskGlobalMsg struct{}
 type stopLatestTaskGlobalMsg struct{}
-type authQuickActionResultMsg struct {
-	session *auth.Session
-	message string
-	err     string
-}
 
 const (
 	quitKey = "q"
@@ -144,9 +138,6 @@ type appModel struct {
 	commandDialog     dialog.CommandDialog
 	commands          []dialog.Command
 
-	showAuthDialog bool
-	authDialog     dialog.AuthDialog
-
 	showModelDialog bool
 	modelDialog     dialog.ModelDialog
 
@@ -186,8 +177,6 @@ func (a appModel) Init() tea.Cmd {
 	cmd = a.sessionDialog.Init()
 	cmds = append(cmds, cmd)
 	cmd = a.commandDialog.Init()
-	cmds = append(cmds, cmd)
-	cmd = a.authDialog.Init()
 	cmds = append(cmds, cmd)
 	cmd = a.modelDialog.Init()
 	cmds = append(cmds, cmd)
@@ -233,10 +222,6 @@ func (a appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		command, commandCmd := a.commandDialog.Update(msg)
 		a.commandDialog = command.(dialog.CommandDialog)
 		cmds = append(cmds, commandCmd)
-
-		authDialog, authCmd := a.authDialog.Update(msg)
-		a.authDialog = authDialog.(dialog.AuthDialog)
-		cmds = append(cmds, authCmd)
 
 		providerSetup, providerSetupCmd := a.providerSetupDialog.Update(msg)
 		a.providerSetupDialog = providerSetup.(dialog.ProviderSetupDialog)
@@ -335,57 +320,6 @@ func (a appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.showCommandDialog = false
 		return a, nil
 
-	case dialog.ShowAuthDialogMsg:
-		session, err := currentAuthSession()
-		if err != nil {
-			return a, util.ReportError(err)
-		}
-		a.authDialog.Open(msg.Mode, session)
-		a.showAuthDialog = true
-		return a, nil
-
-	case dialog.CloseAuthDialogMsg:
-		a.showAuthDialog = false
-		return a, nil
-
-	case dialog.AuthSubmitMsg:
-		return a, runAuthSubmit(msg)
-
-	case dialog.AuthDialogResultMsg:
-		if msg.Error != "" {
-			current, _ := currentAuthSession()
-			a.authDialog.SetResult(current, msg.Error)
-			a.showAuthDialog = true
-			return a, nil
-		}
-		a.authDialog.SetResult(msg.Session, "")
-		a.showAuthDialog = false
-		if msg.NeedsConfirmation {
-			return a, util.ReportInfo(fmt.Sprintf("Registered %s. Confirm your email before login.", msg.Email))
-		}
-		switch msg.Mode {
-		case dialog.AuthDialogModeRegister:
-			return a, util.ReportInfo(fmt.Sprintf("Registered and logged in as %s", msg.Session.Email))
-		case dialog.AuthDialogModeLogin:
-			return a, util.ReportInfo(fmt.Sprintf("Logged in as %s", msg.Session.Email))
-		default:
-			return a, nil
-		}
-
-	case dialog.AuthQuickActionMsg:
-		return a, runAuthQuickAction(msg.Action)
-
-	case authQuickActionResultMsg:
-		a.authDialog.SetResult(msg.session, msg.err)
-		if msg.err != "" {
-			a.showAuthDialog = true
-			return a, util.ReportError(fmt.Errorf("%s", msg.err))
-		}
-		if msg.message != "" {
-			return a, util.ReportInfo(msg.message)
-		}
-		return a, nil
-
 	case showSessionDialogMsg:
 		return a, a.openSessionDialog()
 
@@ -396,7 +330,6 @@ func (a appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			!a.showSessionDialog &&
 			!a.showCommandDialog &&
 			!a.showTaskDialog &&
-			!a.showAuthDialog &&
 			!a.showProviderSetupDialog &&
 			!a.showThemeDialog &&
 			!a.showFilepicker {
@@ -411,7 +344,6 @@ func (a appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.showSessionDialog ||
 			a.showCommandDialog ||
 			a.showTaskDialog ||
-			a.showAuthDialog ||
 			a.showThemeDialog ||
 			a.showFilepicker {
 			return a, nil
@@ -585,12 +517,10 @@ func (a appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, util.ReportInfo("Command selected: " + msg.Command.Title)
 
 	case focusInspectorGlobalMsg:
-		moveCmd := a.moveToPage(page.ChatPage)
-		return a, tea.Batch(moveCmd, util.CmdHandler(chat.InspectorFocusMsg{Focused: true}))
+		return a, util.CmdHandler(dialog.ShowTaskDialogMsg{})
 
 	case core.StatusFocusInspectorMsg:
-		moveCmd := a.moveToPage(page.ChatPage)
-		return a, tea.Batch(moveCmd, util.CmdHandler(chat.InspectorFocusMsg{Focused: true}))
+		return a, util.CmdHandler(dialog.ShowTaskDialogMsg{})
 
 	case core.StatusOpenTaskMsg:
 		selectedSession, err := a.app.Sessions.Get(context.Background(), msg.SessionID)
@@ -611,7 +541,6 @@ func (a appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		moveCmd := a.moveToPage(page.ChatPage)
 		return a, tea.Batch(
 			moveCmd,
-			util.CmdHandler(chat.InspectorFocusMsg{Focused: true}),
 			util.CmdHandler(chat.InspectorOpenTaskMsg{SessionID: sessionID}),
 			util.ReportInfo("Opening latest task: "+title),
 		)
@@ -627,7 +556,6 @@ func (a appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		moveCmd := a.moveToPage(page.ChatPage)
 		return a, tea.Batch(
 			moveCmd,
-			util.CmdHandler(chat.InspectorFocusMsg{Focused: true}),
 			util.CmdHandler(chat.InspectorStopTaskMsg{SessionID: sessionID}),
 			util.ReportInfo("Stopping latest running task: "+title),
 		)
@@ -667,12 +595,6 @@ func (a appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.multiArgumentsDialog = args.(dialog.MultiArgumentsDialogCmp)
 			return a, cmd
 		}
-		if a.showAuthDialog {
-			authDialog, cmd := a.authDialog.Update(msg)
-			a.authDialog = authDialog.(dialog.AuthDialog)
-			return a, cmd
-		}
-
 		switch {
 
 		case key.Matches(msg, keys.Quit):
@@ -685,9 +607,6 @@ func (a appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if a.showCommandDialog {
 				a.showCommandDialog = false
-			}
-			if a.showAuthDialog {
-				a.showAuthDialog = false
 			}
 			if a.showProviderSetupDialog {
 				a.showProviderSetupDialog = false
@@ -756,10 +675,6 @@ func (a appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				if a.showHelp {
 					a.showHelp = !a.showHelp
-					return a, nil
-				}
-				if a.showAuthDialog {
-					a.showAuthDialog = false
 					return a, nil
 				}
 				if a.showFilepicker {
@@ -848,15 +763,6 @@ func (a appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	if a.showAuthDialog {
-		d, authCmd := a.authDialog.Update(msg)
-		a.authDialog = d.(dialog.AuthDialog)
-		cmds = append(cmds, authCmd)
-		if _, ok := msg.(tea.KeyMsg); ok {
-			return a, tea.Batch(cmds...)
-		}
-	}
-
 	if a.showProviderSetupDialog {
 		d, providerSetupCmd := a.providerSetupDialog.Update(msg)
 		a.providerSetupDialog = d.(dialog.ProviderSetupDialog)
@@ -931,7 +837,6 @@ func (a *appModel) openSessionDialog() tea.Cmd {
 		a.showPermissions ||
 		a.showCommandDialog ||
 		a.showTaskDialog ||
-		a.showAuthDialog ||
 		a.showProviderSetupDialog ||
 		a.showThemeDialog ||
 		a.showFilepicker ||
@@ -957,7 +862,6 @@ func (a *appModel) openTaskDialog() tea.Cmd {
 		a.showPermissions ||
 		a.showCommandDialog ||
 		a.showSessionDialog ||
-		a.showAuthDialog ||
 		a.showProviderSetupDialog ||
 		a.showThemeDialog ||
 		a.showFilepicker ||
@@ -1020,73 +924,6 @@ func fallbackCommandTaskTitle(title string) string {
 		return "latest task"
 	}
 	return title
-}
-
-func currentAuthSession() (*auth.Session, error) {
-	svc, err := auth.NewService()
-	if err != nil {
-		return nil, err
-	}
-	return svc.Status()
-}
-
-func runAuthSubmit(msg dialog.AuthSubmitMsg) tea.Cmd {
-	return func() tea.Msg {
-		svc, err := auth.NewService()
-		if err != nil {
-			return dialog.AuthDialogResultMsg{Mode: msg.Mode, Error: err.Error()}
-		}
-
-		switch msg.Mode {
-		case dialog.AuthDialogModeLogin:
-			session, loginErr := svc.Login(msg.Email, msg.Password)
-			if loginErr != nil {
-				return dialog.AuthDialogResultMsg{Mode: msg.Mode, Error: loginErr.Error()}
-			}
-			return dialog.AuthDialogResultMsg{Mode: msg.Mode, Session: session}
-		case dialog.AuthDialogModeRegister:
-			session, needsConfirmation, registerErr := svc.Register(msg.Email, msg.Password)
-			if registerErr != nil {
-				return dialog.AuthDialogResultMsg{Mode: msg.Mode, Error: registerErr.Error()}
-			}
-			return dialog.AuthDialogResultMsg{
-				Mode:              msg.Mode,
-				Session:           session,
-				Email:             strings.TrimSpace(msg.Email),
-				NeedsConfirmation: needsConfirmation,
-			}
-		default:
-			return dialog.AuthDialogResultMsg{Mode: msg.Mode, Error: "unsupported auth action"}
-		}
-	}
-}
-
-func runAuthQuickAction(action dialog.AuthQuickAction) tea.Cmd {
-	return func() tea.Msg {
-		svc, err := auth.NewService()
-		if err != nil {
-			return authQuickActionResultMsg{err: err.Error()}
-		}
-
-		switch action {
-		case dialog.AuthQuickActionLogout:
-			if err := svc.Logout(); err != nil {
-				return authQuickActionResultMsg{err: err.Error()}
-			}
-			return authQuickActionResultMsg{message: "Logged out"}
-		case dialog.AuthQuickActionRefresh:
-			session, err := svc.Refresh()
-			if err != nil {
-				return authQuickActionResultMsg{err: err.Error()}
-			}
-			return authQuickActionResultMsg{
-				session: session,
-				message: fmt.Sprintf("Refreshed login for %s", session.Email),
-			}
-		default:
-			return authQuickActionResultMsg{err: "unknown auth action"}
-		}
-	}
 }
 
 func (a *appModel) moveToPage(pageID page.PageID) tea.Cmd {
@@ -1190,9 +1027,6 @@ func (a appModel) View() string {
 		if a.showCommandDialog {
 			bindings = append(bindings, a.commandDialog.BindingKeys()...)
 		}
-		if a.showAuthDialog {
-			bindings = append(bindings, a.authDialog.BindingKeys()...)
-		}
 		if a.showProviderSetupDialog {
 			bindings = append(bindings, a.providerSetupDialog.BindingKeys()...)
 		}
@@ -1247,21 +1081,6 @@ func (a appModel) View() string {
 
 	if a.showSessionDialog {
 		overlay := a.sessionDialog.View()
-		row := lipgloss.Height(appView) / 2
-		row -= lipgloss.Height(overlay) / 2
-		col := lipgloss.Width(appView) / 2
-		col -= lipgloss.Width(overlay) / 2
-		appView = layout.PlaceOverlay(
-			col,
-			row,
-			overlay,
-			appView,
-			true,
-		)
-	}
-
-	if a.showAuthDialog {
-		overlay := a.authDialog.View()
 		row := lipgloss.Height(appView) / 2
 		row -= lipgloss.Height(overlay) / 2
 		col := lipgloss.Width(appView) / 2
@@ -1374,22 +1193,21 @@ func (a appModel) View() string {
 func New(app *app.App) tea.Model {
 	startPage := page.ChatPage
 	model := &appModel{
-		currentPage:   startPage,
-		loadedPages:   make(map[page.PageID]bool),
-		status:        core.NewStatusCmp(app.LSPClients, app.Skills, app.Permissions, app.TaskRuns),
-		help:          dialog.NewHelpCmp(),
-		quit:          dialog.NewQuitCmp(),
-		sessionDialog: dialog.NewSessionDialogCmp(),
-		commandDialog: dialog.NewCommandDialogCmp(),
-		authDialog:    dialog.NewAuthDialogCmp(),
-		modelDialog:   dialog.NewModelDialogCmp(),
+		currentPage:         startPage,
+		loadedPages:         make(map[page.PageID]bool),
+		status:              core.NewStatusCmp(app.LSPClients, app.Skills, app.Permissions, app.TaskRuns),
+		help:                dialog.NewHelpCmp(),
+		quit:                dialog.NewQuitCmp(),
+		sessionDialog:       dialog.NewSessionDialogCmp(),
+		commandDialog:       dialog.NewCommandDialogCmp(),
+		modelDialog:         dialog.NewModelDialogCmp(),
 		providerSetupDialog: dialog.NewProviderSetupDialogCmp(),
-		permissions:   dialog.NewPermissionDialogCmp(),
-		themeDialog:   dialog.NewThemeDialogCmp(),
-		skillsDialog:  dialog.NewSkillDialogCmp(),
-		taskDialog:    dialog.NewTaskDialogCmp(),
-		app:           app,
-		commands:      []dialog.Command{},
+		permissions:         dialog.NewPermissionDialogCmp(),
+		themeDialog:         dialog.NewThemeDialogCmp(),
+		skillsDialog:        dialog.NewSkillDialogCmp(),
+		taskDialog:          dialog.NewTaskDialogCmp(),
+		app:                 app,
+		commands:            []dialog.Command{},
 		pages: map[page.PageID]tea.Model{
 			page.ChatPage: page.NewChatPage(app),
 			page.LogsPage: page.NewLogsPage(),
@@ -1399,8 +1217,8 @@ func New(app *app.App) tea.Model {
 
 	model.RegisterCommand(dialog.Command{
 		ID:          "focus-inspector",
-		Title:       "Focus Inspector",
-		Description: "Jump focus to the right-side run/task inspector",
+		Title:       "Open Tasks",
+		Description: "Open the delegated task list",
 		Handler: func(cmd dialog.Command) tea.Cmd {
 			return util.CmdHandler(focusInspectorGlobalMsg{})
 		},
@@ -1586,51 +1404,6 @@ If there are Cursor rules (in .cursor/rules/ or .cursorrules) or Copilot rules (
 		Description: "Inspect delegated child-agent sessions for the current chat",
 		Handler: func(cmd dialog.Command) tea.Cmd {
 			return util.CmdHandler(dialog.ShowTaskDialogMsg{})
-		},
-	})
-
-	model.RegisterCommand(dialog.Command{
-		ID:          "account",
-		Title:       "Account",
-		Description: "Show login status, then login/register/logout/refresh",
-		Handler: func(cmd dialog.Command) tea.Cmd {
-			return util.CmdHandler(dialog.ShowAuthDialogMsg{Mode: dialog.AuthDialogModeStatus})
-		},
-	})
-
-	model.RegisterCommand(dialog.Command{
-		ID:          "login",
-		Title:       "Login",
-		Description: "Login with your SciMate account",
-		Handler: func(cmd dialog.Command) tea.Cmd {
-			return util.CmdHandler(dialog.ShowAuthDialogMsg{Mode: dialog.AuthDialogModeLogin})
-		},
-	})
-
-	model.RegisterCommand(dialog.Command{
-		ID:          "register",
-		Title:       "Register",
-		Description: "Create a SciMate account",
-		Handler: func(cmd dialog.Command) tea.Cmd {
-			return util.CmdHandler(dialog.ShowAuthDialogMsg{Mode: dialog.AuthDialogModeRegister})
-		},
-	})
-
-	model.RegisterCommand(dialog.Command{
-		ID:          "logout",
-		Title:       "Logout",
-		Description: "Clear the stored SciMate login",
-		Handler: func(cmd dialog.Command) tea.Cmd {
-			return util.CmdHandler(dialog.AuthQuickActionMsg{Action: dialog.AuthQuickActionLogout})
-		},
-	})
-
-	model.RegisterCommand(dialog.Command{
-		ID:          "refresh-login",
-		Title:       "Refresh Login",
-		Description: "Refresh the stored access token",
-		Handler: func(cmd dialog.Command) tea.Cmd {
-			return util.CmdHandler(dialog.AuthQuickActionMsg{Action: dialog.AuthQuickActionRefresh})
 		},
 	})
 

@@ -28,13 +28,10 @@ type chatPage struct {
 	app                  *app.App
 	editor               layout.Container
 	messages             layout.Container
-	inspector            layout.Container
 	layout               layout.SplitPaneLayout
 	session              session.Session
 	completionDialog     dialog.CompletionDialog
 	showCompletionDialog bool
-	inspectorFocused     bool
-	inspectorVisible     bool
 }
 
 type experimentProposalGeneratedMsg struct {
@@ -69,10 +66,6 @@ var keyMap = ChatKeyMap{
 	Cancel: key.NewBinding(
 		key.WithKeys("esc"),
 		key.WithHelp("esc", "cancel"),
-	),
-	FocusInspector: key.NewBinding(
-		key.WithKeys("ctrl+i"),
-		key.WithHelp("ctrl+i", "focus inspector"),
 	),
 }
 
@@ -120,30 +113,7 @@ func (p *chatPage) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case chat.SessionSelectedMsg:
 		p.session = msg
-	case chat.InspectorFocusMsg:
-		p.inspectorFocused = msg.Focused
-		u, cmd := p.layout.Update(msg)
-		p.layout = u.(layout.SplitPaneLayout)
-		return p, cmd
 	case tea.KeyMsg:
-		if p.inspectorFocused {
-			switch {
-			case key.Matches(msg, keyMap.FocusInspector):
-				p.inspectorFocused = false
-				p.inspectorVisible = false
-				cmds := []tea.Cmd{
-					p.layout.ClearRightPanel(),
-				}
-				u, cmd := p.layout.Update(chat.InspectorFocusMsg{Focused: false})
-				p.layout = u.(layout.SplitPaneLayout)
-				cmds = append(cmds, cmd)
-				return p, tea.Batch(cmds...)
-			default:
-				u, cmd := p.layout.Update(chat.InspectorKeyMsg{Key: msg})
-				p.layout = u.(layout.SplitPaneLayout)
-				return p, cmd
-			}
-		}
 		switch {
 		case key.Matches(msg, keyMap.ShowCompletionDialog):
 			p.showCompletionDialog = true
@@ -161,26 +131,6 @@ func (p *chatPage) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				p.app.CoderAgent.Cancel(p.session.ID)
 				return p, nil
 			}
-		case key.Matches(msg, keyMap.FocusInspector):
-			if !p.inspectorVisible {
-				p.inspectorVisible = true
-				p.inspectorFocused = true
-				return p, tea.Batch(
-					p.layout.SetRightPanel(p.inspector),
-					util.CmdHandler(chat.InspectorFocusMsg{Focused: true}),
-				)
-			}
-			p.inspectorFocused = !p.inspectorFocused
-			if !p.inspectorFocused {
-				p.inspectorVisible = false
-				return p, tea.Batch(
-					p.layout.ClearRightPanel(),
-					util.CmdHandler(chat.InspectorFocusMsg{Focused: false}),
-				)
-			}
-			u, cmd := p.layout.Update(chat.InspectorFocusMsg{Focused: true})
-			p.layout = u.(layout.SplitPaneLayout)
-			return p, cmd
 		}
 	case chat.InspectorOpenTaskMsg:
 		selectedSession, err := p.app.Sessions.Get(context.Background(), msg.SessionID)
@@ -188,10 +138,7 @@ func (p *chatPage) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return p, util.ReportError(err)
 		}
 		p.session = selectedSession
-		p.inspectorFocused = false
-		u, cmd := p.layout.Update(chat.InspectorFocusMsg{Focused: false})
-		p.layout = u.(layout.SplitPaneLayout)
-		return p, tea.Batch(cmd, util.CmdHandler(chat.SessionSelectedMsg(selectedSession)))
+		return p, util.CmdHandler(chat.SessionSelectedMsg(selectedSession))
 	case chat.InspectorStopTaskMsg:
 		if err := p.app.TaskRuns.Cancel(msg.SessionID); err != nil {
 			return p, util.ReportError(err)
@@ -983,7 +930,11 @@ func (p *chatPage) View() string {
 }
 
 func (p *chatPage) BindingKeys() []key.Binding {
-	bindings := layout.KeyMapToSlice(keyMap)
+	bindings := []key.Binding{
+		keyMap.ShowCompletionDialog,
+		keyMap.NewSession,
+		keyMap.Cancel,
+	}
 	bindings = append(bindings, p.messages.BindingKeys()...)
 	bindings = append(bindings, p.editor.BindingKeys()...)
 	return bindings
@@ -995,28 +946,21 @@ func NewChatPage(app *app.App) tea.Model {
 
 	messagesContainer := layout.NewContainer(
 		chat.NewMessagesCmp(app),
-		layout.WithPadding(1, 2, 0, 2),
-	)
-	inspectorContainer := layout.NewContainer(
-		chat.NewInspectorCmp(app),
-		layout.WithPadding(1, 1, 1, 1),
-		layout.WithBorder(false, false, false, true),
+		layout.WithPadding(0, 0, 0, 0),
 	)
 	editorContainer := layout.NewContainer(
 		chat.NewEditorCmp(app),
-		layout.WithPadding(0, 2, 1, 2),
+		layout.WithPadding(0, 0, 1, 0),
 	)
 	return &chatPage{
 		app:              app,
 		editor:           editorContainer,
 		messages:         messagesContainer,
-		inspector:        inspectorContainer,
 		completionDialog: completionDialog,
 		layout: layout.NewSplitPane(
 			layout.WithLeftPanel(messagesContainer),
-			layout.WithRatio(0.72),
 			layout.WithBottomPanel(editorContainer),
-			layout.WithVerticalRatio(0.86),
+			layout.WithVerticalRatio(0.88),
 		),
 	}
 }

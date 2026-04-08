@@ -13,7 +13,7 @@ SciCLI is not just a generic terminal chat wrapper around an LLM. It is designed
 
 - **Configurable MCP integration**: SciCLI can load tools from MCP servers you explicitly configure, so internal APIs, research backends, and local MCP utilities can be exposed as normal agent tools.
 - **Context-window protection for long tool outputs**: long MCP tool returns are compacted before being sent back to the model, while the full raw result remains available in metadata for the UI. This reduces 400 errors caused by oversized tool context.
-- **Terminal UI built for tool-heavy sessions**: sessions, permissions, logs, account actions, provider/model switching, file edits, and tool results all live in the TUI. Long histories can be browsed with mouse wheel support, a visible scrollbar, and scroll position hints.
+- **Terminal UI built for tool-heavy sessions**: sessions, permissions, logs, provider/model switching, file edits, and tool results all live in the TUI. Long histories can be browsed with mouse wheel support, a visible scrollbar, and scroll position hints.
 - **Local coding tools plus configured MCP tools**: the agent can inspect files, run shell commands, edit code, apply patches, fetch URLs, read diagnostics, and call MCP tools in the same conversation.
 - **Conversation continuity**: automatic session compaction summarizes long conversations before they exceed the current model's context window, so work can continue without manually restarting from scratch.
 - **Structured research session memory**: each chat can now keep a persisted research objective and stage outside the raw transcript, so the operator can reopen a session and recover the current direction immediately.
@@ -56,7 +56,7 @@ go build ./...
 scicli
 ```
 
-On first launch, SciCLI opens a single onboarding flow if no usable provider/model is configured yet. That flow handles account login or registration, provider selection, credentials, and default model selection.
+On first launch, SciCLI opens a single onboarding flow if no usable provider/model is configured yet. That flow handles provider selection, credentials, and default model selection.
 
 ### 2. Configure a model provider
 
@@ -131,17 +131,16 @@ scicli mcp call --server rdkit --tool rdkit_describe_molecule --args "{\"smiles\
 
 ### Terminal UI
 
-- Searchable command palette (`Ctrl+K`) for account actions, session switching, work-mode controls, and provider/model switching
+- Searchable command palette (`Ctrl+K`) for session switching, work-mode controls, and provider/model switching
 - `Set Research Objective` command to persist a session-level research goal
 - `Add Experiment Plan` and `Evaluate Active Experiment` commands for the Phase 2 research loop
 - `Propose Next Experiment` to ask the agent for a candidate plan based on prior experiment state
 - `Generate Project Memory` command to create or refresh `SCICLI.md` on demand
 - Session history browser with persistent saved sessions
 - Scrollable conversation history with mouse wheel support, visible scrollbar, and position indicator
-- Account dialog for register/login/logout/token refresh from inside the UI
 - Model/provider switcher from inside the UI
 - Searchable skill browser (`/skills`) with in-TUI install and uninstall actions
-- Three-column workbench layout with a left research navigator, center conversation pane, and right run/task inspector
+- Transcript-first workbench layout with lightweight overlays for research state, tasks, and configuration
 - Delegated task browser (`/tasks`) for inspecting child-agent sessions spawned from the current chat
 - Permission prompts for tool execution
 - Logs view for debugging and tool inspection
@@ -413,14 +412,12 @@ The delegated task browser supports:
 - pressing `Enter` to jump into the selected delegated task session
 - using `/parent` or the command palette to jump back to the parent chat
 
-The right-side run/task inspector supports:
+The delegated task flow supports:
 
 - near-real-time task status refresh for delegated child sessions
-- current run state, persisted research summary, experiment plans, lineage board summary, searchable captured artifacts, linked run status, active skills, delegated task summaries, persisted task event timelines, and tracked file changes in one pane
-- lineage-focused summaries now include active/promoted candidates, per-lineage best score, queued generations, and next-step operator hints
-- clickable action chips can now trigger evaluate, promote, evolve, and compare flows directly from the inspector
-- staying visible during normal chat work instead of requiring a modal dialog
-- `Ctrl+I` to focus the inspector, `/` to filter tasks, `A` to filter artifacts, `.` to filter the run console by tool/detail, `Tab` / `Shift+Tab` to cycle run-console categories, `Enter` to open the selected task, and `Ctrl+X` to stop it
+- opening delegated sessions from `/tasks` or the status bar
+- stopping the selected delegated run directly from the task browser
+- tracking linked experiment runs, captured artifacts, and task lineage in persisted research state
 
 The experiment loop now also tracks explicit selection decisions and lineage:
 
@@ -430,12 +427,7 @@ The experiment loop now also tracks explicit selection decisions and lineage:
 - `/experiment evolve` creates the next generation from an evaluated `mutate` or `branch` candidate
 - `/experiment propose` now returns and stores an explicit `mutate` or `branch` strategy for the proposed child experiment
 
-The left workbench navigator now mirrors the research loop directly:
-
-- current research objective and stage
-- active and promoted candidates
-- queued follow-up experiments
-- the most relevant next action for the operator
+The transcript-first chat flow now surfaces the research loop through slash commands, the task browser, and session state instead of a fixed multi-pane workbench.
 
 When work mode is set to `ultrawork`, the current TUI session auto-approves tool permissions so autonomous runs are not interrupted by approval prompts. Delegated child-task sessions now inherit that session-level auto-approval as well.
 
@@ -480,7 +472,6 @@ Common shortcuts:
 
 Useful command-palette actions:
 
-- `Account`: open the account panel with current login status
 - `Set Research Objective`
 - `Show Research State`
 - `Add Experiment Plan`
@@ -491,16 +482,15 @@ Useful command-palette actions:
 - `Rerun Active Experiment`
 - `Compare Experiments`
 - `List Experiment Artifacts`
-- `Login` / `Register` / `Logout` / `Refresh Login`
-- `Focus Inspector`
+- `Open Tasks`
 - `Open Latest Task`
 - `Stop Latest Running Task`
 - `Switch Session`
 - `Switch Provider / Model`
 
-The status bar now mirrors inspector state:
+The status bar now mirrors delegated-task state:
 
-- clicking the `Inspector` chip focuses the right-side inspector
+- clicking the `Inspector` chip opens the delegated task list
 - clicking the `Task ...` chip opens the currently highlighted delegated task
 - `Alt+[` / `Alt+]` rotate which delegated task is highlighted there
 
@@ -544,8 +534,8 @@ Roadmap execution status:
 
 - Phase 0 is complete enough for the current branch: onboarding is singular, built-in/default MCP startup is gone, and the old built-in remote CAE command surface has been removed.
 - Phase 1 is now in progress: a minimal persisted research-session layer exists in the TUI and can store a session objective with `/research set`.
-- Phase 2 has started: experiment plans, delegated-task run links, and evaluation summaries now persist in research state, with new `/experiment ...` commands and inspector visibility.
-- Phase 3 has started: completed experiment runs now persist local provenance artifacts, and the inspector can browse those artifacts directly.
+- Phase 2 has started: experiment plans, delegated-task run links, and evaluation summaries now persist in research state, with new `/experiment ...` commands and task-browser visibility.
+- Phase 3 has started: completed experiment runs now persist local provenance artifacts for comparison and review.
 - Phase 4 is in progress: selection decisions, promoted candidates, and lineage-aware evolve flows are now stored and visible.
 - Phase 5 has started: the workbench now surfaces research objective, candidate queue, and lineage/operator hints directly in the TUI.
 

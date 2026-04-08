@@ -1,13 +1,13 @@
 package dialog
 
 import (
-	"github.com/charmbracelet/bubbles/key"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/SciMate-AI/scicli/internal/tui/layout"
 	"github.com/SciMate-AI/scicli/internal/tui/styles"
 	"github.com/SciMate-AI/scicli/internal/tui/theme"
 	"github.com/SciMate-AI/scicli/internal/tui/util"
+	"github.com/charmbracelet/bubbles/key"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // ThemeChangedMsg is sent when the theme is changed
@@ -127,12 +127,7 @@ func (t *themeDialogCmp) View() string {
 	baseStyle := styles.BaseStyle()
 
 	if len(t.themes) == 0 {
-		return baseStyle.Padding(1, 2).
-			Border(lipgloss.RoundedBorder()).
-			BorderBackground(currentTheme.Background()).
-			BorderForeground(currentTheme.TextMuted()).
-			Width(40).
-			Render("No themes available")
+		return lipgloss.PlaceHorizontal(max(40, t.width), lipgloss.Center, baseStyle.Width(40).Render("No themes available"))
 	}
 
 	// Calculate max width needed for theme names
@@ -148,39 +143,31 @@ func (t *themeDialogCmp) View() string {
 	// Build the theme list
 	themeItems := make([]string, 0, len(t.themes))
 	for i, themeName := range t.themes {
-		itemStyle := baseStyle.Width(maxWidth)
+		itemStyle := baseStyle.Width(maxWidth).Foreground(currentTheme.TextMuted())
+		prefix := "  "
 
 		if i == t.selectedIdx {
-			itemStyle = itemStyle.
-				Background(currentTheme.Primary()).
-				Foreground(currentTheme.Background()).
-				Bold(true)
+			prefix = "> "
+			itemStyle = itemStyle.Foreground(currentTheme.Text()).Bold(true)
 		}
 
-		themeItems = append(themeItems, itemStyle.Padding(0, 1).Render(themeName))
+		themeItems = append(themeItems, itemStyle.Render(prefix+themeName))
 	}
 
 	title := baseStyle.
 		Foreground(currentTheme.Primary()).
 		Bold(true).
 		Width(maxWidth).
-		Padding(0, 1).
-		Render("Select Theme")
+		Render("Theme")
 
 	content := lipgloss.JoinVertical(
 		lipgloss.Left,
 		title,
-		baseStyle.Width(maxWidth).Render(""),
+		baseStyle.Width(maxWidth).Foreground(currentTheme.TextMuted()).Render("Up/Down selects. Enter applies."),
 		baseStyle.Width(maxWidth).Render(lipgloss.JoinVertical(lipgloss.Left, themeItems...)),
-		baseStyle.Width(maxWidth).Render(""),
 	)
 
-	return baseStyle.Padding(1, 2).
-		Border(lipgloss.RoundedBorder()).
-		BorderBackground(currentTheme.Background()).
-		BorderForeground(currentTheme.TextMuted()).
-		Width(lipgloss.Width(content) + 4).
-		Render(content)
+	return lipgloss.PlaceHorizontal(max(maxWidth, t.width), lipgloss.Center, baseStyle.Width(maxWidth).Render(content))
 }
 
 func (t *themeDialogCmp) BindingKeys() []key.Binding {
@@ -195,4 +182,3 @@ func NewThemeDialogCmp() ThemeDialog {
 		currentTheme: "",
 	}
 }
-

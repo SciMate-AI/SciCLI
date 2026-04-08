@@ -5,7 +5,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/SciMate-AI/scicli/internal/auth"
 	"github.com/SciMate-AI/scicli/internal/config"
 	"github.com/SciMate-AI/scicli/internal/tui/util"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -14,19 +13,11 @@ import (
 )
 
 type step int
-type authMode int
 
 const (
-	stepAuth step = iota
-	stepAuthForm
-	stepProvider
+	stepProvider step = iota
 	stepCredential
 	stepModel
-)
-
-const (
-	authModeLogin authMode = iota
-	authModeRegister
 )
 
 type wizardModel struct {
@@ -34,13 +25,6 @@ type wizardModel struct {
 	height int
 
 	step step
-
-	authService *auth.Service
-	session     *auth.Session
-	authMode    authMode
-	authInputs  []textinput.Model
-	authFocus   int
-	authNotice  string
 
 	providers         []config.OnboardingProvider
 	selectedProvider  int
@@ -82,30 +66,13 @@ func Run() error {
 }
 
 func newWizardModel() (*wizardModel, error) {
-	authService, err := auth.NewService()
-	if err != nil {
-		return nil, err
-	}
-	session, err := authService.Status()
-	if err != nil {
-		return nil, err
-	}
-
 	model := &wizardModel{
-		authService: authService,
-		session:     session,
-		authMode:    authModeLogin,
-		providers:   config.OnboardingProviders(),
+		providers: config.OnboardingProviders(),
+		step:      stepProvider,
 	}
-	model.initAuthInputs()
 	model.initCredentialInputs()
 	model.resetCredentialState()
 	model.resetModels()
-	if session != nil {
-		model.step = stepProvider
-	} else {
-		model.step = stepAuth
-	}
 	return model, nil
 }
 
@@ -122,7 +89,7 @@ func (m *wizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+c", "esc":
-			if m.step == stepAuth || m.step == stepProvider {
+			if m.step == stepProvider {
 				m.cancelled = true
 				return m, tea.Quit
 			}
@@ -132,10 +99,6 @@ func (m *wizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	switch m.step {
-	case stepAuth:
-		return m.updateAuthStep(msg)
-	case stepAuthForm:
-		return m.updateAuthFormStep(msg)
 	case stepProvider:
 		return m.updateProviderStep(msg)
 	case stepCredential:
@@ -145,89 +108,6 @@ func (m *wizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	default:
 		return m, nil
 	}
-}
-
-func (m *wizardModel) updateAuthStep(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if m.session != nil {
-		if keyMsg, ok := msg.(tea.KeyMsg); ok && keyMsg.String() == "enter" {
-			m.step = stepProvider
-		}
-		return m, nil
-	}
-
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		switch msg.String() {
-		case "up", "k", "down", "j", "tab":
-			if m.authMode == authModeLogin {
-				m.authMode = authModeRegister
-			} else {
-				m.authMode = authModeLogin
-			}
-		case "enter":
-			m.step = stepAuthForm
-			return m, m.focusAuthInput(0)
-		}
-	}
-
-	return m, nil
-}
-
-func (m *wizardModel) updateAuthFormStep(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		switch msg.String() {
-		case "up", "shift+tab":
-			return m, m.focusAuthInput((m.authFocus + len(m.authInputs) - 1) % len(m.authInputs))
-		case "down", "tab":
-			return m, m.focusAuthInput((m.authFocus + 1) % len(m.authInputs))
-		case "ctrl+v":
-			if err := util.PasteSingleLineTextInput(&m.authInputs[m.authFocus]); err != nil {
-				m.authNotice = err.Error()
-				return m, nil
-			}
-			m.authNotice = ""
-			return m, nil
-		case "enter":
-			if m.authFocus < len(m.authInputs)-1 {
-				return m, m.focusAuthInput(m.authFocus + 1)
-			}
-			email := strings.TrimSpace(m.authInputs[0].Value())
-			password := m.authInputs[1].Value()
-			if email == "" || password == "" {
-				return m, nil
-			}
-			if m.authMode == authModeRegister {
-				session, needsConfirmation, err := m.authService.Register(email, password)
-				if err != nil {
-					m.authNotice = err.Error()
-					return m, nil
-				}
-				if needsConfirmation {
-					m.authNotice = "Registration succeeded. Confirm your email, then log in."
-					m.authMode = authModeLogin
-					m.authInputs[1].SetValue("")
-					m.step = stepAuth
-					return m, nil
-				}
-				m.session = session
-			} else {
-				session, err := m.authService.Login(email, password)
-				if err != nil {
-					m.authNotice = err.Error()
-					return m, nil
-				}
-				m.session = session
-			}
-			m.authNotice = ""
-			m.step = stepProvider
-			return m, nil
-		}
-	}
-
-	var cmd tea.Cmd
-	m.authInputs[m.authFocus], cmd = m.authInputs[m.authFocus].Update(msg)
-	return m, cmd
 }
 
 func (m *wizardModel) updateProviderStep(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -255,7 +135,6 @@ func (m *wizardModel) updateProviderStep(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.currentFocusCmd()
 		}
 	}
-
 	return m, nil
 }
 
@@ -334,15 +213,14 @@ func (m *wizardModel) updateModelStep(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.keepModelSelectionVisible(len(modelsForProvider))
 		case "enter":
 			apiKey := strings.TrimSpace(m.credentialInputValue("apiKey"))
-			selection := config.OnboardingSelection{
+			m.err = config.SaveOnboardingSelection(config.OnboardingSelection{
 				Provider:      m.currentProvider().Provider,
 				APIKey:        apiKey,
 				PersistAPIKey: apiKey != "" && (!m.currentProvider().DetectedCredential || !m.useDetectedCredential),
 				ModelID:       modelsForProvider[m.selectedModel].ID,
 				BaseURL:       strings.TrimSpace(m.credentialInputValue("baseURL")),
 				CustomModel:   strings.TrimSpace(m.credentialInputValue("model")),
-			}
-			m.err = config.SaveOnboardingSelection(selection)
+			})
 			return m, tea.Quit
 		}
 	}
@@ -362,17 +240,13 @@ func (m *wizardModel) View() string {
 
 	parts := []string{
 		lipgloss.NewStyle().Bold(true).Render("SciCLI onboarding"),
-		"Complete this once to connect an account, choose a provider, and set your default model.",
+		"Choose a provider, configure credentials, and set your default model.",
 		"",
 		m.stepIndicator(),
 		"",
 	}
 
 	switch m.step {
-	case stepAuth:
-		parts = append(parts, m.renderAuthStep()...)
-	case stepAuthForm:
-		parts = append(parts, m.renderAuthFormStep()...)
 	case stepProvider:
 		parts = append(parts, m.renderProviderStep()...)
 	case stepCredential:
@@ -381,16 +255,11 @@ func (m *wizardModel) View() string {
 		parts = append(parts, m.renderModelStep()...)
 	}
 
-	if strings.TrimSpace(m.authNotice) != "" {
-		parts = append(parts, "", lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Render(m.authNotice))
+	if m.err != nil {
+		parts = append(parts, "", lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Render(m.err.Error()))
 	}
 
-	parts = append(
-		parts,
-		"",
-		lipgloss.NewStyle().Faint(true).Render("Project memory is optional and can be generated later from the command palette."),
-		lipgloss.NewStyle().Faint(true).Render("Config file: "+config.ConfigFilePath()),
-	)
+	parts = append(parts, "", lipgloss.NewStyle().Faint(true).Render("Config file: "+config.ConfigFilePath()))
 
 	return lipgloss.Place(
 		m.width,
@@ -401,49 +270,9 @@ func (m *wizardModel) View() string {
 	)
 }
 
-func (m *wizardModel) renderAuthStep() []string {
-	if m.session != nil {
-		return []string{
-			"Step 1/4: SciMate account",
-			"Current session: " + strings.TrimSpace(m.session.Email),
-			"Press Enter to continue to provider setup.",
-		}
-	}
-
-	current := "Login"
-	other := "Register"
-	if m.authMode == authModeRegister {
-		current = "Register"
-		other = "Login"
-	}
-
-	return []string{
-		"Step 1/4: SciMate account",
-		"Up/Down to switch mode, Enter to continue.",
-		"",
-		"> " + current,
-		"  " + other,
-	}
-}
-
-func (m *wizardModel) renderAuthFormStep() []string {
-	title := "Step 1/4: Login"
-	if m.authMode == authModeRegister {
-		title = "Step 1/4: Register"
-	}
-
-	return []string{
-		title,
-		"Tab to move between fields, Enter on password to submit.",
-		"",
-		m.authInputs[0].View(),
-		m.authInputs[1].View(),
-	}
-}
-
 func (m *wizardModel) renderProviderStep() []string {
 	lines := []string{
-		"Step 2/4: Choose a provider",
+		"Step 1/3: Choose a provider",
 		"Up/Down to move, Enter to continue.",
 		"",
 	}
@@ -468,7 +297,7 @@ func (m *wizardModel) renderProviderStep() []string {
 func (m *wizardModel) renderCredentialStep() []string {
 	current := m.currentProvider()
 	lines := []string{
-		"Step 3/4: Configure " + current.Label,
+		"Step 2/3: Configure " + current.Label,
 		"",
 	}
 
@@ -506,7 +335,7 @@ func (m *wizardModel) renderCredentialStep() []string {
 func (m *wizardModel) renderModelStep() []string {
 	modelsForProvider := config.OnboardingModels(m.currentProvider().Provider)
 	lines := []string{
-		"Step 4/4: Choose the default coder model",
+		"Step 3/3: Choose the default coder model",
 		"Up/Down to move, Enter to save and continue.",
 		"",
 	}
@@ -530,19 +359,8 @@ func (m *wizardModel) renderModelStep() []string {
 }
 
 func (m *wizardModel) stepIndicator() string {
-	labels := []string{"Auth", "Provider", "Credential", "Model"}
-	current := 0
-	switch m.step {
-	case stepProvider:
-		current = 1
-	case stepCredential:
-		current = 2
-	case stepModel:
-		current = 3
-	default:
-		current = 0
-	}
-
+	labels := []string{"Provider", "Credential", "Model"}
+	current := int(m.step)
 	out := make([]string, 0, len(labels))
 	for idx, label := range labels {
 		if idx == current {
@@ -556,12 +374,6 @@ func (m *wizardModel) stepIndicator() string {
 
 func (m *wizardModel) prevStep() {
 	switch m.step {
-	case stepAuthForm:
-		m.step = stepAuth
-	case stepProvider:
-		if m.session == nil {
-			m.step = stepAuth
-		}
 	case stepCredential:
 		m.step = stepProvider
 	case stepModel:
@@ -571,22 +383,6 @@ func (m *wizardModel) prevStep() {
 
 func (m *wizardModel) currentProvider() config.OnboardingProvider {
 	return m.providers[m.selectedProvider]
-}
-
-func (m *wizardModel) initAuthInputs() {
-	email := textinput.New()
-	email.Placeholder = "Email"
-	email.Prompt = "> "
-	email.Width = 56
-
-	password := textinput.New()
-	password.Placeholder = "Password"
-	password.Prompt = "> "
-	password.Width = 56
-	password.EchoMode = textinput.EchoPassword
-	password.EchoCharacter = '*'
-
-	m.authInputs = []textinput.Model{email, password}
 }
 
 func (m *wizardModel) initCredentialInputs() {
@@ -609,23 +405,10 @@ func (m *wizardModel) initCredentialInputs() {
 }
 
 func (m *wizardModel) currentFocusCmd() tea.Cmd {
-	switch m.step {
-	case stepAuthForm:
-		return m.focusAuthInput(m.authFocus)
-	case stepCredential:
-		if m.shouldFocusCredentialInputs() {
-			return m.focusCredentialInput(m.credentialFocus)
-		}
+	if m.step == stepCredential && m.shouldFocusCredentialInputs() {
+		return m.focusCredentialInput(m.credentialFocus)
 	}
 	return nil
-}
-
-func (m *wizardModel) focusAuthInput(index int) tea.Cmd {
-	m.authFocus = index
-	for i := range m.authInputs {
-		m.authInputs[i].Blur()
-	}
-	return m.authInputs[index].Focus()
 }
 
 func (m *wizardModel) activeCredentialInputs() []textinput.Model {
@@ -743,7 +526,6 @@ func (m *wizardModel) keepModelSelectionVisible(total int) {
 		m.modelScrollOffset = 0
 		return
 	}
-
 	if m.selectedModel < m.modelScrollOffset {
 		m.modelScrollOffset = m.selectedModel
 	}

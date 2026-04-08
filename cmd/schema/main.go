@@ -229,29 +229,6 @@ func generateSchema() map[string]any {
 		},
 	}
 
-	schema["properties"].(map[string]any)["auth"] = map[string]any{
-		"type":        "object",
-		"description": "Authentication configuration",
-		"properties": map[string]any{
-			"supabase": map[string]any{
-				"type":        "object",
-				"description": "Supabase authentication settings",
-				"properties": map[string]any{
-					"url": map[string]any{
-						"type":        "string",
-						"description": "Supabase project URL",
-						"default":     config.DefaultSupabaseURL,
-					},
-					"anonKey": map[string]any{
-						"type":        "string",
-						"description": "Supabase anon key",
-						"default":     config.DefaultSupabaseAnonKey,
-					},
-				},
-			},
-		},
-	}
-
 	// Add providers
 	providerSchema := map[string]any{
 		"type":        "object",

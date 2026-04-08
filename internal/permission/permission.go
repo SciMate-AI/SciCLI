@@ -2,6 +2,7 @@ package permission
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -88,10 +89,7 @@ func (s *permissionService) Request(opts CreatePermissionRequest) bool {
 			return true
 		}
 	}
-	dir := filepath.Dir(opts.Path)
-	if dir == "." {
-		dir = config.WorkingDirectory()
-	}
+	dir := resolvePermissionPath(opts.Path)
 	permission := PermissionRequest{
 		ID:          uuid.New().String(),
 		Path:        dir,
@@ -196,6 +194,29 @@ func splitCommandSegments(command string) []string {
 		out = append(out, part)
 	}
 	return out
+}
+
+func resolvePermissionPath(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" || path == "." {
+		if cfg := config.Get(); cfg != nil {
+			if dir := strings.TrimSpace(cfg.WorkingDir); dir != "" {
+				return dir
+			}
+		}
+		if dir, err := os.Getwd(); err == nil {
+			if dir = strings.TrimSpace(dir); dir != "" {
+				return dir
+			}
+		}
+		return "."
+	}
+
+	dir := filepath.Dir(path)
+	if strings.TrimSpace(dir) == "." {
+		return resolvePermissionPath(".")
+	}
+	return dir
 }
 
 func NewPermissionService() Service {

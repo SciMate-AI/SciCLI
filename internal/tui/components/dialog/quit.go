@@ -1,15 +1,13 @@
 package dialog
 
 import (
-	"strings"
-
-	"github.com/charmbracelet/bubbles/key"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/SciMate-AI/scicli/internal/tui/layout"
 	"github.com/SciMate-AI/scicli/internal/tui/styles"
 	"github.com/SciMate-AI/scicli/internal/tui/theme"
 	"github.com/SciMate-AI/scicli/internal/tui/util"
+	"github.com/charmbracelet/bubbles/key"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 const question = "Are you sure you want to quit?"
@@ -84,45 +82,27 @@ func (q *quitDialogCmp) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (q *quitDialogCmp) View() string {
 	t := theme.CurrentTheme()
 	baseStyle := styles.BaseStyle()
-	
-	yesStyle := baseStyle
-	noStyle := baseStyle
-	spacerStyle := baseStyle.Background(t.Background())
 
+	yesLabel := "  yes"
+	noLabel := "  no"
 	if q.selectedNo {
-		noStyle = noStyle.Background(t.Primary()).Foreground(t.Background())
-		yesStyle = yesStyle.Background(t.Background()).Foreground(t.Primary())
+		noLabel = "> no"
 	} else {
-		yesStyle = yesStyle.Background(t.Primary()).Foreground(t.Background())
-		noStyle = noStyle.Background(t.Background()).Foreground(t.Primary())
+		yesLabel = "> yes"
 	}
 
-	yesButton := yesStyle.Padding(0, 1).Render("Yes")
-	noButton := noStyle.Padding(0, 1).Render("No")
-
-	buttons := lipgloss.JoinHorizontal(lipgloss.Left, yesButton, spacerStyle.Render("  "), noButton)
-
-	width := lipgloss.Width(question)
-	remainingWidth := width - lipgloss.Width(buttons)
-	if remainingWidth > 0 {
-		buttons = spacerStyle.Render(strings.Repeat(" ", remainingWidth)) + buttons
-	}
-
-	content := baseStyle.Render(
-		lipgloss.JoinVertical(
-			lipgloss.Center,
-			question,
-			"",
-			buttons,
-		),
+	content := lipgloss.JoinVertical(
+		lipgloss.Left,
+		baseStyle.Foreground(t.Primary()).Bold(true).Render("Quit"),
+		baseStyle.Render(question),
+		"",
+		baseStyle.Foreground(t.TextMuted()).Render(yesLabel),
+		baseStyle.Foreground(t.TextMuted()).Render(noLabel),
+		"",
+		baseStyle.Foreground(t.TextMuted()).Render("Enter confirms. y quits. n closes."),
 	)
 
-	return baseStyle.Padding(1, 2).
-		Border(lipgloss.RoundedBorder()).
-		BorderBackground(t.Background()).
-		BorderForeground(t.TextMuted()).
-		Width(lipgloss.Width(content) + 4).
-		Render(content)
+	return lipgloss.PlaceHorizontal(max(32, lipgloss.Width(question)+6), lipgloss.Center, content)
 }
 
 func (q *quitDialogCmp) BindingKeys() []key.Binding {

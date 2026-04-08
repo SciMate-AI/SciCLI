@@ -32,9 +32,8 @@ func (ci Command) Render(selected bool, width int) string {
 	baseStyle := styles.BaseStyle()
 
 	descStyle := baseStyle.Width(width).Foreground(t.TextMuted())
-	itemStyle := baseStyle.Width(width).
-		Foreground(t.Text()).
-		Background(t.Background())
+	itemStyle := baseStyle.Width(width).Foreground(t.TextMuted())
+	prefix := "  "
 
 	if ci.Disabled {
 		itemStyle = itemStyle.Foreground(t.TextMuted())
@@ -42,13 +41,9 @@ func (ci Command) Render(selected bool, width int) string {
 	}
 
 	if selected {
-		itemStyle = itemStyle.
-			Background(t.Primary()).
-			Foreground(t.Background()).
-			Bold(true)
-		descStyle = descStyle.
-			Background(t.Primary()).
-			Foreground(t.Background())
+		prefix = "> "
+		itemStyle = itemStyle.Foreground(t.Text()).Bold(true)
+		descStyle = descStyle.Foreground(t.Text())
 	}
 
 	titleText := ci.Title
@@ -67,9 +62,9 @@ func (ci Command) Render(selected bool, width int) string {
 		descriptionText += "Why: " + ci.Reason
 	}
 
-	title := itemStyle.Padding(0, 1).Render(titleText)
+	title := itemStyle.Render(prefix + titleText)
 	if descriptionText != "" {
-		description := descStyle.Padding(0, 1).Render(descriptionText)
+		description := descStyle.Render("  " + descriptionText)
 		return lipgloss.JoinVertical(lipgloss.Left, title, description)
 	}
 	return title
@@ -197,8 +192,7 @@ func (c *commandDialogCmp) View() string {
 		Foreground(t.Primary()).
 		Bold(true).
 		Width(maxWidth).
-		Padding(0, 1).
-		Render("Command Palette")
+		Render("Command palette")
 
 	filter := baseStyle.
 		Width(maxWidth).
@@ -213,20 +207,14 @@ func (c *commandDialogCmp) View() string {
 	content := lipgloss.JoinVertical(
 		lipgloss.Left,
 		title,
-		baseStyle.Width(maxWidth).Foreground(t.TextMuted()).Render("Search"),
+		baseStyle.Width(maxWidth).Foreground(t.TextMuted()).Render("SEARCH"),
 		filter,
-		baseStyle.Width(maxWidth).Render(""),
+		"",
 		baseStyle.Width(maxWidth).Render(c.listView.View()),
-		baseStyle.Width(maxWidth).Render(""),
 		baseStyle.Width(maxWidth).Foreground(t.TextMuted()).Render(footerText),
 	)
 
-	return baseStyle.Padding(1, 2).
-		Border(lipgloss.RoundedBorder()).
-		BorderBackground(t.Background()).
-		BorderForeground(t.TextMuted()).
-		Width(lipgloss.Width(content) + 4).
-		Render(content)
+	return lipgloss.PlaceHorizontal(max(maxWidth, c.width), lipgloss.Center, baseStyle.Width(maxWidth).Render(content))
 }
 
 func (c *commandDialogCmp) BindingKeys() []key.Binding {

@@ -3,11 +3,11 @@ package dialog
 import (
 	"strings"
 
+	"github.com/SciMate-AI/scicli/internal/tui/styles"
+	"github.com/SciMate-AI/scicli/internal/tui/theme"
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/SciMate-AI/scicli/internal/tui/styles"
-	"github.com/SciMate-AI/scicli/internal/tui/theme"
 )
 
 type helpCmp struct {
@@ -58,12 +58,10 @@ func (h *helpCmp) render() string {
 	baseStyle := styles.BaseStyle()
 
 	helpKeyStyle := styles.Bold().
-		Background(t.Background()).
 		Foreground(t.Text()).
 		Padding(0, 1, 0, 0)
 
 	helpDescStyle := styles.Regular().
-		Background(t.Background()).
 		Foreground(t.TextMuted())
 
 	// Compile list of bindings to render
@@ -144,7 +142,6 @@ func (h *helpCmp) render() string {
 			lipgloss.Left,              // x
 			lipgloss.Top,               // y
 			lastPair,                   // content
-			lipgloss.WithWhitespaceBackground(t.Background()),
 		))
 		content := baseStyle.Width(h.width).Render(
 			lipgloss.JoinHorizontal(
@@ -174,20 +171,23 @@ func (h *helpCmp) View() string {
 		Bold(true).
 		Width(lipgloss.Width(content)).
 		Foreground(t.Primary()).
-		Render("Keyboard Shortcuts")
+		Render("Keyboard shortcuts")
+	subtitle := baseStyle.
+		Width(lipgloss.Width(content)).
+		Foreground(t.TextMuted()).
+		Render("Active keys for the current view")
 
-	return baseStyle.Padding(1).
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(t.TextMuted()).
-		Width(h.width).
-		BorderBackground(t.Background()).
-		Render(
-			lipgloss.JoinVertical(lipgloss.Center,
-				header,
-				baseStyle.Render(strings.Repeat(" ", lipgloss.Width(header))),
-				content,
-			),
-		)
+	return lipgloss.PlaceHorizontal(
+		max(h.width, lipgloss.Width(content)),
+		lipgloss.Center,
+		lipgloss.JoinVertical(
+			lipgloss.Left,
+			header,
+			subtitle,
+			"",
+			content,
+		),
+	)
 }
 
 type HelpCmp interface {
