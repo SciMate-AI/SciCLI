@@ -151,29 +151,18 @@ func (p *permissionDialogCmp) selectCurrentOption() tea.Cmd {
 func (p *permissionDialogCmp) renderButtons() string {
 	t := theme.CurrentTheme()
 	baseStyle := styles.BaseStyle()
-	options := []string{"  allow", "  allow for session", "  deny"}
-	stylesForOption := []lipgloss.Style{
-		baseStyle.Foreground(t.TextMuted()),
-		baseStyle.Foreground(t.TextMuted()),
-		baseStyle.Foreground(t.TextMuted()),
-	}
+	selected := "allow"
+	selectedStyle := baseStyle.Foreground(t.Primary()).Bold(true)
 	switch p.selectedOption {
-	case 0:
-		options[0] = "> allow"
-		stylesForOption[0] = baseStyle.Foreground(t.Text()).Bold(true)
 	case 1:
-		options[1] = "> allow for session"
-		stylesForOption[1] = baseStyle.Foreground(t.Text()).Bold(true)
+		selected = "allow for session"
 	case 2:
-		options[2] = "> deny"
-		stylesForOption[2] = baseStyle.Foreground(t.Error()).Bold(true)
+		selected = "deny"
+		selectedStyle = baseStyle.Foreground(t.Error()).Bold(true)
 	}
 	lines := []string{
-		baseStyle.Foreground(t.TextMuted()).Render("OPTIONS"),
-		stylesForOption[0].Render(options[0]),
-		stylesForOption[1].Render(options[1]),
-		stylesForOption[2].Render(options[2]),
-		baseStyle.Foreground(t.TextMuted()).Render("enter confirm  left/right switch"),
+		baseStyle.Foreground(t.TextMuted()).Render("a allow  s allow for session  d deny  enter confirm selected  left/right switch  pgup/pgdn scroll"),
+		selectedStyle.Render("selected  " + strings.ToUpper(selected)),
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, lines...)
 }
@@ -184,6 +173,7 @@ func (p *permissionDialogCmp) renderHeader() string {
 	labelStyle := baseStyle.Foreground(t.TextMuted())
 	valueStyle := baseStyle.Foreground(t.Text())
 	headerParts := []string{
+		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Action"), "  ", valueStyle.Render(p.permission.Action)),
 		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Tool"), "  ", valueStyle.Render(p.permission.ToolName)),
 		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Path"), "  ", valueStyle.Render(p.permission.Path)),
 	}
@@ -327,8 +317,9 @@ func (p *permissionDialogCmp) styleViewport() string {
 func (p *permissionDialogCmp) render() string {
 	t := theme.CurrentTheme()
 	baseStyle := styles.BaseStyle()
+	width := max(40, p.width)
 
-	title := baseStyle.Bold(true).Foreground(t.Text()).Render("Permission required")
+	title := baseStyle.Bold(true).Foreground(t.Warning()).Render("Permission request")
 	subtitle := baseStyle.Foreground(t.TextMuted()).Render(firstNonEmptyPermissionText(
 		strings.TrimSpace(p.permission.Description),
 		"Review this action before continuing.",
@@ -338,9 +329,9 @@ func (p *permissionDialogCmp) render() string {
 	// Render buttons
 	buttons := p.renderButtons()
 
-	// Calculate content height dynamically based on window size
-	p.contentViewPort.Height = max(5, p.height-lipgloss.Height(headerContent)-lipgloss.Height(buttons)-lipgloss.Height(title)-lipgloss.Height(subtitle)-6)
-	p.contentViewPort.Width = max(24, p.width-8)
+	// Render as an inline sheet inside the main layout instead of a centered popup.
+	p.contentViewPort.Height = max(3, p.height-lipgloss.Height(headerContent)-lipgloss.Height(buttons)-lipgloss.Height(title)-lipgloss.Height(subtitle)-5)
+	p.contentViewPort.Width = max(24, width-2)
 
 	// Render content based on tool type
 	var contentFinal string
@@ -361,8 +352,6 @@ func (p *permissionDialogCmp) render() string {
 
 	content := lipgloss.JoinVertical(
 		lipgloss.Top,
-		permissionOutlineBadge("permission", t.Warning()),
-		"",
 		title,
 		subtitle,
 		"",
@@ -373,11 +362,13 @@ func (p *permissionDialogCmp) render() string {
 		buttons,
 	)
 
-	sheet := baseStyle.
-		Width(p.width).
+	return baseStyle.
+		Width(width).
 		Height(p.height).
+		BorderTop(true).
+		BorderForeground(t.BorderDim()).
+		PaddingTop(1).
 		Render(content)
-	return lipgloss.Place(p.windowSize.Width, p.windowSize.Height, lipgloss.Center, lipgloss.Center, sheet)
 }
 
 func (p *permissionDialogCmp) View() string {
@@ -392,30 +383,15 @@ func (p *permissionDialogCmp) SetSize() tea.Cmd {
 	if p.permission.ID == "" {
 		return nil
 	}
-	switch p.permission.ToolName {
-	case tools.BashToolName:
-		p.width = max(56, int(float64(p.windowSize.Width)*0.4))
-		p.height = max(16, int(float64(p.windowSize.Height)*0.3))
-	case tools.EditToolName:
-		p.width = max(72, int(float64(p.windowSize.Width)*0.8))
-		p.height = max(20, int(float64(p.windowSize.Height)*0.8))
-	case tools.WriteToolName:
-		p.width = max(72, int(float64(p.windowSize.Width)*0.8))
-		p.height = max(20, int(float64(p.windowSize.Height)*0.8))
-	case tools.FetchToolName:
-		p.width = max(56, int(float64(p.windowSize.Width)*0.4))
-		p.height = max(16, int(float64(p.windowSize.Height)*0.3))
-	default:
-		p.width = max(64, int(float64(p.windowSize.Width)*0.7))
-		p.height = max(18, int(float64(p.windowSize.Height)*0.5))
-	}
-	p.width = min(max(40, p.width), max(40, p.windowSize.Width-4))
-	p.height = min(max(12, p.height), max(12, p.windowSize.Height-4))
+	p.width = max(40, p.windowSize.Width)
+	p.height = min(max(10, p.windowSize.Height/3), max(10, p.windowSize.Height))
 	return nil
 }
 
 func (p *permissionDialogCmp) SetPermissions(permission permission.PermissionRequest) tea.Cmd {
 	p.permission = permission
+	p.selectedOption = 0
+	p.contentViewPort.GotoTop()
 	return p.SetSize()
 }
 

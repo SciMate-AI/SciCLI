@@ -551,10 +551,10 @@ func highlightLine(fileName string, line string, bg lipgloss.TerminalColor) stri
 
 // createStyles generates the lipgloss styles needed for rendering diffs
 func createStyles(t theme.Theme) (removedLineStyle, addedLineStyle, contextLineStyle, lineNumberStyle lipgloss.Style) {
-	removedLineStyle = lipgloss.NewStyle().Background(t.DiffRemovedBg())
-	addedLineStyle = lipgloss.NewStyle().Background(t.DiffAddedBg())
-	contextLineStyle = lipgloss.NewStyle().Background(t.DiffContextBg())
-	lineNumberStyle = lipgloss.NewStyle().Foreground(t.DiffLineNumber())
+	removedLineStyle = lipgloss.NewStyle().Background(t.Background()).Foreground(t.DiffRemoved())
+	addedLineStyle = lipgloss.NewStyle().Background(t.Background()).Foreground(t.DiffAdded())
+	contextLineStyle = lipgloss.NewStyle().Background(t.Background()).Foreground(t.TextMuted())
+	lineNumberStyle = lipgloss.NewStyle().Background(t.Background()).Foreground(t.DiffLineNumber())
 
 	return
 }
@@ -615,8 +615,7 @@ func applyHighlighting(content string, segments []Segment, segmentType LineType,
 	currentPos := 0
 
 	// Get the appropriate color based on terminal background
-	bgColor := lipgloss.Color(getColor(highlightBg))
-	fgColor := lipgloss.Color(getColor(theme.CurrentTheme().Background()))
+	highlightColor := lipgloss.Color(getColor(highlightBg))
 
 	for i := 0; i < len(content); {
 		// Check if we're at an ANSI sequence
@@ -652,16 +651,13 @@ func applyHighlighting(content string, segments []Segment, segmentType LineType,
 			// Get the current styling
 			currentStyle := ansiSequences[currentPos]
 
-			// Apply foreground and background highlight
+			// Apply text-only highlight to match the console's black background.
 			sb.WriteString("\x1b[38;2;")
-			r, g, b, _ := fgColor.RGBA()
+			r, g, b, _ := highlightColor.RGBA()
 			sb.WriteString(fmt.Sprintf("%d;%d;%dm", r>>8, g>>8, b>>8))
-			sb.WriteString("\x1b[48;2;")
-			r, g, b, _ = bgColor.RGBA()
-			sb.WriteString(fmt.Sprintf("%d;%d;%dm", r>>8, g>>8, b>>8))
+			sb.WriteString("\x1b[1m")
 			sb.WriteString(char)
-			// Reset foreground and background
-			sb.WriteString("\x1b[39m")
+			sb.WriteString("\x1b[22m\x1b[39m")
 
 			// Reapply the original ANSI sequence
 			sb.WriteString(currentStyle)
@@ -695,7 +691,7 @@ func renderLeftColumn(fileName string, dl *DiffLine, colWidth int) string {
 	case LineRemoved:
 		marker = removedLineStyle.Foreground(t.DiffRemoved()).Render("-")
 		bgStyle = removedLineStyle
-		lineNumberStyle = lineNumberStyle.Foreground(t.DiffRemoved()).Background(t.DiffRemovedLineNumberBg())
+		lineNumberStyle = lineNumberStyle.Foreground(t.DiffRemoved())
 	case LineAdded:
 		marker = "?"
 		bgStyle = contextLineStyle
@@ -732,7 +728,7 @@ func renderLeftColumn(fileName string, dl *DiffLine, colWidth int) string {
 		ansi.Truncate(
 			lineText,
 			colWidth,
-			lipgloss.NewStyle().Background(bgStyle.GetBackground()).Foreground(t.TextMuted()).Render("..."),
+			lipgloss.NewStyle().Background(t.Background()).Foreground(t.TextMuted()).Render("..."),
 		),
 	)
 }
@@ -755,7 +751,7 @@ func renderRightColumn(fileName string, dl *DiffLine, colWidth int) string {
 	case LineAdded:
 		marker = addedLineStyle.Foreground(t.DiffAdded()).Render("+")
 		bgStyle = addedLineStyle
-		lineNumberStyle = lineNumberStyle.Foreground(t.DiffAdded()).Background(t.DiffAddedLineNumberBg())
+		lineNumberStyle = lineNumberStyle.Foreground(t.DiffAdded())
 	case LineRemoved:
 		marker = "?"
 		bgStyle = contextLineStyle
@@ -792,7 +788,7 @@ func renderRightColumn(fileName string, dl *DiffLine, colWidth int) string {
 		ansi.Truncate(
 			lineText,
 			colWidth,
-			lipgloss.NewStyle().Background(bgStyle.GetBackground()).Foreground(t.TextMuted()).Render("..."),
+			lipgloss.NewStyle().Background(t.Background()).Foreground(t.TextMuted()).Render("..."),
 		),
 	)
 }

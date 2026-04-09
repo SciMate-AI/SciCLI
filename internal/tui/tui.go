@@ -163,6 +163,27 @@ type appModel struct {
 	compactingMessage string
 }
 
+func (a appModel) permissionReservedHeight() int {
+	if !a.showPermissions || a.height <= 0 {
+		return 0
+	}
+	return min(max(10, a.height/3), a.height)
+}
+
+func (a appModel) pageHeight() int {
+	return max(1, a.height-a.permissionReservedHeight())
+}
+
+func (a appModel) resizeCurrentPage() tea.Cmd {
+	if a.width == 0 || a.height == 0 {
+		return nil
+	}
+	if sizable, ok := a.pages[a.currentPage].(layout.Sizeable); ok {
+		return sizable.SetSize(a.width, a.pageHeight())
+	}
+	return nil
+}
+
 func (a appModel) Init() tea.Cmd {
 	var cmds []tea.Cmd
 	cmd := a.pages[a.currentPage].Init()
@@ -204,7 +225,9 @@ func (a appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		s, _ := a.status.Update(msg)
 		a.status = s.(core.StatusCmp)
-		a.pages[a.currentPage], cmd = a.pages[a.currentPage].Update(msg)
+		pageMsg := msg
+		pageMsg.Height = a.pageHeight()
+		a.pages[a.currentPage], cmd = a.pages[a.currentPage].Update(pageMsg)
 		cmds = append(cmds, cmd)
 
 		prm, permCmd := a.permissions.Update(msg)
@@ -291,7 +314,7 @@ func (a appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Permission
 	case pubsub.Event[permission.PermissionRequest]:
 		a.showPermissions = true
-		return a, a.permissions.SetPermissions(msg.Payload)
+		return a, tea.Batch(a.permissions.SetPermissions(msg.Payload), a.resizeCurrentPage())
 	case dialog.PermissionResponseMsg:
 		var cmd tea.Cmd
 		switch msg.Action {
@@ -303,7 +326,7 @@ func (a appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.app.Permissions.Deny(msg.Permission)
 		}
 		a.showPermissions = false
-		return a, cmd
+		return a, tea.Batch(cmd, a.resizeCurrentPage())
 
 	case page.PageChangeMsg:
 		return a, a.moveToPage(msg.ID)
@@ -941,7 +964,7 @@ func (a *appModel) moveToPage(pageID page.PageID) tea.Cmd {
 	a.previousPage = a.currentPage
 	a.currentPage = pageID
 	if sizable, ok := a.pages[a.currentPage].(layout.Sizeable); ok {
-		cmd := sizable.SetSize(a.width, a.height)
+		cmd := sizable.SetSize(a.width, a.pageHeight())
 		cmds = append(cmds, cmd)
 	}
 
@@ -949,28 +972,13 @@ func (a *appModel) moveToPage(pageID page.PageID) tea.Cmd {
 }
 
 func (a appModel) View() string {
-	components := []string{
-		a.pages[a.currentPage].View(),
+	components := []string{a.pages[a.currentPage].View()}
+	if a.showPermissions {
+		components = append(components, a.permissions.View())
 	}
-
 	components = append(components, a.status.View())
 
 	appView := lipgloss.JoinVertical(lipgloss.Top, components...)
-
-	if a.showPermissions {
-		overlay := a.permissions.View()
-		row := lipgloss.Height(appView) / 2
-		row -= lipgloss.Height(overlay) / 2
-		col := lipgloss.Width(appView) / 2
-		col -= lipgloss.Width(overlay) / 2
-		appView = layout.PlaceOverlay(
-			col,
-			row,
-			overlay,
-			appView,
-			true,
-		)
-	}
 
 	if a.showFilepicker {
 		overlay := a.filepicker.View()

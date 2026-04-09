@@ -14,20 +14,19 @@ type OpenCodeTheme struct {
 func NewOpenCodeTheme() *OpenCodeTheme {
 	// OpenCode color palette
 	// Dark mode colors
-	darkBackground := "#212121"
-	darkCurrentLine := "#252525"
-	darkSelection := "#303030"
+	darkBackground := "#000000"
+	darkSelection := "#2a2a2a"
 	darkForeground := "#e0e0e0"
 	darkComment := "#6a6a6a"
-	darkPrimary := "#fab283"   // Primary orange/gold
-	darkSecondary := "#5c9cf5" // Secondary blue
-	darkAccent := "#9d7cd8"    // Accent purple
-	darkRed := "#e06c75"       // Error red
-	darkOrange := "#f5a742"    // Warning orange
-	darkGreen := "#7fd88f"     // Success green
-	darkCyan := "#56b6c2"      // Info cyan
-	darkYellow := "#e5c07b"    // Emphasized text
-	darkBorder := "#4b4c5c"    // Border color
+	darkPrimary := "#7aa2f7"
+	darkSecondary := "#73daca"
+	darkAccent := "#bb9af7"
+	darkRed := "#e06c75"    // Error red
+	darkOrange := "#f5a742" // Warning orange
+	darkGreen := "#7fd88f"  // Success green
+	darkCyan := "#56b6c2"   // Info cyan
+	darkYellow := "#e5c07b" // Emphasized text
+	darkBorder := "#3a3a3a" // Border color
 
 	// Light mode colors
 	lightBackground := "#f8f8f8"
@@ -99,11 +98,11 @@ func NewOpenCodeTheme() *OpenCodeTheme {
 		Light: lightBackground,
 	}
 	theme.BackgroundSecondaryColor = lipgloss.AdaptiveColor{
-		Dark:  darkCurrentLine,
+		Dark:  darkBackground,
 		Light: lightCurrentLine,
 	}
 	theme.BackgroundDarkerColor = lipgloss.AdaptiveColor{
-		Dark:  "#1e1e1e", // Keep contrast without rendering near-black chips
+		Dark:  darkBackground,
 		Light: "#f5f5f5", // Keep contrast without stark white blocks
 	}
 

@@ -183,16 +183,16 @@ func (m statusCmp) View() string {
 		right := strings.Join(m.rightStatusParts(), "  ")
 		availableWidht := max(0, m.width-lipgloss.Width(left)-lipgloss.Width(right)-2)
 		infoStyle := baseStyle.
-			Foreground(t.Background()).
+			Foreground(t.Info()).
 			Width(availableWidht)
 
 		switch m.info.Type {
 		case util.InfoTypeInfo:
-			infoStyle = infoStyle.Background(t.Info())
+			infoStyle = infoStyle.Foreground(t.Info())
 		case util.InfoTypeWarn:
-			infoStyle = infoStyle.Background(t.Warning())
+			infoStyle = infoStyle.Foreground(t.Warning())
 		case util.InfoTypeError:
-			infoStyle = infoStyle.Background(t.Error())
+			infoStyle = infoStyle.Foreground(t.Error())
 		}
 
 		infoWidth := availableWidht - 10
@@ -233,7 +233,6 @@ func (m *statusCmp) projectDiagnostics() string {
 	// If any server is initializing, show that status
 	if initializing {
 		return lipgloss.NewStyle().
-			Background(t.BackgroundDarker()).
 			Foreground(t.Warning()).
 			Render(fmt.Sprintf("%s Initializing LSP...", styles.SpinnerIcon))
 	}
@@ -327,7 +326,6 @@ func (m statusCmp) workMode() string {
 func (m statusCmp) skillSummary() string {
 	t := theme.CurrentTheme()
 	return styles.Padded().
-		Background(t.BackgroundDarker()).
 		Foreground(t.Text()).
 		Render(fmt.Sprintf("Skills: %d", len(m.skillsSvc.Active(m.session.ID))))
 }
@@ -335,15 +333,12 @@ func (m statusCmp) skillSummary() string {
 func (m statusCmp) inspectorSummary() string {
 	t := theme.CurrentTheme()
 	label := "Inspector: Ready"
-	bg := t.BackgroundDarker()
-	fg := t.Text()
+	fg := t.TextMuted()
 	if m.inspectorFocused {
 		label = "Inspector: Focused"
-		bg = t.Primary()
-		fg = t.Background()
+		fg = t.Primary()
 	}
 	return zone.Mark(statusInspectorZoneID, styles.Padded().
-		Background(bg).
 		Foreground(fg).
 		Render(label))
 }
@@ -378,14 +373,11 @@ func (m statusCmp) taskSummary() string {
 	label += " " + truncateString(title, 18)
 
 	t := theme.CurrentTheme()
-	bg := t.BackgroundDarker()
-	fg := t.Text()
+	fg := t.TextMuted()
 	if selected.Status == taskrun.StatusRunning || running > 0 {
-		bg = t.Secondary()
-		fg = t.Background()
+		fg = t.Secondary()
 	}
 	return zone.Mark(statusTaskZoneID, styles.Padded().
-		Background(bg).
 		Foreground(fg).
 		Render(label))
 }

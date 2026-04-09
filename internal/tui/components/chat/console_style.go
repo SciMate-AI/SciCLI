@@ -8,25 +8,18 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-const codexTranscriptMaxWidth = 104
-
 func codexColumnWidth(width int) int {
 	if width <= 0 {
 		return 0
 	}
-	return min(max(56, width-6), codexTranscriptMaxWidth)
+	return width
 }
 
 func codexCenter(width int, content string) string {
 	if width <= 0 {
 		return content
 	}
-	columnWidth := min(width, codexColumnWidth(width))
-	return lipgloss.PlaceHorizontal(
-		width,
-		lipgloss.Center,
-		lipgloss.NewStyle().Width(max(1, columnWidth)).Render(content),
-	)
+	return lipgloss.NewStyle().Width(max(1, width)).Render(content)
 }
 
 func consoleSection(width int, title string, body ...string) string {
@@ -48,20 +41,18 @@ func consoleSection(width int, title string, body ...string) string {
 	}
 	return lipgloss.NewStyle().
 		Width(max(1, width)).
-		Padding(0, 1).
-		Border(lipgloss.NormalBorder()).
+		BorderLeft(true).
 		BorderForeground(t.BorderDim()).
-		Background(t.Background()).
+		PaddingLeft(1).
 		Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
 }
 
 func consoleBadge(label string, bg, fg lipgloss.AdaptiveColor) string {
+	_ = bg
 	return lipgloss.NewStyle().
-		Padding(0, 1).
-		Background(bg).
 		Foreground(fg).
 		Bold(true).
-		Render(strings.ToUpper(strings.TrimSpace(label)))
+		Render("[" + strings.ToUpper(strings.TrimSpace(label)) + "]")
 }
 
 func consoleOutlineBadge(label string, fg lipgloss.AdaptiveColor) string {
@@ -84,10 +75,9 @@ func consoleKey(keyText, label string) string {
 	return lipgloss.JoinHorizontal(
 		lipgloss.Left,
 		lipgloss.NewStyle().
-			Padding(0, 1).
 			MarginRight(1).
-			Background(t.BackgroundDarker()).
-			Foreground(t.Text()).
+			Foreground(t.Primary()).
+			Bold(true).
 			Render(keyText),
 		consoleMuted(label),
 	)

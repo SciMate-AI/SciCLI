@@ -3,14 +3,12 @@ package layout
 import (
 	"strings"
 
+	"github.com/SciMate-AI/scicli/internal/tui/util"
 	"github.com/charmbracelet/lipgloss"
 	chAnsi "github.com/charmbracelet/x/ansi"
 	"github.com/muesli/ansi"
 	"github.com/muesli/reflow/truncate"
 	"github.com/muesli/termenv"
-	"github.com/SciMate-AI/scicli/internal/tui/styles"
-	"github.com/SciMate-AI/scicli/internal/tui/theme"
-	"github.com/SciMate-AI/scicli/internal/tui/util"
 )
 
 // Most of this code is borrowed from
@@ -38,33 +36,12 @@ func PlaceOverlay(
 	fg, bg string,
 	shadow bool, opts ...WhitespaceOption,
 ) string {
+	_ = shadow
+
 	fgLines, fgWidth := getLines(fg)
 	bgLines, bgWidth := getLines(bg)
 	bgHeight := len(bgLines)
 	fgHeight := len(fgLines)
-
-	if shadow {
-		t := theme.CurrentTheme()
-		baseStyle := styles.BaseStyle()
-
-		var shadowbg string = ""
-		shadowchar := lipgloss.NewStyle().
-			Background(t.BackgroundDarker()).
-			Foreground(t.Background()).
-			Render("░")
-		bgchar := baseStyle.Render(" ")
-		for i := 0; i <= fgHeight; i++ {
-			if i == 0 {
-				shadowbg += bgchar + strings.Repeat(bgchar, fgWidth) + "\n"
-			} else {
-				shadowbg += bgchar + strings.Repeat(shadowchar, fgWidth) + "\n"
-			}
-		}
-
-		fg = PlaceOverlay(0, 0, fg, shadowbg, false, opts...)
-		fgLines, fgWidth = getLines(fg)
-		fgHeight = len(fgLines)
-	}
 
 	if fgWidth >= bgWidth && fgHeight >= bgHeight {
 		// FIXME: return fg or bg?

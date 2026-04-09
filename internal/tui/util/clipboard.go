@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/atotto/clipboard"
+	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 )
 
@@ -39,5 +40,23 @@ func PasteSingleLineTextInput(input *textinput.Model) error {
 	updated := string(runes[:pos]) + paste + string(runes[pos:])
 	input.SetValue(updated)
 	input.SetCursor(pos + len([]rune(paste)))
+	return nil
+}
+
+// PasteTextArea pastes clipboard text into the textarea at the current cursor.
+func PasteTextArea(input *textarea.Model) error {
+	if input == nil {
+		return nil
+	}
+
+	raw, err := clipboard.ReadAll()
+	if err != nil {
+		return err
+	}
+	if raw == "" {
+		return nil
+	}
+
+	input.InsertString(strings.ReplaceAll(raw, "\r\n", "\n"))
 	return nil
 }

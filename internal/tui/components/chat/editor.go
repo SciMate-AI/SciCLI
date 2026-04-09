@@ -211,6 +211,13 @@ func (m *editorCmp) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		if msg.String() == "ctrl+v" {
+			if err := util.PasteTextArea(&m.textarea); err != nil {
+				return m, util.ReportError(err)
+			}
+			m.refreshSlashSuggestions()
+			return m, nil
+		}
 		if len(m.slashItems) > 0 {
 			switch msg.String() {
 			case "up":
@@ -286,7 +293,6 @@ func (m *editorCmp) View() string {
 		BorderTop(true).
 		BorderStyle(lipgloss.NormalBorder()).
 		BorderForeground(t.BorderDim()).
-		Background(t.Background()).
 		Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
 	return baseStyle.Width(m.width).Render(codexCenter(m.width, box))
 }
