@@ -31,3 +31,13 @@ func TestDisplayCommandIncludesArgs(t *testing.T) {
 		t.Fatalf("unexpected display command: %s", got)
 	}
 }
+
+func TestFilterSlashCommandsIncludesScientistBenchCommands(t *testing.T) {
+	items := filterSlashCommands("/sb")
+	if len(items) == 0 {
+		t.Fatal("expected scientist bench slash suggestions")
+	}
+	if items[0].Command != "/sb new" {
+		t.Fatalf("expected /sb new to be the top scientist bench suggestion, got %s", items[0].Command)
+	}
+}

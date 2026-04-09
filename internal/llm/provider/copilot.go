@@ -341,7 +341,7 @@ func (c *copilotClient) send(ctx context.Context, messages []message.Message, to
 				return nil, retryErr
 			}
 			if retry {
-				logging.WarnPersist(fmt.Sprintf("Retrying due to rate limit... attempt %d of %d", attempts, maxRetries), logging.PersistTimeArg, time.Millisecond*time.Duration(after+100))
+				logging.WarnPersist(formatRetryLog(err, attempts, after), logging.PersistTimeArg, time.Millisecond*time.Duration(after+100))
 				select {
 				case <-ctx.Done():
 					return nil, ctx.Err()
@@ -349,7 +349,7 @@ func (c *copilotClient) send(ctx context.Context, messages []message.Message, to
 					continue
 				}
 			}
-			return nil, retryErr
+			return nil, err
 		}
 
 		content := ""
@@ -410,6 +410,7 @@ func (c *copilotClient) stream(ctx context.Context, messages []message.Message, 
 			acc := openai.ChatCompletionAccumulator{}
 			currentContent := ""
 			toolCalls := make([]message.ToolCall, 0)
+			sawOutput := false
 
 			var currentToolCallId string
 			var currentToolCall openai.ChatCompletionMessageToolCall
@@ -424,11 +425,15 @@ func (c *copilotClient) stream(ctx context.Context, messages []message.Message, 
 
 				for _, choice := range chunk.Choices {
 					if choice.Delta.Content != "" {
+						sawOutput = true
 						eventChan <- ProviderEvent{
 							Type:    EventContentDelta,
 							Content: choice.Delta.Content,
 						}
 						currentContent += choice.Delta.Content
+					}
+					if len(choice.Delta.ToolCalls) > 0 {
+						sawOutput = true
 					}
 				}
 
@@ -520,8 +525,8 @@ func (c *copilotClient) stream(ctx context.Context, messages []message.Message, 
 				logging.Warn("Maximum retry attempts reached for rate limit", "attempts", attempts, "max_retries", maxRetries)
 				retry = false
 			}
-			if retry {
-				logging.WarnPersist(fmt.Sprintf("Retrying due to rate limit... attempt %d of %d (paused for %d ms)", attempts, maxRetries, after), logging.PersistTimeArg, time.Millisecond*time.Duration(after+100))
+			if retry && !sawOutput {
+				logging.WarnPersist(formatRetryLog(err, attempts, after), logging.PersistTimeArg, time.Millisecond*time.Duration(after+100))
 				select {
 				case <-ctx.Done():
 					// context cancelled
@@ -534,7 +539,7 @@ func (c *copilotClient) stream(ctx context.Context, messages []message.Message, 
 					continue
 				}
 			}
-			eventChan <- ProviderEvent{Type: EventError, Error: retryErr}
+			eventChan <- ProviderEvent{Type: EventError, Error: err}
 			close(eventChan)
 			return
 		}
@@ -544,6 +549,10 @@ func (c *copilotClient) stream(ctx context.Context, messages []message.Message, 
 }
 
 func (c *copilotClient) shouldRetry(attempts int, err error) (bool, int64, error) {
+	if retry, after, retryErr := shouldRetryTransientNetworkError(attempts, err); retry || retryErr != nil {
+		return retry, after, retryErr
+	}
+
 	var apierr *openai.Error
 	if !errors.As(err, &apierr) {
 		return false, 0, err
@@ -587,7 +596,7 @@ func (c *copilotClient) shouldRetry(attempts int, err error) (bool, int64, error
 	}
 	logging.Debug("Copilot API Error", "status", apierr.StatusCode, "headers", apierr.Response.Header, "body", apierr.RawJSON())
 
-	if apierr.StatusCode != 429 && apierr.StatusCode != 500 {
+	if apierr.StatusCode != 429 && apierr.StatusCode != 500 && apierr.StatusCode != 502 && apierr.StatusCode != 503 && apierr.StatusCode != 504 {
 		return false, 0, err
 	}
 
@@ -596,21 +605,10 @@ func (c *copilotClient) shouldRetry(attempts int, err error) (bool, int64, error
 	}
 
 	if attempts > maxRetries {
-		return false, 0, fmt.Errorf("maximum retry attempts reached for rate limit: %d retries", maxRetries)
+		return false, 0, fmt.Errorf("maximum retry attempts reached for provider retries: %d retries", maxRetries)
 	}
 
-	retryMs := 0
-	retryAfterValues := apierr.Response.Header.Values("Retry-After")
-
-	backoffMs := 2000 * (1 << (attempts - 1))
-	jitterMs := int(float64(backoffMs) * 0.2)
-	retryMs = backoffMs + jitterMs
-	if len(retryAfterValues) > 0 {
-		if _, err := fmt.Sscanf(retryAfterValues[0], "%d", &retryMs); err == nil {
-			retryMs = retryMs * 1000
-		}
-	}
-	return true, int64(retryMs), nil
+	return true, retryDelayMs(attempts, apierr.Response.Header.Values("Retry-After")), nil
 }
 
 func (c *copilotClient) toolCalls(completion openai.ChatCompletion) []message.ToolCall {

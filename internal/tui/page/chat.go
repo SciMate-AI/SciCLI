@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/SciMate-AI/scicli/internal/config"
 	"github.com/SciMate-AI/scicli/internal/message"
 	"github.com/SciMate-AI/scicli/internal/research"
+	"github.com/SciMate-AI/scicli/internal/scientistbench"
 	"github.com/SciMate-AI/scicli/internal/session"
 	"github.com/SciMate-AI/scicli/internal/tui/components/chat"
 	"github.com/SciMate-AI/scicli/internal/tui/components/dialog"
@@ -45,6 +47,11 @@ type experimentProposalPayload struct {
 	Prompt    string                     `json:"prompt"`
 	Rationale string                     `json:"rationale,omitempty"`
 	Strategy  research.SelectionDecision `json:"strategy,omitempty"`
+}
+
+type scientistBenchIntent struct {
+	Mode   scientistbench.CaseMode
+	Prompt string
 }
 
 type ChatKeyMap struct {
@@ -200,6 +207,9 @@ func (p *chatPage) sendMessage(text string, attachments []message.Attachment) te
 	p.session = activeSession
 	if config.Get().Automation.WorkMode == config.WorkModeUltrawork {
 		p.app.Permissions.AutoApproveSession(p.session.ID)
+	}
+	if cmd, handled := p.maybeAutoRouteToScientistBench(context.Background(), activeSession, sessionCmd, text, attachments); handled {
+		return cmd
 	}
 
 	_, err = p.app.CoderAgent.Run(context.Background(), p.session.ID, text, attachments...)
@@ -537,11 +547,165 @@ func (p *chatPage) handleSlashCommand(text string) tea.Cmd {
 		default:
 			return util.ReportWarn("Usage: /artifact [list [query]|show <artifact-id>]")
 		}
+	case "/sb":
+		return p.handleScientistBenchSlashCommand(trimmed, fields)
 	case "/help":
-		return util.ReportInfo("Ctrl+K opens the searchable command palette. /skills opens the skill browser. /tasks shows delegated sessions. /research set stores a session objective. /experiment add creates a structured plan. /experiment evaluate uses keep/discard/mutate/branch. /experiment promote marks the current best candidate. /experiment evolve creates the next generation from mutate/branch decisions. /experiment propose asks the agent for the next candidate. /artifact list [query] searches captured provenance. /artifact show <id> shows artifact provenance. /parent jumps back to the parent chat.")
+		return util.ReportInfo("Ctrl+K opens the searchable command palette. /skills opens the skill browser. /tasks shows delegated sessions. /research set stores a session objective. /experiment add creates a structured plan. /experiment evaluate uses keep/discard/mutate/branch. /experiment promote marks the current best candidate. /experiment evolve creates the next generation from mutate/branch decisions. /experiment propose asks the agent for the next candidate. /artifact list [query] searches captured provenance. /artifact show <id> shows artifact provenance. /sb new [paper|reproduce|joint] <goal> starts the full scientist-bench pipeline. /sb run [case-id] advances the active node. /sb show [case-id] reports case status. /sb list shows recent cases. /parent jumps back to the parent chat.")
 	default:
 		return util.ReportWarn("Unknown slash command")
 	}
+}
+
+func (p *chatPage) handleScientistBenchSlashCommand(trimmed string, fields []string) tea.Cmd {
+	ctx := context.Background()
+	if len(fields) < 2 {
+		return util.ReportWarn(scientistBenchUsage())
+	}
+
+	switch strings.ToLower(fields[1]) {
+	case "new", "start":
+		mode, prompt, ok := parseScientistBenchCommandInput(strings.TrimSpace(strings.TrimPrefix(trimmed, fields[0]+" "+fields[1])))
+		if !ok {
+			return util.ReportWarn("Usage: /sb new [paper|reproduce|joint] <goal>")
+		}
+		activeSession, sessionCmd, err := p.ensureSession(ctx)
+		if err != nil {
+			return util.ReportError(err)
+		}
+		item, run, err := p.startScientistBenchCase(ctx, activeSession, mode, prompt)
+		if err != nil {
+			return util.ReportError(err)
+		}
+		p.session = activeSession
+		return tea.Batch(sessionCmd, util.ReportInfo(formatScientistBenchLaunchSummary(item, run, "Scientist Bench case started")))
+	case "run", "continue":
+		item, err := p.resolveScientistBenchCase(ctx, strings.TrimSpace(strings.TrimPrefix(trimmed, fields[0]+" "+fields[1])), true)
+		if err != nil {
+			return util.ReportError(err)
+		}
+		run, err := p.app.StartScientistBenchActiveNodeRun(ctx, item.ID)
+		if err != nil {
+			return util.ReportError(err)
+		}
+		return util.ReportInfo(formatScientistBenchLaunchSummary(run.Case, run.Run, "Scientist Bench node started"))
+	case "show", "status":
+		item, err := p.resolveScientistBenchCase(ctx, strings.TrimSpace(strings.TrimPrefix(trimmed, fields[0]+" "+fields[1])), false)
+		if err != nil {
+			return util.ReportError(err)
+		}
+		return util.ReportInfo(formatScientistBenchCaseSummary(item))
+	case "list":
+		items, err := p.app.ScientistBench.List(ctx)
+		if err != nil {
+			return util.ReportError(err)
+		}
+		if len(items) == 0 {
+			return util.ReportInfo("No Scientist Bench cases yet. Use /sb new [paper|reproduce|joint] <goal>.")
+		}
+		return util.ReportInfo(formatScientistBenchCaseList(items))
+	case "open":
+		item, err := p.resolveScientistBenchCase(ctx, strings.TrimSpace(strings.TrimPrefix(trimmed, fields[0]+" "+fields[1])), false)
+		if err != nil {
+			return util.ReportError(err)
+		}
+		rootSession, err := p.app.Sessions.Get(ctx, item.RootSessionID)
+		if err != nil {
+			return util.ReportError(err)
+		}
+		p.session = rootSession
+		return util.CmdHandler(chat.SessionSelectedMsg(rootSession))
+	default:
+		return util.ReportWarn(scientistBenchUsage())
+	}
+}
+
+func (p *chatPage) maybeAutoRouteToScientistBench(
+	ctx context.Context,
+	activeSession session.Session,
+	sessionCmd tea.Cmd,
+	text string,
+	attachments []message.Attachment,
+) (tea.Cmd, bool) {
+	if len(attachments) > 0 {
+		return nil, false
+	}
+	intent, ok := detectScientistBenchIntent(text)
+	if !ok {
+		return nil, false
+	}
+	item, run, err := p.startScientistBenchCase(ctx, activeSession, intent.Mode, intent.Prompt)
+	if err != nil {
+		return util.ReportError(err), true
+	}
+	p.session = activeSession
+	return tea.Batch(sessionCmd, util.ReportInfo(formatScientistBenchLaunchSummary(item, run, "Auto-routed to Scientist Bench"))), true
+}
+
+func (p *chatPage) startScientistBenchCase(
+	ctx context.Context,
+	rootSession session.Session,
+	mode scientistbench.CaseMode,
+	prompt string,
+) (scientistbench.Case, scientistbench.RunRecord, error) {
+	item, err := p.app.CreateScientistBenchCase(ctx, buildScientistBenchCreateInput(mode, prompt, rootSession.ID))
+	if err != nil {
+		return scientistbench.Case{}, scientistbench.RunRecord{}, err
+	}
+	if p.app.Permissions.IsAutoApproved(rootSession.ID) || config.Get().Automation.WorkMode == config.WorkModeUltrawork {
+		p.app.Permissions.AutoApproveSession(item.RootSessionID)
+	}
+	nodeRun, err := p.app.StartScientistBenchActiveNodeRun(ctx, item.ID)
+	if err != nil {
+		return scientistbench.Case{}, scientistbench.RunRecord{}, err
+	}
+	return nodeRun.Case, nodeRun.Run, nil
+}
+
+func (p *chatPage) resolveScientistBenchCase(ctx context.Context, rawID string, requireRunnable bool) (scientistbench.Case, error) {
+	caseID := strings.Fields(strings.TrimSpace(rawID))
+	if len(caseID) > 0 {
+		return p.app.ScientistBench.Get(ctx, caseID[0])
+	}
+	if p.session.ID == "" {
+		return scientistbench.Case{}, fmt.Errorf("no active session")
+	}
+
+	lineage, err := p.sessionLineage(ctx, p.session)
+	if err != nil {
+		return scientistbench.Case{}, err
+	}
+	sessionIDs := make(map[string]struct{}, len(lineage))
+	for _, item := range lineage {
+		sessionIDs[item.ID] = struct{}{}
+	}
+
+	items, err := p.app.ScientistBench.List(ctx)
+	if err != nil {
+		return scientistbench.Case{}, err
+	}
+	slices.SortStableFunc(items, func(a, b scientistbench.Case) int {
+		switch {
+		case a.UpdatedAt > b.UpdatedAt:
+			return -1
+		case a.UpdatedAt < b.UpdatedAt:
+			return 1
+		default:
+			return strings.Compare(a.ID, b.ID)
+		}
+	})
+	for _, item := range items {
+		if _, ok := sessionIDs[item.RootSessionID]; !ok {
+			continue
+		}
+		if requireRunnable && (item.Status == scientistbench.StatusResolved || item.Status == scientistbench.StatusNotResolved) {
+			continue
+		}
+		return item, nil
+	}
+	if requireRunnable {
+		return scientistbench.Case{}, fmt.Errorf("no active Scientist Bench case is linked to this session")
+	}
+	return scientistbench.Case{}, fmt.Errorf("no Scientist Bench case is linked to this session")
 }
 
 func (p *chatPage) ensureSession(ctx context.Context) (session.Session, tea.Cmd, error) {
@@ -576,6 +740,10 @@ func (p *chatPage) ensureResearchSession(ctx context.Context) (session.Session, 
 }
 
 func (p *chatPage) resolveResearchSession(ctx context.Context, current session.Session) (session.Session, error) {
+	return p.resolveRootSession(ctx, current)
+}
+
+func (p *chatPage) resolveRootSession(ctx context.Context, current session.Session) (session.Session, error) {
 	for current.ParentSessionID != "" {
 		parent, err := p.app.Sessions.Get(ctx, current.ParentSessionID)
 		if err != nil {
@@ -584,6 +752,19 @@ func (p *chatPage) resolveResearchSession(ctx context.Context, current session.S
 		current = parent
 	}
 	return current, nil
+}
+
+func (p *chatPage) sessionLineage(ctx context.Context, current session.Session) ([]session.Session, error) {
+	lineage := []session.Session{current}
+	for current.ParentSessionID != "" {
+		parent, err := p.app.Sessions.Get(ctx, current.ParentSessionID)
+		if err != nil {
+			return nil, err
+		}
+		lineage = append(lineage, parent)
+		current = parent
+	}
+	return lineage, nil
 }
 
 func formatResearchSummary(prefix string, state research.SessionState) string {
@@ -602,6 +783,240 @@ func formatResearchSummary(prefix string, state research.SessionState) string {
 		meta = append(meta, "promoted "+shortExperimentID(state.PromotedExperimentID))
 	}
 	return summary + " [" + strings.Join(meta, ", ") + "]"
+}
+
+func detectScientistBenchIntent(text string) (scientistBenchIntent, bool) {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return scientistBenchIntent{}, false
+	}
+
+	lower := strings.ToLower(trimmed)
+	hasReproduction := containsAny(lower,
+		"reproduce this paper", "reproduce the paper", "reproduce paper", "replicate this paper",
+		"paper reproduction", "论文复现", "复现论文", "重现论文", "复刻论文", "复做论文",
+	)
+	hasPaperWriting := containsAny(lower,
+		"write a paper", "write the paper", "draft a paper", "draft the paper", "paper draft",
+		"generate a paper", "generate the paper", "write the manuscript", "draft the manuscript",
+		"写论文", "论文初稿", "论文草稿", "写一篇论文", "写篇论文",
+	)
+	if !hasReproduction && !hasPaperWriting {
+		return scientistBenchIntent{}, false
+	}
+
+	mode := scientistbench.ModeJoint
+	switch {
+	case hasReproduction && !hasPaperWriting:
+		mode = scientistbench.ModeReproduction
+	case hasPaperWriting && !hasReproduction:
+		mode = scientistbench.ModePaperGeneration
+	}
+	return scientistBenchIntent{Mode: mode, Prompt: trimmed}, true
+}
+
+func parseScientistBenchCommandInput(raw string) (scientistbench.CaseMode, string, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", "", false
+	}
+
+	mode := scientistbench.ModeJoint
+	fields := strings.Fields(raw)
+	if len(fields) > 0 {
+		if parsed, ok := parseScientistBenchMode(fields[0]); ok {
+			mode = parsed
+			raw = strings.TrimSpace(strings.TrimPrefix(raw, fields[0]))
+		}
+	}
+	if raw == "" {
+		return "", "", false
+	}
+	return mode, raw, true
+}
+
+func parseScientistBenchMode(raw string) (scientistbench.CaseMode, bool) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "paper", "write", "draft":
+		return scientistbench.ModePaperGeneration, true
+	case "reproduce", "reproduction", "replicate":
+		return scientistbench.ModeReproduction, true
+	case "joint", "full", "all":
+		return scientistbench.ModeJoint, true
+	default:
+		return "", false
+	}
+}
+
+func buildScientistBenchCreateInput(mode scientistbench.CaseMode, prompt string, rootSessionID string) scientistbench.CreateCaseInput {
+	prompt = strings.TrimSpace(prompt)
+	if mode == "" {
+		mode = scientistbench.ModeJoint
+	}
+
+	input := scientistbench.CreateCaseInput{
+		Mode:          mode,
+		Level:         scientistbench.Level1,
+		RootSessionID: strings.TrimSpace(rootSessionID),
+		Title:         buildScientistBenchTitle(mode, prompt),
+		Inputs: scientistbench.Inputs{
+			CoreIdea:    prompt,
+			Constraints: []string{"Operator request: " + prompt},
+		},
+	}
+	if mode == scientistbench.ModeReproduction || mode == scientistbench.ModeJoint {
+		input.Inputs.TargetPaper = scientistbench.TargetPaper{
+			Title: buildScientistBenchTargetTitle(prompt),
+			URL:   firstURL(prompt),
+		}
+	}
+	return input
+}
+
+func buildScientistBenchTitle(mode scientistbench.CaseMode, prompt string) string {
+	prefix := "Scientist Bench"
+	switch mode {
+	case scientistbench.ModePaperGeneration:
+		prefix = "Paper"
+	case scientistbench.ModeReproduction:
+		prefix = "Reproduction"
+	case scientistbench.ModeJoint:
+		prefix = "Joint Paper Run"
+	}
+	prompt = strings.Join(strings.Fields(strings.TrimSpace(prompt)), " ")
+	if prompt == "" {
+		return prefix
+	}
+	if len(prompt) > 72 {
+		prompt = prompt[:72] + "..."
+	}
+	return prefix + ": " + prompt
+}
+
+func buildScientistBenchTargetTitle(prompt string) string {
+	prompt = strings.Join(strings.Fields(strings.TrimSpace(prompt)), " ")
+	if prompt == "" {
+		return ""
+	}
+	if len(prompt) > 96 {
+		prompt = prompt[:96] + "..."
+	}
+	return prompt
+}
+
+func firstURL(text string) string {
+	for _, field := range strings.Fields(text) {
+		trimmed := strings.Trim(field, "[](){}<>,.;!?'\"")
+		lower := strings.ToLower(trimmed)
+		if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+func containsAny(text string, needles ...string) bool {
+	for _, needle := range needles {
+		if strings.Contains(text, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func scientistBenchUsage() string {
+	return "Usage: /sb [new [paper|reproduce|joint] <goal>|run [case-id]|show [case-id]|list|open [case-id]]"
+}
+
+func formatScientistBenchLaunchSummary(item scientistbench.Case, run scientistbench.RunRecord, prefix string) string {
+	parts := []string{
+		prefix + ": " + shortScientistBenchCaseID(item.ID),
+		string(item.Mode),
+		string(item.Status),
+		"node " + run.NodeID,
+		"role " + run.Role,
+		"task " + run.SessionID,
+	}
+	if strings.TrimSpace(item.Title) != "" {
+		parts = append(parts, item.Title)
+	}
+	parts = append(parts, "Use /tasks to monitor workers or /sb show "+item.ID+" for case status.")
+	return strings.Join(parts, " | ")
+}
+
+func formatScientistBenchCaseList(items []scientistbench.Case) string {
+	slices.SortStableFunc(items, func(a, b scientistbench.Case) int {
+		switch {
+		case a.UpdatedAt > b.UpdatedAt:
+			return -1
+		case a.UpdatedAt < b.UpdatedAt:
+			return 1
+		default:
+			return strings.Compare(a.ID, b.ID)
+		}
+	})
+
+	limit := min(len(items), 6)
+	lines := make([]string, 0, limit+1)
+	lines = append(lines, fmt.Sprintf("Scientist Bench cases %d", len(items)))
+	for i := 0; i < limit; i++ {
+		item := items[i]
+		line := shortScientistBenchCaseID(item.ID) + " " + strings.ToUpper(string(item.Status)) + " " + strings.ToUpper(string(item.Mode))
+		if strings.TrimSpace(item.GraphState.ActiveNode) != "" {
+			line += " | " + item.GraphState.ActiveNode
+		}
+		if strings.TrimSpace(item.GraphState.ActiveRole) != "" {
+			line += " | " + item.GraphState.ActiveRole
+		}
+		if strings.TrimSpace(item.Title) != "" {
+			line += " | " + item.Title
+		}
+		lines = append(lines, line)
+	}
+	if len(items) > limit {
+		lines = append(lines, fmt.Sprintf("+%d more", len(items)-limit))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func formatScientistBenchCaseSummary(item scientistbench.Case) string {
+	parts := []string{
+		"Scientist Bench case " + item.ID,
+		"status " + string(item.Status),
+		"mode " + string(item.Mode),
+	}
+	if strings.TrimSpace(item.Title) != "" {
+		parts = append(parts, "title "+item.Title)
+	}
+	if strings.TrimSpace(item.GraphState.ActiveNode) != "" {
+		parts = append(parts, "active node "+item.GraphState.ActiveNode)
+	}
+	if strings.TrimSpace(item.GraphState.ActiveRole) != "" {
+		parts = append(parts, "active role "+item.GraphState.ActiveRole)
+	}
+	parts = append(parts,
+		fmt.Sprintf("runs %d", len(item.Runs)),
+		fmt.Sprintf("artifacts %d", len(item.Artifacts)),
+		fmt.Sprintf("reviews %d", len(item.Reviews)),
+	)
+	if strings.TrimSpace(item.RootSessionID) != "" {
+		parts = append(parts, "root session "+item.RootSessionID)
+	}
+	if len(item.IdeaModule.AcceptedIdeas) > 0 {
+		parts = append(parts, fmt.Sprintf("accepted ideas %d", len(item.IdeaModule.AcceptedIdeas)))
+	}
+	if len(item.IdeaModule.Objections) > 0 {
+		parts = append(parts, fmt.Sprintf("objections %d", len(item.IdeaModule.Objections)))
+	}
+	return strings.Join(parts, " | ")
+}
+
+func shortScientistBenchCaseID(id string) string {
+	id = strings.TrimSpace(id)
+	if len(id) <= 12 {
+		return id
+	}
+	return id[:12]
 }
 
 func formatExperimentSummary(state research.SessionState) string {

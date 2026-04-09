@@ -218,7 +218,7 @@ func (a *anthropicClient) send(ctx context.Context, messages []message.Message, 
 				return nil, retryErr
 			}
 			if retry {
-				logging.WarnPersist(fmt.Sprintf("Retrying due to rate limit... attempt %d of %d", attempts, maxRetries), logging.PersistTimeArg, time.Millisecond*time.Duration(after+100))
+				logging.WarnPersist(formatRetryLog(err, attempts, after), logging.PersistTimeArg, time.Millisecond*time.Duration(after+100))
 				select {
 				case <-ctx.Done():
 					return nil, ctx.Err()
@@ -226,7 +226,7 @@ func (a *anthropicClient) send(ctx context.Context, messages []message.Message, 
 					continue
 				}
 			}
-			return nil, retryErr
+			return nil, err
 		}
 
 		content := ""
@@ -273,6 +273,7 @@ func (a *anthropicClient) stream(ctx context.Context, messages []message.Message
 				preparedMessages,
 			)
 			accumulatedMessage := anthropic.Message{}
+			sawOutput := false
 
 			currentToolCallID := ""
 			for anthropicStream.Next() {
@@ -286,8 +287,10 @@ func (a *anthropicClient) stream(ctx context.Context, messages []message.Message
 				switch event := event.AsAny().(type) {
 				case anthropic.ContentBlockStartEvent:
 					if event.ContentBlock.Type == "text" {
+						sawOutput = true
 						eventChan <- ProviderEvent{Type: EventContentStart}
 					} else if event.ContentBlock.Type == "tool_use" {
+						sawOutput = true
 						currentToolCallID = event.ContentBlock.ID
 						eventChan <- ProviderEvent{
 							Type: EventToolUseStart,
@@ -301,11 +304,13 @@ func (a *anthropicClient) stream(ctx context.Context, messages []message.Message
 
 				case anthropic.ContentBlockDeltaEvent:
 					if event.Delta.Type == "thinking_delta" && event.Delta.Thinking != "" {
+						sawOutput = true
 						eventChan <- ProviderEvent{
 							Type:     EventThinkingDelta,
 							Thinking: event.Delta.Thinking,
 						}
 					} else if event.Delta.Type == "text_delta" && event.Delta.Text != "" {
+						sawOutput = true
 						eventChan <- ProviderEvent{
 							Type:    EventContentDelta,
 							Content: event.Delta.Text,
@@ -367,8 +372,8 @@ func (a *anthropicClient) stream(ctx context.Context, messages []message.Message
 				close(eventChan)
 				return
 			}
-			if retry {
-				logging.WarnPersist(fmt.Sprintf("Retrying due to rate limit... attempt %d of %d", attempts, maxRetries), logging.PersistTimeArg, time.Millisecond*time.Duration(after+100))
+			if retry && !sawOutput {
+				logging.WarnPersist(formatRetryLog(err, attempts, after), logging.PersistTimeArg, time.Millisecond*time.Duration(after+100))
 				select {
 				case <-ctx.Done():
 					// context cancelled
@@ -383,6 +388,8 @@ func (a *anthropicClient) stream(ctx context.Context, messages []message.Message
 			}
 			if ctx.Err() != nil {
 				eventChan <- ProviderEvent{Type: EventError, Error: ctx.Err()}
+			} else {
+				eventChan <- ProviderEvent{Type: EventError, Error: err}
 			}
 
 			close(eventChan)
@@ -393,31 +400,24 @@ func (a *anthropicClient) stream(ctx context.Context, messages []message.Message
 }
 
 func (a *anthropicClient) shouldRetry(attempts int, err error) (bool, int64, error) {
+	if retry, after, retryErr := shouldRetryTransientNetworkError(attempts, err); retry || retryErr != nil {
+		return retry, after, retryErr
+	}
+
 	var apierr *anthropic.Error
 	if !errors.As(err, &apierr) {
 		return false, 0, err
 	}
 
-	if apierr.StatusCode != 429 && apierr.StatusCode != 529 {
+	if apierr.StatusCode != 429 && apierr.StatusCode != 500 && apierr.StatusCode != 502 && apierr.StatusCode != 503 && apierr.StatusCode != 504 && apierr.StatusCode != 529 {
 		return false, 0, err
 	}
 
 	if attempts > maxRetries {
-		return false, 0, fmt.Errorf("maximum retry attempts reached for rate limit: %d retries", maxRetries)
+		return false, 0, fmt.Errorf("maximum retry attempts reached for provider retries: %d retries", maxRetries)
 	}
 
-	retryMs := 0
-	retryAfterValues := apierr.Response.Header.Values("Retry-After")
-
-	backoffMs := 2000 * (1 << (attempts - 1))
-	jitterMs := int(float64(backoffMs) * 0.2)
-	retryMs = backoffMs + jitterMs
-	if len(retryAfterValues) > 0 {
-		if _, err := fmt.Sscanf(retryAfterValues[0], "%d", &retryMs); err == nil {
-			retryMs = retryMs * 1000
-		}
-	}
-	return true, int64(retryMs), nil
+	return true, retryDelayMs(attempts, apierr.Response.Header.Values("Retry-After")), nil
 }
 
 func (a *anthropicClient) toolCalls(msg anthropic.Message) []message.ToolCall {

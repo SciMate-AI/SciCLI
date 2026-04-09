@@ -208,7 +208,7 @@ func (o *openaiClient) send(ctx context.Context, messages []message.Message, too
 				return nil, o.annotateRequestError(retryErr)
 			}
 			if retry {
-				logging.WarnPersist(fmt.Sprintf("Retrying due to rate limit... attempt %d of %d", attempts, maxRetries), logging.PersistTimeArg, time.Millisecond*time.Duration(after+100))
+				logging.WarnPersist(formatRetryLog(err, attempts, after), logging.PersistTimeArg, time.Millisecond*time.Duration(after+100))
 				select {
 				case <-ctx.Done():
 					return nil, ctx.Err()
@@ -266,6 +266,7 @@ func (o *openaiClient) stream(ctx context.Context, messages []message.Message, t
 			acc := openai.ChatCompletionAccumulator{}
 			currentContent := ""
 			toolCalls := make([]message.ToolCall, 0)
+			sawOutput := false
 
 			for openaiStream.Next() {
 				chunk := openaiStream.Current()
@@ -273,11 +274,15 @@ func (o *openaiClient) stream(ctx context.Context, messages []message.Message, t
 
 				for _, choice := range chunk.Choices {
 					if choice.Delta.Content != "" {
+						sawOutput = true
 						eventChan <- ProviderEvent{
 							Type:    EventContentDelta,
 							Content: choice.Delta.Content,
 						}
 						currentContent += choice.Delta.Content
+					}
+					if len(choice.Delta.ToolCalls) > 0 {
+						sawOutput = true
 					}
 				}
 			}
@@ -313,8 +318,8 @@ func (o *openaiClient) stream(ctx context.Context, messages []message.Message, t
 				close(eventChan)
 				return
 			}
-			if retry {
-				logging.WarnPersist(fmt.Sprintf("Retrying due to rate limit... attempt %d of %d", attempts, maxRetries), logging.PersistTimeArg, time.Millisecond*time.Duration(after+100))
+			if retry && !sawOutput {
+				logging.WarnPersist(formatRetryLog(err, attempts, after), logging.PersistTimeArg, time.Millisecond*time.Duration(after+100))
 				select {
 				case <-ctx.Done():
 					// context cancelled
@@ -337,31 +342,24 @@ func (o *openaiClient) stream(ctx context.Context, messages []message.Message, t
 }
 
 func (o *openaiClient) shouldRetry(attempts int, err error) (bool, int64, error) {
+	if retry, after, retryErr := shouldRetryTransientNetworkError(attempts, err); retry || retryErr != nil {
+		return retry, after, retryErr
+	}
+
 	var apierr *openai.Error
 	if !errors.As(err, &apierr) {
 		return false, 0, err
 	}
 
-	if apierr.StatusCode != 429 && apierr.StatusCode != 500 {
+	if apierr.StatusCode != 429 && apierr.StatusCode != 500 && apierr.StatusCode != 502 && apierr.StatusCode != 503 && apierr.StatusCode != 504 {
 		return false, 0, err
 	}
 
 	if attempts > maxRetries {
-		return false, 0, fmt.Errorf("maximum retry attempts reached for rate limit: %d retries", maxRetries)
+		return false, 0, fmt.Errorf("maximum retry attempts reached for provider retries: %d retries", maxRetries)
 	}
 
-	retryMs := 0
-	retryAfterValues := apierr.Response.Header.Values("Retry-After")
-
-	backoffMs := 2000 * (1 << (attempts - 1))
-	jitterMs := int(float64(backoffMs) * 0.2)
-	retryMs = backoffMs + jitterMs
-	if len(retryAfterValues) > 0 {
-		if _, err := fmt.Sscanf(retryAfterValues[0], "%d", &retryMs); err == nil {
-			retryMs = retryMs * 1000
-		}
-	}
-	return true, int64(retryMs), nil
+	return true, retryDelayMs(attempts, apierr.Response.Header.Values("Retry-After")), nil
 }
 
 func (o *openaiClient) toolCalls(completion openai.ChatCompletion) []message.ToolCall {

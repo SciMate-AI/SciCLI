@@ -294,12 +294,13 @@ type Case struct {
 }
 
 type CreateCaseInput struct {
-	ID     string         `json:"id,omitempty"`
-	Mode   CaseMode       `json:"mode,omitempty"`
-	Level  BenchmarkLevel `json:"level,omitempty"`
-	Title  string         `json:"title,omitempty"`
-	Budget Budget         `json:"budget,omitempty"`
-	Inputs Inputs         `json:"inputs,omitempty"`
+	ID            string         `json:"id,omitempty"`
+	Mode          CaseMode       `json:"mode,omitempty"`
+	Level         BenchmarkLevel `json:"level,omitempty"`
+	RootSessionID string         `json:"root_session_id,omitempty"`
+	Title         string         `json:"title,omitempty"`
+	Budget        Budget         `json:"budget,omitempty"`
+	Inputs        Inputs         `json:"inputs,omitempty"`
 }
 
 type Service interface {
@@ -343,14 +344,15 @@ func NewService() (Service, error) {
 
 func (s *service) CreateCase(ctx context.Context, input CreateCaseInput) (Case, error) {
 	item := Case{
-		ID:     strings.TrimSpace(input.ID),
-		Suite:  "scientist-bench",
-		Mode:   input.Mode,
-		Level:  input.Level,
-		Title:  strings.TrimSpace(input.Title),
-		Budget: input.Budget,
-		Inputs: input.Inputs,
-		Status: StatusPlanning,
+		ID:            strings.TrimSpace(input.ID),
+		Suite:         "scientist-bench",
+		Mode:          input.Mode,
+		Level:         input.Level,
+		RootSessionID: strings.TrimSpace(input.RootSessionID),
+		Title:         strings.TrimSpace(input.Title),
+		Budget:        input.Budget,
+		Inputs:        input.Inputs,
+		Status:        StatusPlanning,
 	}
 	if item.ID == "" {
 		item.ID = "case-" + uuid.NewString()

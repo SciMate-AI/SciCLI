@@ -2,8 +2,13 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
+	"net"
 	"os"
+	"strings"
+	"time"
 
 	"github.com/SciMate-AI/scicli/internal/llm/models"
 	"github.com/SciMate-AI/scicli/internal/llm/tools"
@@ -13,6 +18,8 @@ import (
 type EventType string
 
 const maxRetries = 8
+const retryBaseDelay = 3 * time.Second
+const retryMaxDelay = 30 * time.Second
 
 const (
 	EventContentStart  EventType = "content_start"
@@ -249,4 +256,119 @@ func WithCopilotOptions(copilotOptions ...CopilotOption) ProviderClientOption {
 	return func(options *providerClientOptions) {
 		options.copilotOptions = copilotOptions
 	}
+}
+
+func shouldRetryTransientNetworkError(attempts int, err error) (bool, int64, error) {
+	if !isTransientNetworkError(err) {
+		return false, 0, nil
+	}
+	if attempts > maxRetries {
+		return false, 0, fmt.Errorf("maximum retry attempts reached after transient network errors: %d retries", maxRetries)
+	}
+	return true, retryDelayMs(attempts, nil), nil
+}
+
+func retryDelayMs(attempts int, retryAfterValues []string) int64 {
+	delay := retryBaseDelay
+	for i := 1; i < attempts; i++ {
+		delay *= 2
+		if delay >= retryMaxDelay {
+			delay = retryMaxDelay
+			break
+		}
+	}
+	if len(retryAfterValues) > 0 {
+		var retrySeconds int
+		if _, err := fmt.Sscanf(strings.TrimSpace(retryAfterValues[0]), "%d", &retrySeconds); err == nil && retrySeconds > 0 {
+			delay = time.Duration(retrySeconds) * time.Second
+		}
+	}
+	if delay > retryMaxDelay {
+		delay = retryMaxDelay
+	}
+	return delay.Milliseconds()
+}
+
+func formatRetryLog(err error, attempts int, afterMs int64) string {
+	return fmt.Sprintf("%s... attempt %d of %d (waiting %s)", retryReason(err), attempts, maxRetries, (time.Duration(afterMs) * time.Millisecond).Round(time.Second))
+}
+
+func retryReason(err error) string {
+	if isTransientNetworkError(err) {
+		return "Transient network error, retrying request"
+	}
+	msg := strings.ToLower(strings.TrimSpace(err.Error()))
+	switch {
+	case containsAnySubstring(msg, "429", "rate limit", "too many requests", "quota exceeded", "resource exhausted"):
+		return "Provider rate limit, retrying request"
+	case containsAnySubstring(msg, "500", "502", "503", "504", "529", "server error", "service unavailable"):
+		return "Provider server error, retrying request"
+	default:
+		return "Retrying request"
+	}
+}
+
+func isTransientNetworkError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, io.EOF) {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return netErr.Timeout() || temporaryNetError(netErr)
+	}
+
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return dnsErr.IsTimeout || dnsErr.IsTemporary
+	}
+
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		if opErr.Timeout() {
+			return true
+		}
+	}
+
+	errText := strings.ToLower(err.Error())
+	return containsAnySubstring(errText,
+		"timeout",
+		"temporary failure",
+		"connection reset",
+		"connection refused",
+		"connection aborted",
+		"unexpected eof",
+		"eof",
+		"broken pipe",
+		"reset by peer",
+		"server closed idle connection",
+		"tls handshake timeout",
+		"wsarecv",
+		"wsasend",
+	)
+}
+
+func temporaryNetError(err net.Error) bool {
+	type temporary interface {
+		Temporary() bool
+	}
+	if tmp, ok := err.(temporary); ok {
+		return tmp.Temporary()
+	}
+	return false
+}
+
+func containsAnySubstring(text string, parts ...string) bool {
+	for _, part := range parts {
+		if strings.Contains(text, part) {
+			return true
+		}
+	}
+	return false
 }

@@ -27,6 +27,8 @@ var (
 	runtimeAllowPrefixes []string
 	runtimeNoAltScreen   bool
 	runtimeNoMouse       bool
+	runtimeAltScreen     bool
+	runtimeMouse         bool
 )
 
 var rootCmd = &cobra.Command{
@@ -73,6 +75,21 @@ to assist developers in writing, debugging, and understanding code directly from
 		quiet, _ := cmd.Flags().GetBool("quiet")
 		noAltScreen, _ := cmd.Flags().GetBool("no-alt-screen")
 		noMouse, _ := cmd.Flags().GetBool("no-mouse")
+		altScreen, _ := cmd.Flags().GetBool("alt-screen")
+		mouse, _ := cmd.Flags().GetBool("mouse")
+
+		if !cmd.Flags().Lookup("alt-screen").Changed && !cmd.Flags().Lookup("no-alt-screen").Changed {
+			noAltScreen = true
+		}
+		if !cmd.Flags().Lookup("mouse").Changed && !cmd.Flags().Lookup("no-mouse").Changed {
+			noMouse = true
+		}
+		if altScreen {
+			noAltScreen = false
+		}
+		if mouse {
+			noMouse = false
+		}
 
 		// Validate format option
 		if !format.IsValid(outputFormat) {
@@ -320,6 +337,8 @@ func init() {
 	rootCmd.PersistentFlags().StringSliceVar(&runtimeAllowPrefixes, "allow-prefix", nil, "Additional shell command prefixes to auto-approve")
 	rootCmd.PersistentFlags().BoolVar(&runtimeNoAltScreen, "no-alt-screen", false, "Run TUI without alternate screen buffer")
 	rootCmd.PersistentFlags().BoolVar(&runtimeNoMouse, "no-mouse", false, "Run TUI without mouse capture")
+	rootCmd.PersistentFlags().BoolVar(&runtimeAltScreen, "alt-screen", false, "Force TUI to use the alternate screen buffer")
+	rootCmd.PersistentFlags().BoolVar(&runtimeMouse, "mouse", false, "Force TUI to capture mouse events")
 	rootCmd.Flags().StringP("prompt", "p", "", "Prompt to run in non-interactive mode")
 
 	// Add format flag with validation logic

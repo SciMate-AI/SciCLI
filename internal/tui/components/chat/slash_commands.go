@@ -37,6 +37,11 @@ var slashCommands = []slashCommand{
 	{Command: "/experiment propose", InsertText: "/experiment propose", Category: "research", Description: "Ask the agent to propose the next experiment.", Priority: 65},
 	{Command: "/artifact list", InsertText: "/artifact list ", Args: "[query]", Category: "artifacts", Description: "Search experiment artifacts and provenance."},
 	{Command: "/artifact show", InsertText: "/artifact show ", Args: "<artifact-id>", Category: "artifacts", Description: "Show one artifact in detail.", RequiresArgs: true},
+	{Command: "/sb new", InsertText: "/sb new ", Args: "[paper|reproduce|joint] <goal>", Category: "scientistbench", Description: "Start the full scientist-bench multi-agent pipeline.", Priority: 95, RequiresArgs: true},
+	{Command: "/sb run", InsertText: "/sb run ", Args: "[case-id]", Category: "scientistbench", Description: "Advance the active scientist-bench node or resume a case."},
+	{Command: "/sb show", InsertText: "/sb show ", Args: "[case-id]", Category: "scientistbench", Description: "Show scientist-bench case status and active node."},
+	{Command: "/sb list", InsertText: "/sb list", Category: "scientistbench", Description: "List recent scientist-bench cases."},
+	{Command: "/sb open", InsertText: "/sb open ", Args: "[case-id]", Category: "scientistbench", Description: "Jump to the root session for a scientist-bench case."},
 	{Command: "/help", InsertText: "/help", Category: "help", Description: "Show the main slash-command help summary.", Priority: 80},
 }
 

@@ -203,7 +203,7 @@ func (g *geminiClient) send(ctx context.Context, messages []message.Message, too
 				return nil, retryErr
 			}
 			if retry {
-				logging.WarnPersist(fmt.Sprintf("Retrying due to rate limit... attempt %d of %d", attempts, maxRetries), logging.PersistTimeArg, time.Millisecond*time.Duration(after+100))
+				logging.WarnPersist(formatRetryLog(err, attempts, after), logging.PersistTimeArg, time.Millisecond*time.Duration(after+100))
 				select {
 				case <-ctx.Done():
 					return nil, ctx.Err()
@@ -211,7 +211,7 @@ func (g *geminiClient) send(ctx context.Context, messages []message.Message, too
 					continue
 				}
 			}
-			return nil, retryErr
+			return nil, err
 		}
 
 		rawParts := rawPartsFromResponse(resp)
@@ -248,7 +248,7 @@ func (g *geminiClient) stream(ctx context.Context, messages []message.Message, t
 					return
 				}
 				if retry {
-					logging.WarnPersist(fmt.Sprintf("Retrying due to rate limit... attempt %d of %d", attempts, maxRetries), logging.PersistTimeArg, time.Millisecond*time.Duration(after+100))
+					logging.WarnPersist(formatRetryLog(err, attempts, after), logging.PersistTimeArg, time.Millisecond*time.Duration(after+100))
 					select {
 					case <-ctx.Done():
 						if ctx.Err() != nil {
@@ -259,7 +259,7 @@ func (g *geminiClient) stream(ctx context.Context, messages []message.Message, t
 						continue
 					}
 				}
-				eventChan <- ProviderEvent{Type: EventError, Error: retryErr}
+				eventChan <- ProviderEvent{Type: EventError, Error: err}
 				return
 			}
 
@@ -330,7 +330,7 @@ func (g *geminiClient) stream(ctx context.Context, messages []message.Message, t
 			if err != nil {
 				retry, after, retryErr := g.shouldRetry(attempts, err)
 				if retry && !hadChunks {
-					logging.WarnPersist(fmt.Sprintf("Retrying due to rate limit... attempt %d of %d", attempts, maxRetries), logging.PersistTimeArg, time.Millisecond*time.Duration(after+100))
+					logging.WarnPersist(formatRetryLog(err, attempts, after), logging.PersistTimeArg, time.Millisecond*time.Duration(after+100))
 					select {
 					case <-ctx.Done():
 						if ctx.Err() != nil {
@@ -532,8 +532,12 @@ func (g *geminiClient) providerResponseFromRaw(raw map[string]any, content strin
 }
 
 func (g *geminiClient) shouldRetry(attempts int, err error) (bool, int64, error) {
+	if retry, after, retryErr := shouldRetryTransientNetworkError(attempts, err); retry || retryErr != nil {
+		return retry, after, retryErr
+	}
+
 	if attempts > maxRetries {
-		return false, 0, fmt.Errorf("maximum retry attempts reached for rate limit: %d retries", maxRetries)
+		return false, 0, fmt.Errorf("maximum retry attempts reached for provider retries: %d retries", maxRetries)
 	}
 
 	if errors.Is(err, io.EOF) {
@@ -550,11 +554,7 @@ func (g *geminiClient) shouldRetry(attempts int, err error) (bool, int64, error)
 		return false, 0, err
 	}
 
-	backoffMs := 2000 * (1 << (attempts - 1))
-	jitterMs := int(float64(backoffMs) * 0.2)
-	retryMs := backoffMs + jitterMs
-
-	return true, int64(retryMs), nil
+	return true, retryDelayMs(attempts, nil), nil
 }
 
 func WithGeminiDisableCache() GeminiOption {

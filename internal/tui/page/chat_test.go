@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/SciMate-AI/scicli/internal/research"
+	"github.com/SciMate-AI/scicli/internal/scientistbench"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -120,4 +121,49 @@ func TestFormatExperimentComparisonBuildsLineageBoard(t *testing.T) {
 	assert.Contains(t, text, "exp-a2 G1 Mutated A [ACTIVE, MUTATE]")
 	assert.Contains(t, text, "Root exp-b1 Seed B | best 0.51")
 	assert.Contains(t, text, "Actions: /experiment promote <id>")
+}
+
+func TestDetectScientistBenchIntentForPaperWriting(t *testing.T) {
+	intent, ok := detectScientistBenchIntent("帮我写一篇关于湍流代理模型的论文初稿")
+	require.True(t, ok)
+	assert.Equal(t, scientistbench.ModePaperGeneration, intent.Mode)
+	assert.Contains(t, intent.Prompt, "论文初稿")
+}
+
+func TestDetectScientistBenchIntentForJointPaperReproduction(t *testing.T) {
+	intent, ok := detectScientistBenchIntent("Please reproduce this paper and write a paper draft around the results.")
+	require.True(t, ok)
+	assert.Equal(t, scientistbench.ModeJoint, intent.Mode)
+}
+
+func TestDetectScientistBenchIntentIgnoresPaperSummaryRequests(t *testing.T) {
+	_, ok := detectScientistBenchIntent("Summarize this paper for me.")
+	assert.False(t, ok)
+}
+
+func TestParseScientistBenchCommandInputDefaultsToJoint(t *testing.T) {
+	mode, prompt, ok := parseScientistBenchCommandInput("Design a new materials paper with runnable experiments")
+	require.True(t, ok)
+	assert.Equal(t, scientistbench.ModeJoint, mode)
+	assert.Contains(t, prompt, "materials paper")
+}
+
+func TestParseScientistBenchCommandInputParsesExplicitMode(t *testing.T) {
+	mode, prompt, ok := parseScientistBenchCommandInput("reproduce https://arxiv.org/abs/2401.00001")
+	require.True(t, ok)
+	assert.Equal(t, scientistbench.ModeReproduction, mode)
+	assert.Equal(t, "https://arxiv.org/abs/2401.00001", prompt)
+}
+
+func TestBuildScientistBenchCreateInputCarriesRootSessionAndURL(t *testing.T) {
+	input := buildScientistBenchCreateInput(
+		scientistbench.ModeReproduction,
+		"reproduce this paper https://arxiv.org/abs/2401.00001",
+		"root-1",
+	)
+
+	assert.Equal(t, "root-1", input.RootSessionID)
+	assert.Equal(t, scientistbench.ModeReproduction, input.Mode)
+	assert.Equal(t, "https://arxiv.org/abs/2401.00001", input.Inputs.TargetPaper.URL)
+	assert.Contains(t, input.Inputs.Constraints[0], "Operator request:")
 }
