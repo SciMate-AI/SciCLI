@@ -34,7 +34,7 @@ type bashTool struct {
 const (
 	BashToolName = "bash"
 
-	DefaultTimeout  = 1 * 60 * 1000  // 1 minutes in milliseconds
+	DefaultTimeout  = 1 * 60 * 1000  // 1 minute in milliseconds
 	MaxTimeout      = 10 * 60 * 1000 // 10 minutes in milliseconds
 	MaxOutputLength = 30000
 )
@@ -59,7 +59,7 @@ func bashDescription() string {
 	bannedCommandsStr := strings.Join(bannedCommands, ", ")
 	shellGuidance := "Use POSIX shell syntax and paths that match the current environment."
 	if runtime.GOOS == "windows" {
-		shellGuidance = "This SciCLI session is running on Windows. Prefer PowerShell/native Windows commands and Windows paths. Do not assume /bin/bash, /dev/null, or POSIX-only utilities are available."
+		shellGuidance = "This SciCLI session is running on Windows. Prefer PowerShell/native Windows commands and Windows paths. Use Get-ChildItem instead of ls, Get-Content instead of cat, Select-String or rg or git grep instead of grep, and avoid POSIX-only utilities. Do not assume /bin/bash, /dev/null, or POSIX paths are available."
 	}
 	return fmt.Sprintf(`Executes a given bash command in a persistent shell session with optional timeout, ensuring proper handling and security measures.
 
@@ -87,8 +87,9 @@ Before executing the command, please follow these steps:
 
 Usage notes:
 - %s
+- On Windows, detect the environment first and choose Windows-native commands. Prefer Get-ChildItem, Get-Content, rg, Select-String, and git grep. Do not emit Unix-style commands such as ls, cat, grep, find, or /bin/bash-oriented syntax unless the shell has explicitly been configured to a POSIX environment.
 - The command argument is required.
-- You can specify an optional timeout in milliseconds (up to 600000ms / 10 minutes). If not specified, commands will timeout after 30 minutes.
+- You can specify an optional timeout in milliseconds (up to 600000ms / 10 minutes). If not specified, commands will timeout after 1 minute.
 - VERY IMPORTANT: You MUST avoid using search commands like 'find' and 'grep'. Instead use Grep, Glob, or Agent tools to search. You MUST avoid read tools like 'cat', 'head', 'tail', and 'ls', and use FileRead and LS tools to read files.
 - When issuing multiple commands, use the ';' or '&&' operator to separate them. DO NOT use newlines (newlines are ok in quoted strings).
 - IMPORTANT: All commands share the same shell session. Shell state (environment variables, virtual environments, current directory, etc.) persist between commands. For example, if you set an environment variable as part of a command, the environment variable will persist for subsequent commands.

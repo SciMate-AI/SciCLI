@@ -177,8 +177,16 @@ func getEnvironmentInfo() string {
 	platform := runtime.GOOS
 	date := time.Now().Format("1/2/2006")
 	shellGuidance := "Use shell commands and paths that match the current platform."
+	commandGuidance := "Prefer commands that match the detected shell and platform."
 	if platform == "windows" {
 		shellGuidance = "Use PowerShell or other Windows-native commands and Windows paths by default. Do not assume Bash, /bin/bash, /dev/null, or POSIX paths are available."
+		commandGuidance = "Windows command policy: use Get-ChildItem for listing, Get-Content for file reads, rg or Select-String or git grep for searches, and standard Windows paths. Avoid Unix-style commands such as ls, cat, grep, find, sed, and bash-oriented redirection unless the shell is explicitly configured to a POSIX environment."
+	}
+	shellCfg := config.DefaultShellConfig()
+	if cfg := config.Get(); cfg != nil {
+		if cfg.Shell.Path != "" {
+			shellCfg = cfg.Shell
+		}
 	}
 	ls := tools.NewLsTool()
 	r, _ := ls.Run(context.Background(), tools.ToolCall{
@@ -191,12 +199,14 @@ Is directory a git repo: %s
 Platform: %s
 Today's date: %s
 Work mode: %s
+Configured shell: %s %v
 Shell guidance: %s
+Command guidance: %s
 </env>
 <project>
 %s
 </project>
-		`, cwd, boolToYesNo(isGit), platform, date, config.Get().Automation.WorkMode, shellGuidance, r.Content)
+		`, cwd, boolToYesNo(isGit), platform, date, config.Get().Automation.WorkMode, shellCfg.Path, shellCfg.Args, shellGuidance, commandGuidance, r.Content)
 }
 
 func isGitRepo(dir string) bool {
