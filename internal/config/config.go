@@ -266,7 +266,7 @@ func setDefaults(debug bool) {
 	viper.SetDefault("data.directory", defaultDataDirectory)
 	viper.SetDefault("contextPaths", defaultContextPaths)
 	viper.SetDefault("tui.theme", defaultThemeName)
-	viper.SetDefault("tui.altScreen", false)
+	viper.SetDefault("tui.altScreen", true)
 	viper.SetDefault("tui.mouse", false)
 	viper.SetDefault("tui.linkAllAgentModels", true)
 	viper.SetDefault("autoCompact", true)
