@@ -142,6 +142,16 @@ func generateSchema() map[string]any {
 					"tron",
 				},
 			},
+			"altScreen": map[string]any{
+				"type":        "boolean",
+				"description": "Start the TUI in the alternate screen buffer by default",
+				"default":     false,
+			},
+			"mouse": map[string]any{
+				"type":        "boolean",
+				"description": "Capture mouse events in the TUI by default",
+				"default":     false,
+			},
 		},
 	}
 

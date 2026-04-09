@@ -119,6 +119,7 @@ func New(ctx context.Context, conn *sql.DB) (*App, error) {
 	}
 
 	app.startResearchRunSync(ctx)
+	app.startScientistBenchRunSync(ctx)
 
 	return app, nil
 }

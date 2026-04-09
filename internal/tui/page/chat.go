@@ -550,7 +550,7 @@ func (p *chatPage) handleSlashCommand(text string) tea.Cmd {
 	case "/sb":
 		return p.handleScientistBenchSlashCommand(trimmed, fields)
 	case "/help":
-		return util.ReportInfo("Ctrl+K opens the searchable command palette. /skills opens the skill browser. /tasks shows delegated sessions. /research set stores a session objective. /experiment add creates a structured plan. /experiment evaluate uses keep/discard/mutate/branch. /experiment promote marks the current best candidate. /experiment evolve creates the next generation from mutate/branch decisions. /experiment propose asks the agent for the next candidate. /artifact list [query] searches captured provenance. /artifact show <id> shows artifact provenance. /sb new [paper|reproduce|joint] <goal> starts the full scientist-bench pipeline. /sb run [case-id] advances the active node. /sb show [case-id] reports case status. /sb list shows recent cases. /parent jumps back to the parent chat.")
+		return util.ReportInfo("Ctrl+K opens the searchable command palette. /skills opens the skill browser. /tasks shows delegated sessions. /research set stores a session objective. /experiment add creates a structured plan. /experiment evaluate uses keep/discard/mutate/branch. /experiment promote marks the current best candidate. /experiment evolve creates the next generation from mutate/branch decisions. /experiment propose asks the agent for the next candidate. /artifact list [query] searches captured provenance. /artifact show <id> shows artifact provenance. /sb new [paper|reproduce|joint] <goal> starts the full scientist-bench pipeline and streams progress into this chat. /sb run [case-id] advances the active node. /sb show [case-id] reports case status. /sb list shows recent cases. /parent jumps back to the parent chat.")
 	default:
 		return util.ReportWarn("Unknown slash command")
 	}
@@ -940,7 +940,7 @@ func formatScientistBenchLaunchSummary(item scientistbench.Case, run scientistbe
 	if strings.TrimSpace(item.Title) != "" {
 		parts = append(parts, item.Title)
 	}
-	parts = append(parts, "Use /tasks to monitor workers or /sb show "+item.ID+" for case status.")
+	parts = append(parts, "Progress streams into this chat. Use /sb show "+item.ID+" for case status.")
 	return strings.Join(parts, " | ")
 }
 

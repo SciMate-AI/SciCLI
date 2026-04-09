@@ -77,6 +77,9 @@ func newWizardModel() (*wizardModel, error) {
 }
 
 func (m *wizardModel) Init() tea.Cmd {
+	if util.ShouldClearPrimaryScreen() {
+		return tea.Batch(util.CmdHandler(tea.ClearScreen()), textinput.Blink)
+	}
 	return textinput.Blink
 }
 

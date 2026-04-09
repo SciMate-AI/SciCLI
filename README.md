@@ -307,13 +307,17 @@ SciCLI reads configuration from:
     }
   },
   "tui": {
-    "theme": "scicli"
+    "theme": "scicli",
+    "altScreen": false,
+    "mouse": false
   },
   "autoCompact": true,
   "debug": false,
   "debugLSP": false
 }
 ```
+
+`altScreen` controls whether `scicli` launches into a true alternate terminal page. The default is `false`: SciCLI stays in the primary terminal buffer, clears to the top on startup, and preserves normal terminal selection behavior better. `mouse` controls whether SciCLI captures mouse input; leaving it `false` usually preserves terminal text selection and scrollback behavior better.
 
 ### Useful environment variables
 

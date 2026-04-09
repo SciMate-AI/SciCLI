@@ -19,8 +19,10 @@ import (
 	"github.com/SciMate-AI/scicli/internal/tui/components/dialog"
 	"github.com/SciMate-AI/scicli/internal/tui/layout"
 	"github.com/SciMate-AI/scicli/internal/tui/page"
+	"github.com/SciMate-AI/scicli/internal/tui/styles"
 	"github.com/SciMate-AI/scicli/internal/tui/theme"
 	"github.com/SciMate-AI/scicli/internal/tui/util"
+	"github.com/SciMate-AI/scicli/internal/version"
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -170,8 +172,15 @@ func (a appModel) permissionReservedHeight() int {
 	return min(max(10, a.height/3), a.height)
 }
 
+func (a appModel) headerReservedHeight() int {
+	if a.height <= 0 {
+		return 0
+	}
+	return 1
+}
+
 func (a appModel) pageHeight() int {
-	return max(1, a.height-a.permissionReservedHeight())
+	return max(1, a.height-a.permissionReservedHeight()-a.headerReservedHeight())
 }
 
 func (a appModel) resizeCurrentPage() tea.Cmd {
@@ -186,6 +195,9 @@ func (a appModel) resizeCurrentPage() tea.Cmd {
 
 func (a appModel) Init() tea.Cmd {
 	var cmds []tea.Cmd
+	if util.ShouldClearPrimaryScreen() {
+		cmds = append(cmds, util.CmdHandler(tea.ClearScreen()))
+	}
 	cmd := a.pages[a.currentPage].Init()
 	a.loadedPages[a.currentPage] = true
 	cmds = append(cmds, cmd)
@@ -213,6 +225,43 @@ func (a appModel) Init() tea.Cmd {
 	cmds = append(cmds, cmd)
 
 	return tea.Batch(cmds...)
+}
+
+func (a appModel) chromeView() string {
+	if a.width <= 0 {
+		return ""
+	}
+
+	t := theme.CurrentTheme()
+	baseStyle := styles.BaseStyle()
+
+	left := baseStyle.Bold(true).Render(fmt.Sprintf("%s SciCLI", styles.OpenCodeIcon))
+	rightParts := []string{
+		baseStyle.Foreground(t.TextMuted()).Render("page " + string(a.currentPage)),
+		baseStyle.Foreground(t.TextMuted()).Render("mode " + string(config.Get().Automation.WorkMode)),
+		baseStyle.Foreground(t.TextMuted()).Render(version.Version),
+	}
+	right := strings.Join(rightParts, "  ")
+
+	space := a.width - lipgloss.Width(left) - lipgloss.Width(right)
+	if space < 2 {
+		return baseStyle.Width(a.width).Render(truncateAppChrome(left, max(0, a.width-lipgloss.Width(right)-2)) + "  " + right)
+	}
+	return baseStyle.Width(a.width).Render(left + strings.Repeat(" ", space) + right)
+}
+
+func truncateAppChrome(value string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	runes := []rune(value)
+	if len(runes) <= width {
+		return value
+	}
+	if width <= 3 {
+		return string(runes[:width])
+	}
+	return string(runes[:width-3]) + "..."
 }
 
 func (a appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -972,7 +1021,7 @@ func (a *appModel) moveToPage(pageID page.PageID) tea.Cmd {
 }
 
 func (a appModel) View() string {
-	components := []string{a.pages[a.currentPage].View()}
+	components := []string{a.chromeView(), a.pages[a.currentPage].View()}
 	if a.showPermissions {
 		components = append(components, a.permissions.View())
 	}

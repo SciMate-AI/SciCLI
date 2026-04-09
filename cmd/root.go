@@ -78,19 +78,6 @@ to assist developers in writing, debugging, and understanding code directly from
 		altScreen, _ := cmd.Flags().GetBool("alt-screen")
 		mouse, _ := cmd.Flags().GetBool("mouse")
 
-		if !cmd.Flags().Lookup("alt-screen").Changed && !cmd.Flags().Lookup("no-alt-screen").Changed {
-			noAltScreen = true
-		}
-		if !cmd.Flags().Lookup("mouse").Changed && !cmd.Flags().Lookup("no-mouse").Changed {
-			noMouse = true
-		}
-		if altScreen {
-			noAltScreen = false
-		}
-		if mouse {
-			noMouse = false
-		}
-
 		// Validate format option
 		if !format.IsValid(outputFormat) {
 			return fmt.Errorf("invalid format option: %s\n%s", outputFormat, format.GetHelpText())
@@ -112,6 +99,7 @@ to assist developers in writing, debugging, and understanding code directly from
 		if err := loadRuntimeConfig("", debug); err != nil {
 			return err
 		}
+		noAltScreen, noMouse = resolveTUIRuntimeOptions(cmd, config.Get(), noAltScreen, noMouse, altScreen, mouse)
 		if noAltScreen {
 			_ = os.Setenv("SCICLI_NO_ALT_SCREEN", "1")
 		} else {
@@ -239,6 +227,24 @@ func attemptTUIRecovery(program *tea.Program) {
 	// We could try to restart the TUI or gracefully exit
 	// For now, we'll just quit the program to avoid further issues
 	program.Quit()
+}
+
+func resolveTUIRuntimeOptions(cmd *cobra.Command, cfg *config.Config, noAltScreen, noMouse, altScreen, mouse bool) (bool, bool) {
+	if cfg != nil {
+		if !cmd.Flags().Lookup("alt-screen").Changed && !cmd.Flags().Lookup("no-alt-screen").Changed {
+			noAltScreen = !cfg.TUI.AltScreen
+		}
+		if !cmd.Flags().Lookup("mouse").Changed && !cmd.Flags().Lookup("no-mouse").Changed {
+			noMouse = !cfg.TUI.Mouse
+		}
+	}
+	if altScreen {
+		noAltScreen = false
+	}
+	if mouse {
+		noMouse = false
+	}
+	return noAltScreen, noMouse
 }
 
 func setupSubscriber[T any](

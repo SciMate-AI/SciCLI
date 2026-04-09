@@ -135,6 +135,7 @@ func (app *App) StartScientistBenchActiveNodeRun(ctx context.Context, caseID str
 		return ScientistBenchNodeRun{}, err
 	}
 	if liveRun != nil {
+		_ = app.postScientistBenchLaunch(context.Background(), item, *liveRun, "Scientist Bench node already running")
 		return ScientistBenchNodeRun{
 			Case: item,
 			Run:  *liveRun,
@@ -221,6 +222,7 @@ func (app *App) StartScientistBenchActiveNodeRun(ctx context.Context, caseID str
 	if !ok {
 		return ScientistBenchNodeRun{}, fmt.Errorf("run %s not found after scheduling", run.ID)
 	}
+	_ = app.postScientistBenchLaunch(context.Background(), item, updatedRun, "Scientist Bench node started")
 	return ScientistBenchNodeRun{
 		Case: item,
 		Run:  updatedRun,
@@ -488,6 +490,7 @@ func (app *App) watchScientistBenchNodeRun(
 	if result.Error != nil {
 		item, _ = app.Orchestrator.ApplySignal(item, node.FailureSignal)
 		savedItem, _ := app.ScientistBench.Save(ctx, item)
+		_ = app.postScientistBenchNodeResult(context.Background(), savedItem, run)
 		if !scientistBenchCaseIsTerminal(savedItem) {
 			app.scheduleScientistBenchContinuation(caseID)
 		}
@@ -498,6 +501,7 @@ func (app *App) watchScientistBenchNodeRun(
 	if nextErr == nil && nextRole != "" {
 		item.GraphState.ActiveRole = nextRole
 		savedItem, _ := app.ScientistBench.Save(ctx, item)
+		_ = app.postScientistBenchNodeResult(context.Background(), savedItem, run)
 		if !scientistBenchCaseIsTerminal(savedItem) {
 			app.scheduleScientistBenchContinuation(caseID)
 		}
@@ -519,6 +523,7 @@ func (app *App) watchScientistBenchNodeRun(
 		return
 	}
 	savedItem, _ := app.ScientistBench.Save(ctx, item)
+	_ = app.postScientistBenchNodeResult(context.Background(), savedItem, run)
 	if !scientistBenchCaseIsTerminal(savedItem) {
 		app.scheduleScientistBenchContinuation(caseID)
 	}

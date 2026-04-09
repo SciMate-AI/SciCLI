@@ -2,7 +2,9 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -560,6 +562,115 @@ func TestScheduleScientistBenchContinuationDeduplicatesCase(t *testing.T) {
 	assert.Equal(t, int32(1), calls.Load())
 }
 
+func TestPostScientistBenchLaunchWritesRootSessionMessage(t *testing.T) {
+	msgs := newStubMessageService()
+	app := &App{Messages: msgs}
+
+	err := app.postScientistBenchLaunch(context.Background(), scientistbench.Case{
+		ID:            "case-launch",
+		Mode:          scientistbench.ModePaperGeneration,
+		RootSessionID: "root-1",
+		Title:         "Write the scicli paper",
+	}, scientistbench.RunRecord{
+		NodeID:    "node-case-intake",
+		Role:      "chief_scientist",
+		SessionID: "sbtask-launch",
+	}, "Scientist Bench node started")
+	require.NoError(t, err)
+
+	text := msgs.latestText(t, "root-1")
+	assert.Contains(t, text, "Scientist Bench node started")
+	assert.Contains(t, text, "case case-launch")
+	assert.Contains(t, text, "mode paper_generation")
+	assert.Contains(t, text, "node node-case-intake")
+	assert.Contains(t, text, "role chief_scientist")
+	assert.Contains(t, text, "task sbtask-launch")
+}
+
+func TestStartScientistBenchRunSyncMirrorsTaskProgressIntoRootSession(t *testing.T) {
+	msgs := newStubMessageService()
+	bench := newStubScientistBenchService(scientistbench.Case{
+		ID:            "case-sync",
+		Mode:          scientistbench.ModeJoint,
+		RootSessionID: "root-1",
+		GraphState: scientistbench.GraphState{
+			ActiveNode: "node-method-plan",
+			ActiveRole: "method_planner",
+		},
+		Runs: []scientistbench.RunRecord{
+			{
+				ID:               "run-sync",
+				NodeID:           "node-method-plan",
+				Role:             "method_planner",
+				SessionID:        "sbtask-sync",
+				TaskRunSessionID: "sbtask-sync",
+			},
+		},
+	})
+	taskRuns := taskrun.NewService(nil)
+	app := &App{
+		Messages:       msgs,
+		ScientistBench: bench,
+		TaskRuns:       taskRuns,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	app.startScientistBenchRunSync(ctx)
+	t.Cleanup(func() {
+		cancel()
+		app.watcherWG.Wait()
+	})
+	time.Sleep(50 * time.Millisecond)
+
+	sess := session.Session{ID: "sbtask-sync", ParentSessionID: "root-1", Title: "Method Planner: node-method-plan"}
+	taskRuns.Queue(sess, "plan the method")
+	taskRuns.Start(sess)
+	taskRuns.UpdateDetail(sess.ID, "Running tool rg", "rg", nil)
+	taskRuns.Finish(sess.ID, taskrun.StatusComplete, "Drafted method plan", nil)
+
+	require.Eventually(t, func() bool {
+		lines := strings.Join(msgs.listTexts("root-1"), "\n")
+		return strings.Contains(lines, "progress | Running tool rg | tool rg") &&
+			strings.Contains(lines, "complete | Drafted method plan")
+	}, 2*time.Second, 20*time.Millisecond)
+
+	lines := msgs.listTexts("root-1")
+	assert.Contains(t, strings.Join(lines, "\n"), "Scientist Bench progress | case case-sync | node node-method-plan | role method_planner | progress | Running tool rg | tool rg")
+	assert.Contains(t, strings.Join(lines, "\n"), "Scientist Bench progress | case case-sync | node node-method-plan | role method_planner | complete | Drafted method plan")
+}
+
+func TestPostScientistBenchNodeResultWritesNextStepSummary(t *testing.T) {
+	msgs := newStubMessageService()
+	app := &App{Messages: msgs}
+
+	err := app.postScientistBenchNodeResult(context.Background(), scientistbench.Case{
+		ID:            "case-next",
+		RootSessionID: "root-1",
+		Status:        scientistbench.StatusRunning,
+		GraphState: scientistbench.GraphState{
+			ActiveNode: "node-execution",
+			ActiveRole: "execution_agent",
+		},
+	}, scientistbench.RunRecord{
+		NodeID:         "node-method-plan",
+		Role:           "method_planner",
+		Status:         "complete",
+		OutputSummary:  "Method plan drafted",
+		SignalsEmitted: []string{"method_ready"},
+	})
+	require.NoError(t, err)
+
+	text := msgs.latestText(t, "root-1")
+	assert.Contains(t, text, "Scientist Bench update")
+	assert.Contains(t, text, "case case-next")
+	assert.Contains(t, text, "node node-method-plan")
+	assert.Contains(t, text, "role method_planner")
+	assert.Contains(t, text, "Method plan drafted")
+	assert.Contains(t, text, "signal method_ready")
+	assert.Contains(t, text, "next node node-execution")
+	assert.Contains(t, text, "next role execution_agent")
+}
+
 func TestScientistBenchRegressionFixtures(t *testing.T) {
 	now := time.Now()
 	taskRuns := taskrun.NewService(nil)
@@ -728,5 +839,205 @@ func (trueScientistBenchService) UpdateScores(context.Context, string, scientist
 }
 
 func (trueScientistBenchService) Delete(context.Context, string) error {
+	return nil
+}
+
+type stubMessageService struct {
+	broker   *pubsub.Broker[message.Message]
+	mu       sync.Mutex
+	messages []message.Message
+}
+
+func newStubMessageService() *stubMessageService {
+	return &stubMessageService{
+		broker: pubsub.NewBroker[message.Message](),
+	}
+}
+
+func (s *stubMessageService) Subscribe(ctx context.Context) <-chan pubsub.Event[message.Message] {
+	return s.broker.Subscribe(ctx)
+}
+
+func (s *stubMessageService) Create(_ context.Context, sessionID string, params message.CreateMessageParams) (message.Message, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	msg := message.Message{
+		ID:        fmt.Sprintf("msg-%d", len(s.messages)+1),
+		SessionID: sessionID,
+		Role:      params.Role,
+		Parts:     append([]message.ContentPart(nil), params.Parts...),
+		CreatedAt: time.Now().Unix(),
+		UpdatedAt: time.Now().Unix(),
+	}
+	s.messages = append(s.messages, msg)
+	s.broker.Publish(pubsub.CreatedEvent, msg)
+	return msg, nil
+}
+
+func (s *stubMessageService) Update(_ context.Context, msg message.Message) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.messages {
+		if s.messages[i].ID == msg.ID {
+			s.messages[i] = msg
+			s.broker.Publish(pubsub.UpdatedEvent, msg)
+			return nil
+		}
+	}
+	return nil
+}
+
+func (s *stubMessageService) Get(_ context.Context, id string) (message.Message, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, msg := range s.messages {
+		if msg.ID == id {
+			return msg, nil
+		}
+	}
+	return message.Message{}, fmt.Errorf("message %s not found", id)
+}
+
+func (s *stubMessageService) List(_ context.Context, sessionID string) ([]message.Message, error) {
+	return s.listSession(sessionID), nil
+}
+
+func (s *stubMessageService) Delete(_ context.Context, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	filtered := s.messages[:0]
+	for _, msg := range s.messages {
+		if msg.ID != id {
+			filtered = append(filtered, msg)
+		}
+	}
+	s.messages = filtered
+	return nil
+}
+
+func (s *stubMessageService) DeleteSessionMessages(_ context.Context, sessionID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	filtered := s.messages[:0]
+	for _, msg := range s.messages {
+		if msg.SessionID != sessionID {
+			filtered = append(filtered, msg)
+		}
+	}
+	s.messages = filtered
+	return nil
+}
+
+func (s *stubMessageService) listSession(sessionID string) []message.Message {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]message.Message, 0)
+	for _, msg := range s.messages {
+		if msg.SessionID == sessionID {
+			out = append(out, msg)
+		}
+	}
+	return out
+}
+
+func (s *stubMessageService) listTexts(sessionID string) []string {
+	msgs := s.listSession(sessionID)
+	out := make([]string, 0, len(msgs))
+	for _, msg := range msgs {
+		out = append(out, strings.TrimSpace(msg.Content().Text))
+	}
+	return out
+}
+
+func (s *stubMessageService) latestText(t *testing.T, sessionID string) string {
+	t.Helper()
+	msgs := s.listSession(sessionID)
+	require.NotEmpty(t, msgs)
+	return strings.TrimSpace(msgs[len(msgs)-1].Content().Text)
+}
+
+type stubScientistBenchService struct {
+	items map[string]scientistbench.Case
+}
+
+func newStubScientistBenchService(items ...scientistbench.Case) *stubScientistBenchService {
+	svc := &stubScientistBenchService{items: make(map[string]scientistbench.Case, len(items))}
+	for _, item := range items {
+		svc.items[item.ID] = item
+	}
+	return svc
+}
+
+func (s *stubScientistBenchService) Subscribe(context.Context) <-chan pubsub.Event[scientistbench.Case] {
+	return nil
+}
+
+func (s *stubScientistBenchService) CreateCase(context.Context, scientistbench.CreateCaseInput) (scientistbench.Case, error) {
+	return scientistbench.Case{}, nil
+}
+
+func (s *stubScientistBenchService) Get(_ context.Context, caseID string) (scientistbench.Case, error) {
+	item, ok := s.items[caseID]
+	if !ok {
+		return scientistbench.Case{}, fmt.Errorf("case %s not found", caseID)
+	}
+	return item, nil
+}
+
+func (s *stubScientistBenchService) List(context.Context) ([]scientistbench.Case, error) {
+	out := make([]scientistbench.Case, 0, len(s.items))
+	for _, item := range s.items {
+		out = append(out, item)
+	}
+	return out, nil
+}
+
+func (s *stubScientistBenchService) Save(_ context.Context, item scientistbench.Case) (scientistbench.Case, error) {
+	s.items[item.ID] = item
+	return item, nil
+}
+
+func (s *stubScientistBenchService) UpdateGraphState(context.Context, string, scientistbench.GraphState) (scientistbench.Case, error) {
+	return scientistbench.Case{}, nil
+}
+
+func (s *stubScientistBenchService) SetTermination(context.Context, string, scientistbench.TerminationSignal, string) (scientistbench.Case, error) {
+	return scientistbench.Case{}, nil
+}
+
+func (s *stubScientistBenchService) UpsertRun(_ context.Context, caseID string, run scientistbench.RunRecord) (scientistbench.Case, error) {
+	item, ok := s.items[caseID]
+	if !ok {
+		return scientistbench.Case{}, fmt.Errorf("case %s not found", caseID)
+	}
+	updated := false
+	for i := range item.Runs {
+		if item.Runs[i].ID == run.ID {
+			item.Runs[i] = run
+			updated = true
+			break
+		}
+	}
+	if !updated {
+		item.Runs = append(item.Runs, run)
+	}
+	s.items[caseID] = item
+	return item, nil
+}
+
+func (s *stubScientistBenchService) UpsertArtifact(context.Context, string, scientistbench.Artifact) (scientistbench.Case, error) {
+	return scientistbench.Case{}, nil
+}
+
+func (s *stubScientistBenchService) UpsertReview(context.Context, string, scientistbench.Review) (scientistbench.Case, error) {
+	return scientistbench.Case{}, nil
+}
+
+func (s *stubScientistBenchService) UpdateScores(context.Context, string, scientistbench.AggregateScores) (scientistbench.Case, error) {
+	return scientistbench.Case{}, nil
+}
+
+func (s *stubScientistBenchService) Delete(context.Context, string) error {
 	return nil
 }

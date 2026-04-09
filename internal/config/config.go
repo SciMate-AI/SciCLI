@@ -75,7 +75,9 @@ type LSPConfig struct {
 
 // TUIConfig defines the configuration for the Terminal User Interface.
 type TUIConfig struct {
-	Theme string `json:"theme,omitempty"`
+	Theme     string `json:"theme,omitempty"`
+	AltScreen bool   `json:"altScreen,omitempty"`
+	Mouse     bool   `json:"mouse,omitempty"`
 }
 
 // ShellConfig defines the configuration for the shell used by the bash tool.
@@ -263,6 +265,8 @@ func setDefaults(debug bool) {
 	viper.SetDefault("data.directory", defaultDataDirectory)
 	viper.SetDefault("contextPaths", defaultContextPaths)
 	viper.SetDefault("tui.theme", defaultThemeName)
+	viper.SetDefault("tui.altScreen", false)
+	viper.SetDefault("tui.mouse", false)
 	viper.SetDefault("autoCompact", true)
 	viper.SetDefault("automation.workMode", string(WorkModeInteractive))
 	viper.SetDefault("permissions.autoApprove", false)

@@ -1,6 +1,8 @@
 package util
 
 import (
+	"os"
+	"strings"
 	"time"
 
 	"github.com/SciMate-AI/scicli/internal/logging"
@@ -11,6 +13,10 @@ func CmdHandler(msg tea.Msg) tea.Cmd {
 	return func() tea.Msg {
 		return msg
 	}
+}
+
+func ShouldClearPrimaryScreen() bool {
+	return strings.TrimSpace(os.Getenv("SCICLI_NO_ALT_SCREEN")) != ""
 }
 
 func ReportError(err error) tea.Cmd {
