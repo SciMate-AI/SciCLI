@@ -188,12 +188,6 @@ func (c *commandDialogCmp) View() string {
 	c.listView.SetMaxWidth(maxWidth)
 	c.filterInput.Width = maxWidth - 2
 
-	title := baseStyle.
-		Foreground(t.Primary()).
-		Bold(true).
-		Width(maxWidth).
-		Render("Command palette")
-
 	filter := baseStyle.
 		Width(maxWidth).
 		Foreground(t.Text()).
@@ -206,11 +200,11 @@ func (c *commandDialogCmp) View() string {
 
 	content := lipgloss.JoinVertical(
 		lipgloss.Left,
-		title,
-		baseStyle.Width(maxWidth).Foreground(t.TextMuted()).Render("SEARCH"),
-		filter,
+		sheetHeader(maxWidth, "Command palette", "Search and run project actions"),
 		"",
-		baseStyle.Width(maxWidth).Render(c.listView.View()),
+		sheetBlock(maxWidth, "search", filter),
+		"",
+		sheetBlock(maxWidth, "results", baseStyle.Width(maxWidth).Render(c.listView.View())),
 		baseStyle.Width(maxWidth).Foreground(t.TextMuted()).Render(footerText),
 	)
 

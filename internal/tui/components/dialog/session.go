@@ -106,7 +106,6 @@ func (s *sessionDialogCmp) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (s *sessionDialogCmp) View() string {
-	t := theme.CurrentTheme()
 	baseStyle := styles.BaseStyle()
 
 	if len(s.sessions) == 0 {
@@ -126,16 +125,11 @@ func (s *sessionDialogCmp) View() string {
 	s.listView.SetMaxWidth(maxWidth)
 	s.setVisibleRows()
 
-	title := baseStyle.
-		Foreground(t.Primary()).
-		Bold(true).
-		Width(maxWidth).
-		Render(fmt.Sprintf("Switch Session (%d)", len(s.sessions)))
-
 	content := lipgloss.JoinVertical(
 		lipgloss.Left,
-		title,
-		baseStyle.Width(maxWidth).Render(s.listView.View()),
+		sheetHeader(maxWidth, fmt.Sprintf("Switch Session (%d)", len(s.sessions)), "Move between saved chat sessions"),
+		"",
+		sheetBlock(maxWidth, "sessions", baseStyle.Width(maxWidth).Render(s.listView.View())),
 	)
 
 	return inlineSheet(baseStyle.Width(maxWidth).Render(content))

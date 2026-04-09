@@ -111,12 +111,6 @@ func (t *taskDialogCmp) View() string {
 	}
 	t.listView.SetMaxWidth(maxWidth)
 
-	title := baseStyle.
-		Foreground(themeColors.Primary()).
-		Bold(true).
-		Width(maxWidth).
-		Render(fmt.Sprintf("Delegated Tasks (%d)", len(t.tasks)))
-
 	parentLine := "Current session"
 	if strings.TrimSpace(t.parentSession.Title) != "" {
 		parentLine = "Parent: " + t.parentSession.Title
@@ -124,10 +118,9 @@ func (t *taskDialogCmp) View() string {
 
 	content := lipgloss.JoinVertical(
 		lipgloss.Left,
-		title,
-		baseStyle.Width(maxWidth).Foreground(themeColors.TextMuted()).Render(parentLine),
+		sheetHeader(maxWidth, fmt.Sprintf("Delegated Tasks (%d)", len(t.tasks)), parentLine),
 		"",
-		baseStyle.Width(maxWidth).Render(t.listView.View()),
+		sheetBlock(maxWidth, "tasks", baseStyle.Width(maxWidth).Render(t.listView.View())),
 		baseStyle.Width(maxWidth).Foreground(themeColors.TextMuted()).Render("Enter opens the delegated task session."),
 	)
 

@@ -190,11 +190,10 @@ func (d *providerSetupDialogCmp) View() string {
 	}
 
 	content := []string{
-		baseStyle.Width(width).Foreground(t.Primary()).Bold(true).Render("Provider setup"),
-		baseStyle.Width(width).Foreground(t.TextMuted()).Render(d.stepIndicator()),
+		sheetHeader(width, "Provider setup", d.stepIndicator()),
 		baseStyle.Width(width).Foreground(t.TextMuted()).Render("Configure a provider, verify credentials, then bind the coder agent to a model."),
 		"",
-		d.renderContextBanner(width),
+		sheetBlock(width, "context", d.renderContextBanner(width)),
 		"",
 	}
 
@@ -619,18 +618,14 @@ func NewProviderSetupDialogCmp() ProviderSetupDialog {
 }
 
 func (d *providerSetupDialogCmp) renderContextBanner(width int) string {
-	t := theme.CurrentTheme()
 	current := d.currentProvider()
 	label := "Selected: none"
 	if current.Label != "" {
 		label = "Selected: " + current.Label
 	}
-	return lipgloss.NewStyle().
+	return styles.BaseStyle().
 		Width(width).
-		BorderLeft(true).
-		BorderForeground(t.BorderDim()).
-		PaddingLeft(1).
-		Foreground(t.TextMuted()).
+		Foreground(theme.CurrentTheme().TextMuted()).
 		Render(label)
 }
 
@@ -719,32 +714,19 @@ func (d *providerSetupDialogCmp) renderCredentialBlocks(width int) []string {
 }
 
 func (d *providerSetupDialogCmp) renderInputBlock(width int, label string, hint string, inputView string) string {
-	t := theme.CurrentTheme()
 	base := styles.BaseStyle()
 	parts := []string{
 		base.Bold(true).Render(label),
 	}
 	if strings.TrimSpace(hint) != "" {
-		parts = append(parts, base.Foreground(t.TextMuted()).Render(hint))
+		parts = append(parts, base.Foreground(theme.CurrentTheme().TextMuted()).Render(hint))
 	}
 	parts = append(parts, inputView)
-	return lipgloss.NewStyle().
-		Width(width).
-		BorderLeft(true).
-		BorderForeground(t.BorderDim()).
-		PaddingLeft(1).
-		Render(strings.Join(parts, "\n"))
+	return sheetBlock(width, label, strings.Join(parts, "\n"))
 }
 
 func (d *providerSetupDialogCmp) renderHintBox(width int, content string) string {
-	t := theme.CurrentTheme()
-	return lipgloss.NewStyle().
-		Width(width).
-		BorderLeft(true).
-		BorderForeground(t.BorderDim()).
-		PaddingLeft(1).
-		Foreground(t.TextMuted()).
-		Render(content)
+	return sheetBlock(width, "", styles.BaseStyle().Width(width).Foreground(theme.CurrentTheme().TextMuted()).Render(content))
 }
 
 func (d *providerSetupDialogCmp) renderModelRow(width int, idx int, name string) string {

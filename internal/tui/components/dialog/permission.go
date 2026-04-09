@@ -315,22 +315,19 @@ func (p *permissionDialogCmp) styleViewport() string {
 }
 
 func (p *permissionDialogCmp) render() string {
-	t := theme.CurrentTheme()
-	baseStyle := styles.BaseStyle()
 	width := max(40, p.width)
 
-	title := baseStyle.Bold(true).Foreground(t.Warning()).Render("Permission request")
-	subtitle := baseStyle.Foreground(t.TextMuted()).Render(firstNonEmptyPermissionText(
+	subtitle := firstNonEmptyPermissionText(
 		strings.TrimSpace(p.permission.Description),
 		"Review this action before continuing.",
-	))
+	)
 	// Render header
 	headerContent := p.renderHeader()
 	// Render buttons
 	buttons := p.renderButtons()
 
 	// Render as an inline sheet inside the main layout instead of a centered popup.
-	p.contentViewPort.Height = max(3, p.height-lipgloss.Height(headerContent)-lipgloss.Height(buttons)-lipgloss.Height(title)-lipgloss.Height(subtitle)-5)
+	p.contentViewPort.Height = max(3, p.height-lipgloss.Height(headerContent)-lipgloss.Height(buttons)-3)
 	p.contentViewPort.Width = max(24, width-2)
 
 	// Render content based on tool type
@@ -352,21 +349,20 @@ func (p *permissionDialogCmp) render() string {
 
 	content := lipgloss.JoinVertical(
 		lipgloss.Top,
-		title,
-		subtitle,
+		sheetHeader(width, "Permission request", subtitle),
 		"",
-		headerContent,
+		sheetBlock(width, "request", headerContent),
 		"",
-		contentFinal,
+		sheetBlock(width, "preview", contentFinal),
 		"",
 		buttons,
 	)
 
-	return baseStyle.
+	return styles.BaseStyle().
 		Width(width).
 		Height(p.height).
 		BorderTop(true).
-		BorderForeground(t.BorderDim()).
+		BorderForeground(theme.CurrentTheme().BorderDim()).
 		PaddingTop(1).
 		Render(content)
 }

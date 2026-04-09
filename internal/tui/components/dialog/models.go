@@ -199,14 +199,7 @@ func (m *modelDialogCmp) View() string {
 	if !config.ProviderReady(m.provider) {
 		providerName += " [setup required]"
 	}
-	title := baseStyle.Foreground(t.Primary()).Bold(true).Width(width).Render("Provider / model")
-	context := lipgloss.NewStyle().
-		Width(width).
-		BorderLeft(true).
-		BorderForeground(t.BorderDim()).
-		PaddingLeft(1).
-		Foreground(t.TextMuted()).
-		Render(fmt.Sprintf("provider  %s", providerName))
+	context := baseStyle.Width(width).Foreground(t.TextMuted()).Render(fmt.Sprintf("provider  %s", providerName))
 
 	endIdx := min(m.scrollOffset+numVisibleModels, len(m.models))
 	modelItems := make([]string, 0, endIdx-m.scrollOffset)
@@ -227,14 +220,13 @@ func (m *modelDialogCmp) View() string {
 
 	content := lipgloss.JoinVertical(
 		lipgloss.Left,
-		title,
-		baseStyle.Width(width).Foreground(t.TextMuted()).Render(m.headerText()),
+		sheetHeader(width, "Provider / model", m.headerText()),
 		"",
-		context,
+		sheetBlock(width, "provider", context),
 		"",
-		baseStyle.Width(width).Render(m.renderProviderStrip(width)),
+		sheetBlock(width, "providers", baseStyle.Width(width).Render(m.renderProviderStrip(width))),
 		"",
-		baseStyle.Width(width).Render(lipgloss.JoinVertical(lipgloss.Left, modelItems...)),
+		sheetBlock(width, "models", baseStyle.Width(width).Render(lipgloss.JoinVertical(lipgloss.Left, modelItems...))),
 		footer,
 	)
 

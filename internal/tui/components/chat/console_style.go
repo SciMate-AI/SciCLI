@@ -24,13 +24,9 @@ func codexCenter(width int, content string) string {
 
 func consoleSection(width int, title string, body ...string) string {
 	t := theme.CurrentTheme()
-	base := styles.BaseStyle()
 	lines := make([]string, 0, len(body)+1)
 	if strings.TrimSpace(title) != "" {
-		lines = append(lines, base.
-			Foreground(t.Primary()).
-			Bold(true).
-			Render(strings.ToUpper(title)))
+		lines = append(lines, consoleOutlineBadge(title, t.Primary()))
 	}
 	for _, line := range body {
 		if line == "" {
@@ -48,11 +44,15 @@ func consoleSection(width int, title string, body ...string) string {
 }
 
 func consoleBadge(label string, bg, fg lipgloss.AdaptiveColor) string {
-	_ = bg
+	if strings.TrimSpace(bg.Dark) == "" && strings.TrimSpace(bg.Light) == "" {
+		bg = theme.CurrentTheme().BackgroundSecondary()
+	}
 	return lipgloss.NewStyle().
+		Padding(0, 1).
+		Background(bg).
 		Foreground(fg).
 		Bold(true).
-		Render("[" + strings.ToUpper(strings.TrimSpace(label)) + "]")
+		Render(strings.ToUpper(strings.TrimSpace(label)))
 }
 
 func consoleOutlineBadge(label string, fg lipgloss.AdaptiveColor) string {
@@ -89,7 +89,7 @@ func consoleDivider(width int, label string) string {
 	if strings.TrimSpace(label) == "" || width < 12 {
 		return base.Render(strings.Repeat("-", max(1, width)))
 	}
-	tag := " " + strings.ToUpper(strings.TrimSpace(label)) + " "
+	tag := "[" + strings.ToUpper(strings.TrimSpace(label)) + "] "
 	lineWidth := max(1, width-lipgloss.Width(tag))
 	return base.Render(tag + strings.Repeat("-", lineWidth))
 }
@@ -111,7 +111,7 @@ func consoleTranscriptBlock(width int, header string, body string, footer ...str
 		Width(max(1, width)).
 		BorderLeft(true).
 		BorderStyle(lipgloss.NormalBorder()).
-		BorderForeground(t.BorderDim()).
+		BorderForeground(t.BorderNormal()).
 		PaddingLeft(1).
 		Render(base.Render(lipgloss.JoinVertical(lipgloss.Left, lines...)))
 }

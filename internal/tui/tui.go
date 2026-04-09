@@ -245,9 +245,17 @@ func (a appModel) chromeView() string {
 
 	space := a.width - lipgloss.Width(left) - lipgloss.Width(right)
 	if space < 2 {
-		return baseStyle.Width(a.width).Render(truncateAppChrome(left, max(0, a.width-lipgloss.Width(right)-2)) + "  " + right)
+		return lipgloss.NewStyle().
+			Width(a.width).
+			BorderBottom(true).
+			BorderForeground(t.BorderDim()).
+			Render(truncateAppChrome(left, max(0, a.width-lipgloss.Width(right)-2)) + "  " + right)
 	}
-	return baseStyle.Width(a.width).Render(left + strings.Repeat(" ", space) + right)
+	return lipgloss.NewStyle().
+		Width(a.width).
+		BorderBottom(true).
+		BorderForeground(t.BorderDim()).
+		Render(left + strings.Repeat(" ", space) + right)
 }
 
 func truncateAppChrome(value string, width int) string {
@@ -1036,7 +1044,7 @@ func overlayBottomSheet(bg, sheet string) string {
 func bottomStatusSheet(content string) string {
 	return lipgloss.NewStyle().
 		BorderTop(true).
-		BorderForeground(theme.CurrentTheme().BorderDim()).
+		BorderForeground(theme.CurrentTheme().BorderNormal()).
 		PaddingTop(1).
 		Render(content)
 }

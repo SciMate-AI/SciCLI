@@ -163,26 +163,12 @@ func (h *helpCmp) render() string {
 }
 
 func (h *helpCmp) View() string {
-	t := theme.CurrentTheme()
-	baseStyle := styles.BaseStyle()
-
 	content := h.render()
-	header := baseStyle.
-		Bold(true).
-		Width(lipgloss.Width(content)).
-		Foreground(t.Primary()).
-		Render("Keyboard shortcuts")
-	subtitle := baseStyle.
-		Width(lipgloss.Width(content)).
-		Foreground(t.TextMuted()).
-		Render("Active keys for the current view")
-
 	return inlineSheet(lipgloss.JoinVertical(
 		lipgloss.Left,
-		header,
-		subtitle,
+		sheetHeader(lipgloss.Width(content), "Keyboard shortcuts", "Active keys for the current view"),
 		"",
-		content,
+		sheetBlock(lipgloss.Width(content), "keys", content),
 	))
 }
 

@@ -154,17 +154,11 @@ func (t *themeDialogCmp) View() string {
 		themeItems = append(themeItems, itemStyle.Render(prefix+themeName))
 	}
 
-	title := baseStyle.
-		Foreground(currentTheme.Primary()).
-		Bold(true).
-		Width(maxWidth).
-		Render("Theme")
-
 	content := lipgloss.JoinVertical(
 		lipgloss.Left,
-		title,
-		baseStyle.Width(maxWidth).Foreground(currentTheme.TextMuted()).Render("Up/Down selects. Enter applies."),
-		baseStyle.Width(maxWidth).Render(lipgloss.JoinVertical(lipgloss.Left, themeItems...)),
+		sheetHeader(maxWidth, "Theme", "Up/Down selects. Enter applies."),
+		"",
+		sheetBlock(maxWidth, "themes", baseStyle.Width(maxWidth).Render(lipgloss.JoinVertical(lipgloss.Left, themeItems...))),
 	)
 
 	return inlineSheet(baseStyle.Width(maxWidth).Render(content))

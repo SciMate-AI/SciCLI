@@ -12,37 +12,38 @@ type OpenCodeTheme struct {
 
 // NewOpenCodeTheme creates a new instance of the OpenCode theme.
 func NewOpenCodeTheme() *OpenCodeTheme {
-	// OpenCode color palette
-	// Dark mode colors
-	darkBackground := "#000000"
-	darkSelection := "#2a2a2a"
-	darkForeground := "#e0e0e0"
-	darkComment := "#6a6a6a"
-	darkPrimary := "#7aa2f7"
-	darkSecondary := "#73daca"
-	darkAccent := "#bb9af7"
-	darkRed := "#e06c75"    // Error red
-	darkOrange := "#f5a742" // Warning orange
-	darkGreen := "#7fd88f"  // Success green
-	darkCyan := "#56b6c2"   // Info cyan
-	darkYellow := "#e5c07b" // Emphasized text
-	darkBorder := "#3a3a3a" // Border color
+	// Codex-inspired console palette with restrained chrome and a single blue accent.
+	darkBackground := "#0b0d12"
+	darkSurface := "#11141b"
+	darkSurfaceAlt := "#090b10"
+	darkForeground := "#e7ebf3"
+	darkComment := "#7c8599"
+	darkPrimary := "#4ea1ff"
+	darkSecondary := "#9cb4d8"
+	darkAccent := "#d5deed"
+	darkRed := "#ff7b72"
+	darkOrange := "#d9a441"
+	darkGreen := "#7bcf8e"
+	darkCyan := "#7dcfff"
+	darkYellow := "#f2cc60"
+	darkBorder := "#2a3140"
+	darkBorderDim := "#1a202b"
 
-	// Light mode colors
-	lightBackground := "#f8f8f8"
-	lightCurrentLine := "#f0f0f0"
-	lightSelection := "#e5e5e6"
-	lightForeground := "#2a2a2a"
-	lightComment := "#8a8a8a"
-	lightPrimary := "#3b7dd8"   // Primary blue
-	lightSecondary := "#7b5bb6" // Secondary purple
-	lightAccent := "#d68c27"    // Accent orange/gold
-	lightRed := "#d1383d"       // Error red
-	lightOrange := "#d68c27"    // Warning orange
-	lightGreen := "#3d9a57"     // Success green
-	lightCyan := "#318795"      // Info cyan
-	lightYellow := "#b0851f"    // Emphasized text
-	lightBorder := "#d3d3d3"    // Border color
+	lightBackground := "#f6f8fc"
+	lightSurface := "#edf2fa"
+	lightSurfaceAlt := "#ffffff"
+	lightForeground := "#172033"
+	lightComment := "#637087"
+	lightPrimary := "#216bdb"
+	lightSecondary := "#4a6388"
+	lightAccent := "#0f172a"
+	lightRed := "#c53b33"
+	lightOrange := "#a36a00"
+	lightGreen := "#2f7d46"
+	lightCyan := "#0f6cbd"
+	lightYellow := "#8f6a00"
+	lightBorder := "#c8d2e4"
+	lightBorderDim := "#dbe3f0"
 
 	theme := &OpenCodeTheme{}
 
@@ -98,12 +99,12 @@ func NewOpenCodeTheme() *OpenCodeTheme {
 		Light: lightBackground,
 	}
 	theme.BackgroundSecondaryColor = lipgloss.AdaptiveColor{
-		Dark:  darkBackground,
-		Light: lightCurrentLine,
+		Dark:  darkSurface,
+		Light: lightSurface,
 	}
 	theme.BackgroundDarkerColor = lipgloss.AdaptiveColor{
-		Dark:  darkBackground,
-		Light: "#f5f5f5", // Keep contrast without stark white blocks
+		Dark:  darkSurfaceAlt,
+		Light: lightSurfaceAlt,
 	}
 
 	// Border colors
@@ -116,8 +117,8 @@ func NewOpenCodeTheme() *OpenCodeTheme {
 		Light: lightPrimary,
 	}
 	theme.BorderDimColor = lipgloss.AdaptiveColor{
-		Dark:  darkSelection,
-		Light: lightSelection,
+		Dark:  darkBorderDim,
+		Light: lightBorderDim,
 	}
 
 	// Diff view colors
@@ -154,7 +155,7 @@ func NewOpenCodeTheme() *OpenCodeTheme {
 		Light: "#FFEBEE",
 	}
 	theme.DiffContextBgColor = lipgloss.AdaptiveColor{
-		Dark:  darkBackground,
+		Dark:  darkSurfaceAlt,
 		Light: lightBackground,
 	}
 	theme.DiffLineNumberColor = lipgloss.AdaptiveColor{

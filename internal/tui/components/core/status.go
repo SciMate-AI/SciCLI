@@ -116,8 +116,6 @@ func (m statusCmp) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-var helpWidget = ""
-
 func getHelpWidget() string {
 	t := theme.CurrentTheme()
 	return styles.BaseStyle().
@@ -209,13 +207,25 @@ func (m statusCmp) View() string {
 	left := strings.Join(leftParts, "  ")
 	right := strings.Join(m.rightStatusParts(), "  ")
 	if right == "" {
-		return baseStyle.Width(m.width).Render(left)
+		return lipgloss.NewStyle().
+			Width(m.width).
+			BorderTop(true).
+			BorderForeground(t.BorderDim()).
+			Render(left)
 	}
 	space := m.width - lipgloss.Width(left) - lipgloss.Width(right)
 	if space < 2 {
-		return baseStyle.Width(m.width).Render(truncateString(left, max(0, m.width-lipgloss.Width(right)-2)) + "  " + right)
+		return lipgloss.NewStyle().
+			Width(m.width).
+			BorderTop(true).
+			BorderForeground(t.BorderDim()).
+			Render(truncateString(left, max(0, m.width-lipgloss.Width(right)-2)) + "  " + right)
 	}
-	return baseStyle.Width(m.width).Render(left + strings.Repeat(" ", space) + right)
+	return lipgloss.NewStyle().
+		Width(m.width).
+		BorderTop(true).
+		BorderForeground(t.BorderDim()).
+		Render(left + strings.Repeat(" ", space) + right)
 }
 
 func (m *statusCmp) projectDiagnostics() string {
@@ -297,7 +307,7 @@ func (m statusCmp) availableFooterMsgWidth(diagnostics, tokenInfo string) int {
 	if m.session.ID != "" {
 		tokensWidth = lipgloss.Width(tokenInfo) + 2
 	}
-	return max(0, m.width-lipgloss.Width(helpWidget)-lipgloss.Width(m.model())-lipgloss.Width(diagnostics)-tokensWidth)
+	return max(0, m.width-lipgloss.Width(getHelpWidget())-lipgloss.Width(m.model())-lipgloss.Width(diagnostics)-tokensWidth)
 }
 
 func (m statusCmp) model() string {
@@ -472,8 +482,6 @@ func truncateString(value string, width int) string {
 }
 
 func NewStatusCmp(lspClients map[string]*lsp.Client, skillsSvc skills.Service, permissionSvc permission.Service, taskRuns taskrun.Service) StatusCmp {
-	helpWidget = getHelpWidget()
-
 	return &statusCmp{
 		messageTTL: 10 * time.Second,
 		lspClients: lspClients,

@@ -182,11 +182,8 @@ func (s *skillDialogCmp) View() string {
 	s.listView.SetMaxWidth(maxWidth)
 	s.filterInput.Width = maxWidth - 2
 	s.installInput.Width = maxWidth - 2
-	title := base.Foreground(t.Primary()).Bold(true).Width(maxWidth).Render(fmt.Sprintf("Skills (%d)", len(s.items)))
-
 	searchBlock := lipgloss.JoinVertical(
 		lipgloss.Left,
-		base.Width(maxWidth).Foreground(t.TextMuted()).Render("SEARCH"),
 		base.Width(maxWidth).Render(s.filterInput.View()),
 	)
 
@@ -196,16 +193,16 @@ func (s *skillDialogCmp) View() string {
 	}
 
 	contentParts := []string{
-		title,
-		searchBlock,
-		base.Width(maxWidth).Render(""),
-		base.Width(maxWidth).Render(s.listView.View()),
+		sheetHeader(maxWidth, fmt.Sprintf("Skills (%d)", len(s.items)), "Browse, activate, install, or remove skills"),
+		"",
+		sheetBlock(maxWidth, "search", searchBlock),
+		"",
+		sheetBlock(maxWidth, "results", base.Width(maxWidth).Render(s.listView.View())),
 	}
 	if s.installMode {
 		contentParts = append(contentParts,
 			"",
-			base.Width(maxWidth).Foreground(t.TextMuted()).Render("Install skill from local path or GitHub tree URL"),
-			base.Width(maxWidth).Render(s.installInput.View()),
+			sheetBlock(maxWidth, "install", base.Width(maxWidth).Foreground(t.TextMuted()).Render("Install skill from local path or GitHub tree URL"), base.Width(maxWidth).Render(s.installInput.View())),
 		)
 	}
 	content := lipgloss.JoinVertical(

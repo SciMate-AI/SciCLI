@@ -120,7 +120,7 @@ func logo(width int) string {
 }
 
 func repo(width int) string {
-	repo := "https://github.com/fzj1214/scimate"
+	repo := "https://github.com/SciMate-AI/scicli"
 	t := theme.CurrentTheme()
 
 	return styles.BaseStyle().

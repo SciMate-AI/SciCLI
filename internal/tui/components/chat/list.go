@@ -447,7 +447,7 @@ func (m *messagesCmp) initialScreen() string {
 		m.renderConsoleHeader(),
 		consoleMuted("workspace  " + config.WorkingDirectory()),
 		consoleDivider(m.width, "ready"),
-		scicliWordmark(m.width),
+		codexSolidWordmark(m.width),
 		"",
 		consoleSection(m.width, "Start here",
 			"Describe the task, paste code, or use a slash command.",
@@ -502,6 +502,52 @@ func scicliWordmark(width int) string {
 			"███████║╚██████╗██║╚██████╗███████╗██║",
 			"╚══════╝ ╚═════╝╚═╝ ╚═════╝╚══════╝╚═╝",
 		}, "\n"))
+}
+
+func codexWordmark(width int) string {
+	t := theme.CurrentTheme()
+	if width < 72 {
+		return styles.BaseStyle().
+			Foreground(t.Primary()).
+			Bold(true).
+			Render("SCICLI")
+	}
+
+	wordmark := strings.Join([]string{
+		"███████╗  ██████╗ ██╗  ██████╗ ██╗      ██╗",
+		"██╔════╝ ██╔════╝ ██║ ██╔════╝ ██║      ██║",
+		"███████╗ ██║      ██║ ██║      ██║      ██║",
+		"╚════██║ ██║      ██║ ██║      ██║      ██║",
+		"███████║ ╚██████╗ ██║ ╚██████╗ ███████╗ ██║",
+	}, "\n")
+
+	return styles.BaseStyle().
+		Foreground(t.Primary()).
+		Bold(true).
+		Render(wordmark)
+}
+
+func codexSolidWordmark(width int) string {
+	t := theme.CurrentTheme()
+	if width < 72 {
+		return styles.BaseStyle().
+			Foreground(t.Primary()).
+			Bold(true).
+			Render("SCICLI")
+	}
+
+	wordmark := strings.Join([]string{
+		"██████   █████   ██   █████   ██      ██",
+		"██      ██   ██  ██  ██   ██  ██      ██",
+		"██████  ██       ██  ██       ██      ██",
+		"     ██ ██   ██  ██  ██   ██  ██      ██",
+		"██████   █████   ██   █████   ██████  ██",
+	}, "\n")
+
+	return styles.BaseStyle().
+		Foreground(t.Primary()).
+		Bold(true).
+		Render(wordmark)
 }
 
 func (m *messagesCmp) rerender() {
@@ -687,7 +733,7 @@ func (m *messagesCmp) renderConsoleHeader() string {
 		}
 	}
 
-	left := baseStyle.Bold(true).Render(title)
+	left := baseStyle.Bold(true).Render(styles.OpenCodeIcon + " " + title)
 	right := consoleMuted(strings.Join([]string{
 		providerLine,
 		modelLine,
