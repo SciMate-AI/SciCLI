@@ -75,9 +75,10 @@ type LSPConfig struct {
 
 // TUIConfig defines the configuration for the Terminal User Interface.
 type TUIConfig struct {
-	Theme     string `json:"theme,omitempty"`
-	AltScreen bool   `json:"altScreen,omitempty"`
-	Mouse     bool   `json:"mouse,omitempty"`
+	Theme              string `json:"theme,omitempty"`
+	AltScreen          bool   `json:"altScreen,omitempty"`
+	Mouse              bool   `json:"mouse,omitempty"`
+	LinkAllAgentModels bool   `json:"linkAllAgentModels,omitempty"`
 }
 
 // ShellConfig defines the configuration for the shell used by the bash tool.
@@ -267,6 +268,7 @@ func setDefaults(debug bool) {
 	viper.SetDefault("tui.theme", defaultThemeName)
 	viper.SetDefault("tui.altScreen", false)
 	viper.SetDefault("tui.mouse", false)
+	viper.SetDefault("tui.linkAllAgentModels", true)
 	viper.SetDefault("autoCompact", true)
 	viper.SetDefault("automation.workMode", string(WorkModeInteractive))
 	viper.SetDefault("permissions.autoApprove", false)
@@ -1248,37 +1250,76 @@ func UpdateAgentModel(agentName AgentName, modelID models.ModelID) error {
 		panic("config not loaded")
 	}
 
-	existingAgentCfg := cfg.Agents[agentName]
-
 	model, ok := models.SupportedModels[modelID]
 	if !ok {
 		return fmt.Errorf("model %s not supported", modelID)
 	}
+	_ = model
 
-	maxTokens := existingAgentCfg.MaxTokens
-	if model.DefaultMaxTokens > 0 {
-		maxTokens = model.DefaultMaxTokens
+	targets := []AgentName{agentName}
+	if cfg.TUI.LinkAllAgentModels {
+		targets = linkedAgentNames()
 	}
 
-	newAgentCfg := Agent{
-		Model:           modelID,
-		MaxTokens:       maxTokens,
-		ReasoningEffort: existingAgentCfg.ReasoningEffort,
+	existing := make(map[AgentName]Agent, len(targets))
+	updated := make(map[AgentName]Agent, len(targets))
+	for _, target := range targets {
+		existing[target] = cfg.Agents[target]
+		updated[target] = updatedAgentConfigForModel(target, cfg.Agents[target], modelID)
+		cfg.Agents[target] = updated[target]
 	}
-	cfg.Agents[agentName] = newAgentCfg
 
-	if err := validateAgent(cfg, agentName, newAgentCfg); err != nil {
-		// revert config update on failure
-		cfg.Agents[agentName] = existingAgentCfg
-		return fmt.Errorf("failed to update agent model: %w", err)
+	for _, target := range targets {
+		if err := validateAgent(cfg, target, updated[target]); err != nil {
+			for _, rollbackTarget := range targets {
+				cfg.Agents[rollbackTarget] = existing[rollbackTarget]
+			}
+			return fmt.Errorf("failed to update agent model: %w", err)
+		}
 	}
 
 	return updateCfgFile(func(config *Config) {
 		if config.Agents == nil {
 			config.Agents = make(map[AgentName]Agent)
 		}
-		config.Agents[agentName] = newAgentCfg
+		for _, target := range targets {
+			config.Agents[target] = updated[target]
+		}
 	})
+}
+
+func updatedAgentConfigForModel(agentName AgentName, existing Agent, modelID models.ModelID) Agent {
+	model := models.SupportedModels[modelID]
+	maxTokens := existing.MaxTokens
+	if model.DefaultMaxTokens > 0 {
+		maxTokens = model.DefaultMaxTokens
+	}
+	if agentName == AgentTitle {
+		maxTokens = 80
+	}
+
+	agent := Agent{
+		Model:           modelID,
+		MaxTokens:       maxTokens,
+		ReasoningEffort: existing.ReasoningEffort,
+	}
+	if model.CanReason && (model.Provider == models.ProviderOpenAI || model.Provider == models.ProviderLocal || model.Provider == models.ProviderOpenAICompatible) {
+		if strings.TrimSpace(agent.ReasoningEffort) == "" {
+			agent.ReasoningEffort = "medium"
+		}
+	} else {
+		agent.ReasoningEffort = ""
+	}
+	return agent
+}
+
+func linkedAgentNames() []AgentName {
+	return []AgentName{
+		AgentCoder,
+		AgentSummarizer,
+		AgentTask,
+		AgentTitle,
+	}
 }
 
 // UpdateTheme updates the theme in the configuration and writes it to the config file.

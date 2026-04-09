@@ -724,8 +724,31 @@ func (a *agent) Update(agentName config.AgentName, modelID models.ModelID) (mode
 
 	a.provider = provider
 	a.maxTokens = configuredAgentMaxTokens(agentName, provider.Model())
+	if a.agentName == config.AgentCoder {
+		if err := a.reloadAuxProviders(); err != nil {
+			return models.Model{}, err
+		}
+	}
 
 	return a.provider.Model(), nil
+}
+
+func (a *agent) reloadAuxProviders() error {
+	if a.titleProvider != nil {
+		titleProvider, err := createAgentProvider(config.AgentTitle)
+		if err != nil {
+			return fmt.Errorf("failed to reload title model: %w", err)
+		}
+		a.titleProvider = titleProvider
+	}
+	if a.summarizeProvider != nil {
+		summarizeProvider, err := createAgentProvider(config.AgentSummarizer)
+		if err != nil {
+			return fmt.Errorf("failed to reload summarizer model: %w", err)
+		}
+		a.summarizeProvider = summarizeProvider
+	}
+	return nil
 }
 
 func (a *agent) Summarize(ctx context.Context, sessionID string) error {

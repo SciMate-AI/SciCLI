@@ -218,7 +218,18 @@ func SaveProviderSelection(selection OnboardingSelection) error {
 
 	providerCfg := providerConfigFromSelection(selection)
 	cfg.Providers[selection.Provider] = providerCfg
-	cfg.Agents[AgentCoder] = newDefaultAgentConfig(AgentCoder, selection.ModelID)
+	updatedAgents := map[AgentName]Agent{
+		AgentCoder: newDefaultAgentConfig(AgentCoder, selection.ModelID),
+	}
+	if cfg.TUI.LinkAllAgentModels {
+		updatedAgents = make(map[AgentName]Agent, len(linkedAgentNames()))
+		for _, agentName := range linkedAgentNames() {
+			updatedAgents[agentName] = newDefaultAgentConfig(agentName, selection.ModelID)
+		}
+	}
+	for agentName, agentCfg := range updatedAgents {
+		cfg.Agents[agentName] = agentCfg
+	}
 
 	if !providerConfigReady(selection.Provider, providerCfg) {
 		return fmt.Errorf("provider %s configuration is incomplete", selection.Provider)
@@ -233,7 +244,9 @@ func SaveProviderSelection(selection OnboardingSelection) error {
 		}
 
 		fileCfg.Providers[selection.Provider] = providerCfg
-		fileCfg.Agents[AgentCoder] = newDefaultAgentConfig(AgentCoder, selection.ModelID)
+		for agentName, agentCfg := range updatedAgents {
+			fileCfg.Agents[agentName] = agentCfg
+		}
 	})
 }
 

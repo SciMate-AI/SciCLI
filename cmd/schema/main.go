@@ -152,6 +152,11 @@ func generateSchema() map[string]any {
 				"description": "Capture mouse events in the TUI by default",
 				"default":     false,
 			},
+			"linkAllAgentModels": map[string]any{
+				"type":        "boolean",
+				"description": "When true, changing the selected model updates coder, task, summarizer, and title agents together",
+				"default":     true,
+			},
 		},
 	}
 

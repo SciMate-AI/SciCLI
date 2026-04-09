@@ -435,6 +435,9 @@ func (a appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if err != nil {
 			return a, util.ReportWarn(fmt.Sprintf("Saved %s to config, but runtime reload failed: %v", msg.ProviderLabel, err))
 		}
+		if config.Get().TUI.LinkAllAgentModels {
+			return a, util.ReportInfo(fmt.Sprintf("Configured %s with %s for all agents", msg.ProviderLabel, model.Name))
+		}
 		return a, util.ReportInfo(fmt.Sprintf("Configured %s with %s", msg.ProviderLabel, model.Name))
 
 	case dialog.StartCompactSessionMsg:
@@ -554,7 +557,9 @@ func (a appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if err != nil {
 			return a, util.ReportError(err)
 		}
-
+		if config.Get().TUI.LinkAllAgentModels {
+			return a, util.ReportInfo(fmt.Sprintf("Model changed to %s for all agents", model.Name))
+		}
 		return a, util.ReportInfo(fmt.Sprintf("Model changed to %s", model.Name))
 
 	case chat.SessionSelectedMsg:
