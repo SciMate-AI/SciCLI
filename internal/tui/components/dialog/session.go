@@ -110,7 +110,7 @@ func (s *sessionDialogCmp) View() string {
 	baseStyle := styles.BaseStyle()
 
 	if len(s.sessions) == 0 {
-		return lipgloss.PlaceHorizontal(max(40, s.width), lipgloss.Center, baseStyle.Width(40).Render("No sessions available"))
+		return inlineSheet(baseStyle.Width(40).Render("No sessions available"))
 	}
 
 	maxWidth := 40
@@ -138,7 +138,7 @@ func (s *sessionDialogCmp) View() string {
 		baseStyle.Width(maxWidth).Render(s.listView.View()),
 	)
 
-	return lipgloss.PlaceHorizontal(max(maxWidth, s.width), lipgloss.Center, baseStyle.Width(maxWidth).Render(content))
+	return inlineSheet(baseStyle.Width(maxWidth).Render(content))
 }
 
 func (s *sessionDialogCmp) BindingKeys() []key.Binding {

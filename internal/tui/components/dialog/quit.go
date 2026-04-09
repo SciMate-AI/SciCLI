@@ -102,7 +102,7 @@ func (q *quitDialogCmp) View() string {
 		baseStyle.Foreground(t.TextMuted()).Render("Enter confirms. y quits. n closes."),
 	)
 
-	return lipgloss.PlaceHorizontal(max(32, lipgloss.Width(question)+6), lipgloss.Center, content)
+	return inlineSheet(content)
 }
 
 func (q *quitDialogCmp) BindingKeys() []key.Binding {

@@ -442,70 +442,66 @@ func (m *messagesCmp) helpText() string {
 
 func (m *messagesCmp) initialScreen() string {
 	baseStyle := styles.BaseStyle()
-	t := theme.CurrentTheme()
 	providerLine, modelLine := activeProviderAndModel()
-	art := lipgloss.NewStyle().
-		Foreground(t.Primary()).
-		Bold(true).
-		Render(strings.Join(scicliASCIIArt(), "\n"))
 	lines := []string{
-		art,
-		consoleMuted(providerLine + "  " + modelLine),
+		m.renderConsoleHeader(),
 		consoleMuted("workspace  " + config.WorkingDirectory()),
+		consoleDivider(m.width, "ready"),
+		scicliWordmark(m.width),
 		"",
-		"Describe the task, paste code, or use a slash command.",
-		initialScreenPanel("Try", []string{
+		consoleSection(m.width, "Start here",
+			"Describe the task, paste code, or use a slash command.",
+			"Use normal terminal scroll/selection outside the transcript; use PgUp/PgDn inside the transcript.",
+		),
+		"",
+		consoleSection(m.width, "Try",
 			"explain this repository architecture",
 			"refactor the provider setup flow",
-		}),
-		initialScreenPanel("Shortcuts", []string{
+			"/sb new paper write a top-tier conference paper for this project",
+		),
+		"",
+		consoleSection(m.width, "Shortcuts",
 			"/ commands",
 			"@ paths",
 			"Ctrl+K palette",
 			"/tasks",
-		}),
+			providerLine+"  "+modelLine,
+		),
 	}
 	if strings.TrimSpace(m.research.Objective) != "" {
 		lines = append(lines,
 			"",
-			initialScreenPanel("Current objective", []string{
+			consoleSection(m.width, "Current objective",
 				truncateString(m.research.Objective, max(24, m.width*3)),
-				consoleMuted("next  " + nextResearchAction(m.research)),
-			}),
+				consoleMuted("next  "+nextResearchAction(m.research)),
+			),
 		)
 	}
-	return lipgloss.Place(
-		m.width,
-		max(1, m.height),
-		lipgloss.Center,
-		lipgloss.Center,
-		codexCenter(m.width, baseStyle.Width(codexColumnWidth(m.width)).Render(lipgloss.JoinVertical(lipgloss.Top, lines...))),
-	)
+	return baseStyle.
+		Width(m.width).
+		Height(max(1, m.height)).
+		Render(lipgloss.JoinVertical(lipgloss.Top, lines...))
 }
 
-func scicliASCIIArt() []string {
-	return []string{
-		"  ____   ____ ___  ____ _     ___ ",
-		" / ___| / ___|_ _|/ ___| |   |_ _|",
-		" \\___ \\| |    | | |    | |    | | ",
-		"  ___) | |___ | | |___ | |___ | | ",
-		" |____/ \\____|___|\\____||_____|___|",
-	}
-}
-
-func initialScreenPanel(title string, lines []string) string {
+func scicliWordmark(width int) string {
 	t := theme.CurrentTheme()
-	baseStyle := styles.BaseStyle()
-	content := make([]string, 0, len(lines)+1)
-	content = append(content, baseStyle.Foreground(t.TextMuted()).Render(strings.ToUpper(strings.TrimSpace(title))))
-	for _, line := range lines {
-		content = append(content, line)
+	if width < 48 {
+		return styles.BaseStyle().
+			Foreground(t.Primary()).
+			Bold(true).
+			Render("SCICLI")
 	}
-	return lipgloss.NewStyle().
-		BorderLeft(true).
-		BorderForeground(t.BorderDim()).
-		PaddingLeft(1).
-		Render(lipgloss.JoinVertical(lipgloss.Left, content...))
+	return styles.BaseStyle().
+		Foreground(t.Primary()).
+		Bold(true).
+		Render(strings.Join([]string{
+			"███████╗ ██████╗██╗ ██████╗██╗     ██╗",
+			"██╔════╝██╔════╝██║██╔════╝██║     ██║",
+			"███████╗██║     ██║██║     ██║     ██║",
+			"╚════██║██║     ██║██║     ██║     ██║",
+			"███████║╚██████╗██║╚██████╗███████╗██║",
+			"╚══════╝ ╚═════╝╚═╝ ╚═════╝╚══════╝╚═╝",
+		}, "\n"))
 }
 
 func (m *messagesCmp) rerender() {

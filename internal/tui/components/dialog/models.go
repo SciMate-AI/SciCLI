@@ -238,7 +238,7 @@ func (m *modelDialogCmp) View() string {
 		footer,
 	)
 
-	return lipgloss.PlaceHorizontal(max(width, m.width), lipgloss.Center, baseStyle.Width(width).Render(content))
+	return inlineSheet(baseStyle.Width(width).Render(content))
 }
 
 func (m *modelDialogCmp) getScrollIndicators() string {

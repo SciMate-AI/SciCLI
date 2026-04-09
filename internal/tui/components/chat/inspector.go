@@ -1035,8 +1035,8 @@ func (m *inspectorCmp) renderTaskSection(width int) string {
 		lineStyle := baseStyle.Width(width)
 		detailStyle := baseStyle.Width(width).Foreground(t.TextMuted())
 		if task.Session.ID == selectedID {
-			lineStyle = lineStyle.Background(t.Primary()).Foreground(t.Background()).Bold(true)
-			detailStyle = detailStyle.Background(t.Primary()).Foreground(t.Background())
+			lineStyle = lineStyle.Foreground(t.Primary()).Bold(true)
+			detailStyle = detailStyle.Foreground(t.Text())
 		}
 
 		lines = append(lines,
@@ -1272,13 +1272,12 @@ func (m *inspectorCmp) consoleFilterView() string {
 	parts := make([]string, 0, len(filters))
 	for _, filter := range filters {
 		style := lipgloss.NewStyle().
-			Padding(0, 1).
-			Foreground(t.TextMuted()).
-			Background(t.BackgroundDarker())
+			MarginRight(1).
+			Foreground(t.TextMuted())
 		if filter == m.consoleFilter {
-			style = style.Foreground(t.Background()).Background(t.Primary()).Bold(true)
+			style = style.Foreground(t.Primary()).Bold(true)
 		}
-		parts = append(parts, style.Render(strings.ToUpper(string(filter))))
+		parts = append(parts, style.Render("["+strings.ToUpper(string(filter))+"]"))
 	}
 	return strings.Join(parts, " ")
 }
@@ -1411,86 +1410,67 @@ func sectionTitle(title string, width int) string {
 
 func statusBadge(status taskrun.Status) string {
 	t := theme.CurrentTheme()
-	bg := t.BackgroundDarker()
-	fg := t.Text()
+	fg := t.TextMuted()
 
 	switch status {
 	case taskrun.StatusRunning:
-		bg = t.Primary()
-		fg = t.Background()
+		fg = t.Primary()
 	case taskrun.StatusComplete:
-		bg = t.Success()
-		fg = t.Background()
+		fg = t.Success()
 	case taskrun.StatusBlocked:
-		bg = t.Warning()
-		fg = t.Background()
+		fg = t.Warning()
 	case taskrun.StatusFailed, taskrun.StatusCanceled:
-		bg = t.Error()
-		fg = t.Background()
+		fg = t.Error()
 	case taskrun.StatusQueued:
-		bg = t.Secondary()
-		fg = t.Background()
+		fg = t.Secondary()
 	}
 
 	return lipgloss.NewStyle().
-		Background(bg).
 		Foreground(fg).
-		Padding(0, 1).
-		Render(strings.ToUpper(string(status)))
+		Bold(true).
+		Render("[" + strings.ToUpper(string(status)) + "]")
 }
 
 func eventKindBadge(kind taskrun.EventKind) string {
 	t := theme.CurrentTheme()
-	bg := t.BackgroundDarker()
-	fg := t.Text()
+	fg := t.TextMuted()
 
 	switch kind {
 	case taskrun.EventStarted:
-		bg = t.Primary()
-		fg = t.Background()
+		fg = t.Primary()
 	case taskrun.EventProgress:
-		bg = t.Secondary()
-		fg = t.Background()
+		fg = t.Secondary()
 	case taskrun.EventFinished:
-		bg = t.Success()
-		fg = t.Background()
+		fg = t.Success()
 	case taskrun.EventCancelRequested:
-		bg = t.Error()
-		fg = t.Background()
+		fg = t.Error()
 	}
 
 	label := strings.ToUpper(strings.ReplaceAll(string(kind), "_", " "))
 	return lipgloss.NewStyle().
-		Background(bg).
 		Foreground(fg).
-		Padding(0, 1).
-		Render(label)
+		Bold(true).
+		Render("[" + label + "]")
 }
 
 func toolNameBadge(name string) string {
 	t := theme.CurrentTheme()
 	return lipgloss.NewStyle().
-		Background(t.BackgroundDarker()).
 		Foreground(t.Secondary()).
-		Padding(0, 1).
-		Render(strings.ToUpper(truncateString(strings.TrimSpace(name), 18)))
+		Render("[" + strings.ToUpper(truncateString(strings.TrimSpace(name), 18)) + "]")
 }
 
 func renderInspectorActionChip(action researchWorkbenchAction) string {
 	t := theme.CurrentTheme()
 	style := lipgloss.NewStyle().
-		Padding(0, 1).
 		MarginRight(1).
-		Background(t.BackgroundDarker()).
-		Foreground(t.Text())
+		Foreground(t.TextMuted())
 
 	if action.Enabled {
-		style = style.Background(t.Primary()).Foreground(t.Background()).Bold(true)
-	} else {
-		style = style.Foreground(t.TextMuted())
+		style = style.Foreground(t.Primary()).Bold(true)
 	}
 
-	return zone.Mark(inspectorActionZoneID(action.ID), style.Render(action.Label))
+	return zone.Mark(inspectorActionZoneID(action.ID), style.Render("["+action.Label+"]"))
 }
 
 func inspectorActionZoneID(actionID string) string {

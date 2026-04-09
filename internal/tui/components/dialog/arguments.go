@@ -232,7 +232,7 @@ func (m MultiArgumentsDialogCmp) View() string {
 		elements...,
 	)
 
-	return lipgloss.PlaceHorizontal(max(maxWidth, m.width), lipgloss.Center, baseStyle.Width(maxWidth).Render(content))
+	return inlineSheet(baseStyle.Width(maxWidth).Render(content))
 }
 
 // SetSize sets the size of the component.

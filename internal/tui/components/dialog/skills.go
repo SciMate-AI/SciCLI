@@ -214,7 +214,7 @@ func (s *skillDialogCmp) View() string {
 			base.Width(maxWidth).Foreground(t.TextMuted()).Render(footerText),
 		)...,
 	)
-	return lipgloss.PlaceHorizontal(max(maxWidth, s.width), lipgloss.Center, base.Width(maxWidth).Render(content))
+	return inlineSheet(base.Width(maxWidth).Render(content))
 }
 
 func (s *skillDialogCmp) BindingKeys() []key.Binding {

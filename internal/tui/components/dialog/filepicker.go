@@ -338,7 +338,7 @@ func (f *filepickerCmp) View() string {
 	)
 
 	f.cwd.SetValue(f.cwd.Value())
-	return lipgloss.PlaceHorizontal(max(adjustedWidth, f.width), lipgloss.Center, styles.BaseStyle().Width(adjustedWidth).Render(content))
+	return inlineSheet(styles.BaseStyle().Width(adjustedWidth).Render(content))
 }
 
 type FilepickerCmp interface {

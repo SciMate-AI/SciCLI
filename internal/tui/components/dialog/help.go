@@ -27,7 +27,7 @@ func (h *helpCmp) SetBindings(k []key.Binding) {
 func (h *helpCmp) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		h.width = 90
+		h.width = max(48, min(90, msg.Width-6))
 		h.height = msg.Height
 	}
 	return h, nil
@@ -177,17 +177,13 @@ func (h *helpCmp) View() string {
 		Foreground(t.TextMuted()).
 		Render("Active keys for the current view")
 
-	return lipgloss.PlaceHorizontal(
-		max(h.width, lipgloss.Width(content)),
-		lipgloss.Center,
-		lipgloss.JoinVertical(
-			lipgloss.Left,
-			header,
-			subtitle,
-			"",
-			content,
-		),
-	)
+	return inlineSheet(lipgloss.JoinVertical(
+		lipgloss.Left,
+		header,
+		subtitle,
+		"",
+		content,
+	))
 }
 
 type HelpCmp interface {

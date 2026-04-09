@@ -219,24 +219,11 @@ func (o *openaiClient) send(ctx context.Context, messages []message.Message, too
 			return nil, o.annotateRequestError(err)
 		}
 
-		content := ""
-		if openaiResponse.Choices[0].Message.Content != "" {
-			content = openaiResponse.Choices[0].Message.Content
+		response, buildErr := o.responseFromCompletion(*openaiResponse)
+		if buildErr != nil {
+			return nil, o.annotateRequestError(buildErr)
 		}
-
-		toolCalls := o.toolCalls(*openaiResponse)
-		finishReason := o.finishReason(string(openaiResponse.Choices[0].FinishReason))
-
-		if len(toolCalls) > 0 {
-			finishReason = message.FinishReasonToolUse
-		}
-
-		return &ProviderResponse{
-			Content:      content,
-			ToolCalls:    toolCalls,
-			Usage:        o.usage(*openaiResponse),
-			FinishReason: finishReason,
-		}, nil
+		return response, nil
 	}
 }
 
@@ -265,7 +252,6 @@ func (o *openaiClient) stream(ctx context.Context, messages []message.Message, t
 
 			acc := openai.ChatCompletionAccumulator{}
 			currentContent := ""
-			toolCalls := make([]message.ToolCall, 0)
 			sawOutput := false
 
 			for openaiStream.Next() {
@@ -289,23 +275,15 @@ func (o *openaiClient) stream(ctx context.Context, messages []message.Message, t
 
 			err := openaiStream.Err()
 			if err == nil || errors.Is(err, io.EOF) {
-				// Stream completed successfully
-				finishReason := o.finishReason(string(acc.ChatCompletion.Choices[0].FinishReason))
-				if len(acc.ChatCompletion.Choices[0].Message.ToolCalls) > 0 {
-					toolCalls = append(toolCalls, o.toolCalls(acc.ChatCompletion)...)
+				response, buildErr := o.responseFromAccumulatedStream(acc.ChatCompletion, currentContent)
+				if buildErr != nil {
+					eventChan <- ProviderEvent{Type: EventError, Error: o.annotateRequestError(buildErr)}
+					close(eventChan)
+					return
 				}
-				if len(toolCalls) > 0 {
-					finishReason = message.FinishReasonToolUse
-				}
-
 				eventChan <- ProviderEvent{
-					Type: EventComplete,
-					Response: &ProviderResponse{
-						Content:      currentContent,
-						ToolCalls:    toolCalls,
-						Usage:        o.usage(acc.ChatCompletion),
-						FinishReason: finishReason,
-					},
+					Type:     EventComplete,
+					Response: response,
 				}
 				close(eventChan)
 				return
@@ -339,6 +317,57 @@ func (o *openaiClient) stream(ctx context.Context, messages []message.Message, t
 	}()
 
 	return eventChan
+}
+
+func (o *openaiClient) responseFromCompletion(completion openai.ChatCompletion) (*ProviderResponse, error) {
+	choice, err := firstCompletionChoice(completion)
+	if err != nil {
+		return nil, err
+	}
+
+	content := choice.Message.Content
+	toolCalls := o.toolCalls(completion)
+	finishReason := o.finishReason(string(choice.FinishReason))
+	if len(toolCalls) > 0 {
+		finishReason = message.FinishReasonToolUse
+	}
+
+	return &ProviderResponse{
+		Content:      content,
+		ToolCalls:    toolCalls,
+		Usage:        o.usage(completion),
+		FinishReason: finishReason,
+	}, nil
+}
+
+func (o *openaiClient) responseFromAccumulatedStream(completion openai.ChatCompletion, currentContent string) (*ProviderResponse, error) {
+	if len(completion.Choices) == 0 {
+		if strings.TrimSpace(currentContent) != "" {
+			return &ProviderResponse{
+				Content:      currentContent,
+				ToolCalls:    nil,
+				Usage:        o.usage(completion),
+				FinishReason: message.FinishReasonUnknown,
+			}, nil
+		}
+		return nil, fmt.Errorf("provider returned stream with no choices")
+	}
+
+	response, err := o.responseFromCompletion(completion)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(currentContent) != "" {
+		response.Content = currentContent
+	}
+	return response, nil
+}
+
+func firstCompletionChoice(completion openai.ChatCompletion) (openai.ChatCompletionChoice, error) {
+	if len(completion.Choices) == 0 {
+		return openai.ChatCompletionChoice{}, fmt.Errorf("provider returned response with no choices")
+	}
+	return completion.Choices[0], nil
 }
 
 func (o *openaiClient) shouldRetry(attempts int, err error) (bool, int64, error) {

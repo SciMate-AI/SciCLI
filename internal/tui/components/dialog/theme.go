@@ -127,7 +127,7 @@ func (t *themeDialogCmp) View() string {
 	baseStyle := styles.BaseStyle()
 
 	if len(t.themes) == 0 {
-		return lipgloss.PlaceHorizontal(max(40, t.width), lipgloss.Center, baseStyle.Width(40).Render("No themes available"))
+		return inlineSheet(baseStyle.Width(40).Render("No themes available"))
 	}
 
 	// Calculate max width needed for theme names
@@ -167,7 +167,7 @@ func (t *themeDialogCmp) View() string {
 		baseStyle.Width(maxWidth).Render(lipgloss.JoinVertical(lipgloss.Left, themeItems...)),
 	)
 
-	return lipgloss.PlaceHorizontal(max(maxWidth, t.width), lipgloss.Center, baseStyle.Width(maxWidth).Render(content))
+	return inlineSheet(baseStyle.Width(maxWidth).Render(content))
 }
 
 func (t *themeDialogCmp) BindingKeys() []key.Binding {

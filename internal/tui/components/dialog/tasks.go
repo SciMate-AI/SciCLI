@@ -131,7 +131,7 @@ func (t *taskDialogCmp) View() string {
 		baseStyle.Width(maxWidth).Foreground(themeColors.TextMuted()).Render("Enter opens the delegated task session."),
 	)
 
-	return lipgloss.PlaceHorizontal(max(maxWidth, t.width), lipgloss.Center, baseStyle.Width(maxWidth).Render(content))
+	return inlineSheet(baseStyle.Width(maxWidth).Render(content))
 }
 
 func (t *taskDialogCmp) BindingKeys() []key.Binding {

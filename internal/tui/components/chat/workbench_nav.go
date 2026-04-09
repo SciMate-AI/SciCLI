@@ -352,11 +352,11 @@ func renderWorkbenchNavActionChip(action researchWorkbenchAction, width int) str
 	t := theme.CurrentTheme()
 	labelStyle := lipgloss.NewStyle()
 	if action.Enabled {
-		labelStyle = labelStyle.Background(t.Secondary()).Foreground(t.Background()).Bold(true)
+		labelStyle = labelStyle.Foreground(t.Secondary()).Bold(true)
 	} else {
-		labelStyle = labelStyle.Background(t.BackgroundDarker()).Foreground(t.TextMuted())
+		labelStyle = labelStyle.Foreground(t.TextMuted())
 	}
-	label := labelStyle.Padding(0, 1).Render(action.Label)
+	label := labelStyle.Render("[" + action.Label + "]")
 	detail := action.Reason
 	if action.Enabled {
 		detail = action.Command

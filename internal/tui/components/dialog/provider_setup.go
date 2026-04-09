@@ -212,7 +212,7 @@ func (d *providerSetupDialogCmp) View() string {
 	}
 
 	body := lipgloss.JoinVertical(lipgloss.Left, content...)
-	return lipgloss.PlaceHorizontal(max(width, d.width), lipgloss.Center, baseStyle.Width(width).Render(body))
+	return inlineSheet(baseStyle.Width(width).Render(body))
 }
 
 func (d *providerSetupDialogCmp) BindingKeys() []key.Binding {

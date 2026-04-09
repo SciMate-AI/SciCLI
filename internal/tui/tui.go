@@ -1025,54 +1025,42 @@ func (a *appModel) moveToPage(pageID page.PageID) tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-func (a appModel) View() string {
-	components := []string{a.chromeView(), a.pages[a.currentPage].View()}
-	if a.showPermissions {
-		components = append(components, a.permissions.View())
+func overlayBottomSheet(bg, sheet string) string {
+	if strings.TrimSpace(sheet) == "" {
+		return bg
 	}
-	components = append(components, a.status.View())
+	row := max(0, lipgloss.Height(bg)-lipgloss.Height(sheet))
+	return layout.PlaceOverlay(0, row, sheet, bg, false)
+}
 
-	appView := lipgloss.JoinVertical(lipgloss.Top, components...)
+func bottomStatusSheet(content string) string {
+	return lipgloss.NewStyle().
+		BorderTop(true).
+		BorderForeground(theme.CurrentTheme().BorderDim()).
+		PaddingTop(1).
+		Render(content)
+}
+
+func (a appModel) View() string {
+	bodyComponents := []string{a.chromeView(), a.pages[a.currentPage].View()}
+	if a.showPermissions {
+		bodyComponents = append(bodyComponents, a.permissions.View())
+	}
+	appView := lipgloss.JoinVertical(lipgloss.Top, bodyComponents...)
 
 	if a.showFilepicker {
-		overlay := a.filepicker.View()
-		row := lipgloss.Height(appView) / 2
-		row -= lipgloss.Height(overlay) / 2
-		col := lipgloss.Width(appView) / 2
-		col -= lipgloss.Width(overlay) / 2
-		appView = layout.PlaceOverlay(
-			col,
-			row,
-			overlay,
-			appView,
-			true,
-		)
-
+		appView = overlayBottomSheet(appView, a.filepicker.View())
 	}
 
 	// Show compacting status overlay
 	if a.isCompacting {
 		t := theme.CurrentTheme()
-		style := lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(t.BorderFocused()).
-			BorderBackground(t.Background()).
-			Padding(1, 2).
-			Background(t.Background()).
-			Foreground(t.Text())
-
-		overlay := style.Render("Summarizing\n" + a.compactingMessage)
-		row := lipgloss.Height(appView) / 2
-		row -= lipgloss.Height(overlay) / 2
-		col := lipgloss.Width(appView) / 2
-		col -= lipgloss.Width(overlay) / 2
-		appView = layout.PlaceOverlay(
-			col,
-			row,
-			overlay,
-			appView,
-			true,
-		)
+		overlay := bottomStatusSheet(lipgloss.JoinVertical(
+			lipgloss.Left,
+			styles.BaseStyle().Foreground(t.Primary()).Bold(true).Render("Summarizing"),
+			styles.BaseStyle().Foreground(t.TextMuted()).Render(a.compactingMessage),
+		))
+		appView = overlayBottomSheet(appView, overlay)
 	}
 
 	if a.showHelp {
@@ -1112,144 +1100,46 @@ func (a appModel) View() string {
 		}
 		a.help.SetBindings(bindings)
 
-		overlay := a.help.View()
-		row := lipgloss.Height(appView) / 2
-		row -= lipgloss.Height(overlay) / 2
-		col := lipgloss.Width(appView) / 2
-		col -= lipgloss.Width(overlay) / 2
-		appView = layout.PlaceOverlay(
-			col,
-			row,
-			overlay,
-			appView,
-			true,
-		)
+		appView = overlayBottomSheet(appView, a.help.View())
 	}
 
 	if a.showQuit {
-		overlay := a.quit.View()
-		row := lipgloss.Height(appView) / 2
-		row -= lipgloss.Height(overlay) / 2
-		col := lipgloss.Width(appView) / 2
-		col -= lipgloss.Width(overlay) / 2
-		appView = layout.PlaceOverlay(
-			col,
-			row,
-			overlay,
-			appView,
-			true,
-		)
+		appView = overlayBottomSheet(appView, a.quit.View())
 	}
 
 	if a.showSessionDialog {
-		overlay := a.sessionDialog.View()
-		row := lipgloss.Height(appView) / 2
-		row -= lipgloss.Height(overlay) / 2
-		col := lipgloss.Width(appView) / 2
-		col -= lipgloss.Width(overlay) / 2
-		appView = layout.PlaceOverlay(
-			col,
-			row,
-			overlay,
-			appView,
-			true,
-		)
+		appView = overlayBottomSheet(appView, a.sessionDialog.View())
 	}
 
 	if a.showProviderSetupDialog {
-		overlay := a.providerSetupDialog.View()
-		row := lipgloss.Height(appView) / 2
-		row -= lipgloss.Height(overlay) / 2
-		col := lipgloss.Width(appView) / 2
-		col -= lipgloss.Width(overlay) / 2
-		appView = layout.PlaceOverlay(
-			col,
-			row,
-			overlay,
-			appView,
-			true,
-		)
+		appView = overlayBottomSheet(appView, a.providerSetupDialog.View())
 	}
 
 	if a.showModelDialog {
-		overlay := a.modelDialog.View()
-		row := lipgloss.Height(appView) / 2
-		row -= lipgloss.Height(overlay) / 2
-		col := lipgloss.Width(appView) / 2
-		col -= lipgloss.Width(overlay) / 2
-		appView = layout.PlaceOverlay(
-			col,
-			row,
-			overlay,
-			appView,
-			true,
-		)
+		appView = overlayBottomSheet(appView, a.modelDialog.View())
 	}
 
 	if a.showCommandDialog {
-		overlay := a.commandDialog.View()
-		row := lipgloss.Height(appView) / 2
-		row -= lipgloss.Height(overlay) / 2
-		col := lipgloss.Width(appView) / 2
-		col -= lipgloss.Width(overlay) / 2
-		appView = layout.PlaceOverlay(
-			col,
-			row,
-			overlay,
-			appView,
-			true,
-		)
+		appView = overlayBottomSheet(appView, a.commandDialog.View())
 	}
 
 	if a.showThemeDialog {
-		overlay := a.themeDialog.View()
-		row := lipgloss.Height(appView) / 2
-		row -= lipgloss.Height(overlay) / 2
-		col := lipgloss.Width(appView) / 2
-		col -= lipgloss.Width(overlay) / 2
-		appView = layout.PlaceOverlay(
-			col,
-			row,
-			overlay,
-			appView,
-			true,
-		)
+		appView = overlayBottomSheet(appView, a.themeDialog.View())
 	}
 
 	if a.showSkillsDialog {
-		overlay := a.skillsDialog.View()
-		row := lipgloss.Height(appView) / 2
-		row -= lipgloss.Height(overlay) / 2
-		col := lipgloss.Width(appView) / 2
-		col -= lipgloss.Width(overlay) / 2
-		appView = layout.PlaceOverlay(col, row, overlay, appView, true)
+		appView = overlayBottomSheet(appView, a.skillsDialog.View())
 	}
 
 	if a.showTaskDialog {
-		overlay := a.taskDialog.View()
-		row := lipgloss.Height(appView) / 2
-		row -= lipgloss.Height(overlay) / 2
-		col := lipgloss.Width(appView) / 2
-		col -= lipgloss.Width(overlay) / 2
-		appView = layout.PlaceOverlay(col, row, overlay, appView, true)
+		appView = overlayBottomSheet(appView, a.taskDialog.View())
 	}
 
 	if a.showMultiArgumentsDialog {
-		overlay := a.multiArgumentsDialog.View()
-		row := lipgloss.Height(appView) / 2
-		row -= lipgloss.Height(overlay) / 2
-		col := lipgloss.Width(appView) / 2
-		col -= lipgloss.Width(overlay) / 2
-		appView = layout.PlaceOverlay(
-			col,
-			row,
-			overlay,
-			appView,
-			true,
-		)
+		appView = overlayBottomSheet(appView, a.multiArgumentsDialog.View())
 	}
 
-	return zone.Scan(appView)
+	return zone.Scan(lipgloss.JoinVertical(lipgloss.Top, appView, a.status.View()))
 }
 
 func New(app *app.App) tea.Model {
