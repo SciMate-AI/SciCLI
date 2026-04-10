@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"os"
 	"strings"
 
 	"github.com/SciMate-AI/scicli/internal/app"
@@ -21,6 +22,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	zone "github.com/lrstanley/bubblezone"
 )
 
 type cacheItem struct {
@@ -55,8 +57,16 @@ type messagesCmp struct {
 	researchSessionID string
 	researchInherited bool
 	researchTitle     string
+	draggingScrollbar bool
+	mouseMode         bool
 }
 type renderFinishedMsg struct{}
+
+const transcriptScrollbarZoneID = "chat-transcript-scrollbar"
+
+type MouseModeChangedMsg struct {
+	Enabled bool
+}
 
 type MessageKeys struct {
 	PageDown     key.Binding
@@ -94,6 +104,9 @@ func (m *messagesCmp) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case dialog.ThemeChangedMsg:
 		m.rerender()
 		return m, nil
+	case MouseModeChangedMsg:
+		m.mouseMode = msg.Enabled
+		return m, nil
 	case SessionSelectedMsg:
 		if msg.ID != m.session.ID {
 			cmd := m.SetSession(msg)
@@ -123,6 +136,9 @@ func (m *messagesCmp) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.rerender()
 		}
 	case tea.MouseMsg:
+		if m.handleScrollbarMouse(msg) {
+			return m, nil
+		}
 		u, cmd := m.viewport.Update(msg)
 		m.viewport = u
 		cmds = append(cmds, cmd)
@@ -441,6 +457,11 @@ func (m *messagesCmp) helpText() string {
 	if hasToolResults(m.messages) {
 		text += "  " + toggleToolResultsKey.Help().Key + " tool output"
 	}
+	if m.mouseMode {
+		text += "  Alt+M 返回复制"
+	} else {
+		text += "  Alt+M 进入滚动"
+	}
 	return text
 }
 
@@ -625,6 +646,7 @@ func NewMessagesCmp(app *app.App) tea.Model {
 		viewport:      vp,
 		spinner:       s,
 		attachments:   attachmets,
+		mouseMode:     strings.TrimSpace(os.Getenv("SCICLI_NO_MOUSE")) == "",
 	}
 }
 
@@ -648,7 +670,7 @@ func (m *messagesCmp) renderScrollbar() string {
 
 	height := max(1, m.viewport.Height)
 	if m.contentLines <= height {
-		return baseStyle.Foreground(t.TextMuted()).Render(strings.Repeat(" ", 1))
+		return zone.Mark(transcriptScrollbarZoneID, baseStyle.Foreground(t.TextMuted()).Render(strings.Repeat(" ", 1)))
 	}
 
 	thumbSize := max(1, int(math.Round(float64(height*height)/float64(max(1, m.contentLines)))))
@@ -668,7 +690,7 @@ func (m *messagesCmp) renderScrollbar() string {
 		}
 		lines = append(lines, baseStyle.Foreground(color).Render(ch))
 	}
-	return lipgloss.JoinVertical(lipgloss.Left, lines...)
+	return zone.Mark(transcriptScrollbarZoneID, lipgloss.JoinVertical(lipgloss.Left, lines...))
 }
 
 func (m *messagesCmp) scrollbarWidth() int {
@@ -676,6 +698,60 @@ func (m *messagesCmp) scrollbarWidth() int {
 		return 0
 	}
 	return 1
+}
+
+func (m *messagesCmp) handleScrollbarMouse(msg tea.MouseMsg) bool {
+	if m.contentLines <= m.viewport.Height || m.scrollbarWidth() == 0 {
+		m.draggingScrollbar = false
+		return false
+	}
+
+	scrollbarZone := zone.Get(transcriptScrollbarZoneID)
+	switch msg.Action {
+	case tea.MouseActionPress:
+		if msg.Button != tea.MouseButtonLeft || !scrollbarZone.InBounds(msg) {
+			m.draggingScrollbar = false
+			return false
+		}
+		m.draggingScrollbar = true
+		_, localY := scrollbarZone.Pos(msg)
+		m.viewport.SetYOffset(m.scrollbarTargetYOffset(localY))
+		return true
+	case tea.MouseActionMotion:
+		if !m.draggingScrollbar || !scrollbarZone.InBounds(msg) {
+			return false
+		}
+		_, localY := scrollbarZone.Pos(msg)
+		m.viewport.SetYOffset(m.scrollbarTargetYOffset(localY))
+		return true
+	case tea.MouseActionRelease:
+		if m.draggingScrollbar {
+			m.draggingScrollbar = false
+			if scrollbarZone.InBounds(msg) {
+				_, localY := scrollbarZone.Pos(msg)
+				m.viewport.SetYOffset(m.scrollbarTargetYOffset(localY))
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+func (m *messagesCmp) scrollbarTargetYOffset(localY int) int {
+	height := max(1, m.viewport.Height)
+	maxOffset := max(0, m.contentLines-m.viewport.Height)
+	if maxOffset == 0 {
+		return 0
+	}
+	if localY <= 0 {
+		return 0
+	}
+	if localY >= height-1 {
+		return maxOffset
+	}
+	ratio := float64(localY) / float64(max(1, height-1))
+	return int(math.Round(ratio * float64(maxOffset)))
 }
 
 func (m *messagesCmp) footer() string {

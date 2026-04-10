@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/SciMate-AI/scicli/internal/app"
@@ -37,6 +38,7 @@ type keyMap struct {
 	Commands      key.Binding
 	Filepicker    key.Binding
 	Models        key.Binding
+	ToggleMouse   key.Binding
 	SwitchTheme   key.Binding
 	PrevTask      key.Binding
 	NextTask      key.Binding
@@ -83,6 +85,10 @@ var keys = keyMap{
 	Models: key.NewBinding(
 		key.WithKeys("ctrl+o"),
 		key.WithHelp("ctrl+o", "model selection"),
+	),
+	ToggleMouse: key.NewBinding(
+		key.WithKeys("alt+m"),
+		key.WithHelp("alt+m", "toggle mouse"),
 	),
 
 	SwitchTheme: key.NewBinding(
@@ -163,6 +169,7 @@ type appModel struct {
 
 	isCompacting      bool
 	compactingMessage string
+	mouseMode         bool
 }
 
 func (a appModel) permissionReservedHeight() int {
@@ -239,6 +246,7 @@ func (a appModel) chromeView() string {
 	rightParts := []string{
 		baseStyle.Foreground(t.TextMuted()).Render("page " + string(a.currentPage)),
 		baseStyle.Foreground(t.TextMuted()).Render("mode " + string(config.Get().Automation.WorkMode)),
+		baseStyle.Foreground(t.TextMuted()).Render("mouse " + a.mouseModeLabel()),
 		baseStyle.Foreground(t.TextMuted()).Render(version.Version),
 	}
 	right := strings.Join(rightParts, "  ")
@@ -732,6 +740,20 @@ func (a appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return a, nil
 			}
 			return a, util.CmdHandler(showModelDialogMsg{})
+		case key.Matches(msg, keys.ToggleMouse):
+			a.mouseMode = !a.mouseMode
+			if a.mouseMode {
+				return a, tea.Batch(
+					tea.EnableMouseCellMotion,
+					util.CmdHandler(chat.MouseModeChangedMsg{Enabled: true}),
+					util.ReportInfo("已切换到滚动模式：鼠标滚轮和滚动条拖动可用，终端框选复制暂时交给应用处理"),
+				)
+			}
+			return a, tea.Batch(
+				tea.DisableMouse,
+				util.CmdHandler(chat.MouseModeChangedMsg{Enabled: false}),
+				util.ReportInfo("已切换到复制模式：终端框选复制已恢复，按 Alt+M 可再次进入滚动模式"),
+			)
 		case key.Matches(msg, keys.SwitchTheme):
 			if !a.showQuit && !a.showPermissions && !a.showSessionDialog && !a.showCommandDialog && !a.showTaskDialog {
 				// Show theme switcher dialog
@@ -1168,6 +1190,7 @@ func New(app *app.App) tea.Model {
 		taskDialog:          dialog.NewTaskDialogCmp(),
 		app:                 app,
 		commands:            []dialog.Command{},
+		mouseMode:           strings.TrimSpace(os.Getenv("SCICLI_NO_MOUSE")) == "",
 		pages: map[page.PageID]tea.Model{
 			page.ChatPage: page.NewChatPage(app),
 			page.LogsPage: page.NewLogsPage(),
@@ -1436,4 +1459,11 @@ If there are Cursor rules (in .cursor/rules/ or .cursorrules) or Copilot rules (
 	}
 
 	return model
+}
+
+func (a appModel) mouseModeLabel() string {
+	if a.mouseMode {
+		return "scroll"
+	}
+	return "select"
 }

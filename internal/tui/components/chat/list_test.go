@@ -33,3 +33,14 @@ func TestMessagesCmpViewIncludesScrollbarAndFooter(t *testing.T) {
 	assert.Contains(t, view, "transcript")
 	assert.True(t, strings.Contains(view, "#") || strings.Contains(view, "|"))
 }
+
+func TestScrollbarTargetYOffsetMapsTrackToViewport(t *testing.T) {
+	m := &messagesCmp{
+		contentLines: 40,
+		viewport:     viewport.New(30, 10),
+	}
+
+	assert.Equal(t, 0, m.scrollbarTargetYOffset(0))
+	assert.Equal(t, 30, m.scrollbarTargetYOffset(9))
+	assert.Equal(t, 13, m.scrollbarTargetYOffset(4))
+}
