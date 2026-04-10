@@ -300,6 +300,15 @@ func TestSetDefaultsDoesNotInjectBuiltInMCPServers(t *testing.T) {
 	assert.Empty(t, viper.GetStringMap("mcpServers"))
 }
 
+func TestSetDefaultsKeepAltScreenAndNoMouseCapture(t *testing.T) {
+	resetConfigTestState()
+
+	setDefaults(false)
+
+	assert.True(t, viper.GetBool("tui.altScreen"))
+	assert.False(t, viper.GetBool("tui.mouse"))
+}
+
 func resetConfigTestState() {
 	cfg = nil
 	viper.Reset()

@@ -215,6 +215,9 @@ func (m *messagesCmp) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *messagesCmp) IsAgentWorking() bool {
+	if m.app == nil || m.app.CoderAgent == nil {
+		return false
+	}
 	return m.app.CoderAgent.IsSessionBusy(m.session.ID)
 }
 
@@ -356,6 +359,7 @@ func (m *messagesCmp) View() string {
 			lipgloss.JoinVertical(
 				lipgloss.Top,
 				m.renderViewport(),
+				m.footer(),
 				m.working(),
 			),
 		)
@@ -430,7 +434,7 @@ func (m *messagesCmp) working() string {
 }
 
 func (m *messagesCmp) helpText() string {
-	if m.app.CoderAgent.IsBusy() {
+	if m.app != nil && m.app.CoderAgent != nil && m.app.CoderAgent.IsBusy() {
 		return "Esc cancel"
 	}
 	text := "/ commands  @ paths  Ctrl+K palette"
@@ -563,8 +567,8 @@ func (m *messagesCmp) SetSize(width, height int) tea.Cmd {
 	}
 	m.width = width
 	m.height = height
-	m.viewport.Width = max(1, width)
-	m.viewport.Height = max(3, height-1)
+	m.viewport.Width = max(1, width-m.scrollbarWidth())
+	m.viewport.Height = max(3, height-2)
 	m.attachments.Width = width + 40
 	m.attachments.Height = 3
 	m.rerender()
@@ -628,7 +632,14 @@ func (m *messagesCmp) renderViewport() string {
 	if m.width <= 0 {
 		return ""
 	}
-	return m.viewport.View()
+	if m.scrollbarWidth() == 0 {
+		return m.viewport.View()
+	}
+	return lipgloss.JoinHorizontal(
+		lipgloss.Top,
+		m.viewport.View(),
+		m.renderScrollbar(),
+	)
 }
 
 func (m *messagesCmp) renderScrollbar() string {
@@ -658,6 +669,13 @@ func (m *messagesCmp) renderScrollbar() string {
 		lines = append(lines, baseStyle.Foreground(color).Render(ch))
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, lines...)
+}
+
+func (m *messagesCmp) scrollbarWidth() int {
+	if m.width < 3 {
+		return 0
+	}
+	return 1
 }
 
 func (m *messagesCmp) footer() string {
