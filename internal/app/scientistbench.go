@@ -753,9 +753,28 @@ func buildScientistBenchWorkerPrompt(
 	b.WriteString("- Use available tools when they materially improve the output.\n")
 	b.WriteString("- Be concrete and evidence-driven. Never fabricate citations, results, or data.\n")
 	b.WriteString("- Your final response must be valid JSON without markdown fences.\n")
-	b.WriteString("- Use this shape: {\"status\":\"succeeded|failed|needs_revision\",\"summary\":\"...\",\"success_signal\":\"...\",\"failure_signal\":\"...\",\"overall_score\":0.0,\"revision_decision\":\"accept|revise\",\"revision_feedback\":[\"specific actionable item 1\",...],\"evidence_summary\":[...],\"citations\":[...],\"risks\":[...],\"ideas\":[...],\"objections\":[...],\"method_plan\":{\"summary\":\"...\",\"pipeline_steps\":[...],\"acceptance_checks\":[...],\"implementation_notes\":[...],\"runtime_hints\":[...]},\"execution\":{\"runtime_id\":\"...\",\"commands\":[...],\"verification_summary\":\"...\",\"verification_passed\":true,\"output_files\":[...],\"log_highlights\":[...]},\"review\":{\"decision\":\"accept|revise|reject\",\"summary\":\"...\",\"strengths\":[...],\"weaknesses\":[...],\"questions\":[...],\"confidence\":0.0,\"readable_paper\":true,\"novel_insight_present\":true,\"code_runs\":true,\"scores\":{\"overall\":0.0,\"idea_quality\":0.0,\"method_soundness\":0.0,\"result_interpretation\":0.0,\"writing_quality\":0.0}},\"comparison\":{\"summary\":\"...\",\"strengths\":[...],\"weaknesses\":[...],\"motivation_alignment\":0.0,\"methodology_alignment\":0.0,\"novelty_alignment\":0.0,\"experimental_alignment\":0.0,\"confidence\":0.0}}\n")
-	b.WriteString("- revision_feedback: set this when status=needs_revision or revision_decision=revise. Each entry must be a specific, actionable instruction (not vague).\n")
-	b.WriteString("- overall_score: set this to the mean review score (0–5) when acting as a reviewer or revision gate.\n")
+
+	// status rules differ by node type to prevent research/analysis agents from
+	// emitting needs_revision (a revision-gate-only concept) which causes
+	// confusing repeated incomplete outputs instead of looping to finish the work.
+	isRevisionGate := node.ID == "node-revision-gate"
+	isReviewNode := node.Type == "review" || node.ID == "node-advisor-review" ||
+		node.ID == "node-judge-review" || node.ID == "node-domain-review" ||
+		node.ID == "node-paper-compare"
+
+	if isRevisionGate {
+		b.WriteString("- status must be \"succeeded\" (paper_quality_acceptable) or \"failed\" (paper_needs_revision).\n")
+		b.WriteString("- Set revision_decision to \"accept\" or \"revise\" and populate revision_feedback with specific items when revising.\n")
+	} else if isReviewNode {
+		b.WriteString("- status must be \"succeeded\" or \"failed\" only. Do NOT use \"needs_revision\".\n")
+	} else {
+		b.WriteString("- status must be \"succeeded\" or \"failed\" only.\n")
+		b.WriteString("- IMPORTANT: If your work is not yet complete, do NOT say complete in the loop controller — say continue and keep working.\n")
+		b.WriteString("- Only output JSON when you are genuinely done with all required steps. Incomplete work = keep looping.\n")
+	}
+
+	b.WriteString("- Use this shape: {\"status\":\"succeeded|failed\",\"summary\":\"...\",\"success_signal\":\"...\",\"failure_signal\":\"...\",\"overall_score\":0.0,\"revision_decision\":\"accept|revise\",\"revision_feedback\":[...],\"evidence_summary\":[...],\"citations\":[...],\"risks\":[...],\"ideas\":[...],\"objections\":[...],\"method_plan\":{\"summary\":\"...\",\"pipeline_steps\":[...],\"acceptance_checks\":[...],\"implementation_notes\":[...],\"runtime_hints\":[...]},\"execution\":{\"runtime_id\":\"...\",\"commands\":[...],\"verification_summary\":\"...\",\"verification_passed\":true,\"output_files\":[...],\"log_highlights\":[...]},\"review\":{\"decision\":\"accept|revise|reject\",\"summary\":\"...\",\"strengths\":[...],\"weaknesses\":[...],\"questions\":[...],\"confidence\":0.0,\"readable_paper\":true,\"novel_insight_present\":true,\"code_runs\":true,\"scores\":{\"overall\":0.0,\"idea_quality\":0.0,\"method_soundness\":0.0,\"result_interpretation\":0.0,\"writing_quality\":0.0}},\"comparison\":{\"summary\":\"...\",\"strengths\":[...],\"weaknesses\":[...],\"motivation_alignment\":0.0,\"methodology_alignment\":0.0,\"novelty_alignment\":0.0,\"experimental_alignment\":0.0,\"confidence\":0.0}}\n")
+	b.WriteString("- overall_score: set to the mean review score (0–5) when acting as reviewer or revision gate.\n")
 	b.WriteString("- Only set success_signal or failure_signal if you are confident it matches the assigned node contract.\n")
 	return strings.TrimSpace(b.String())
 }
