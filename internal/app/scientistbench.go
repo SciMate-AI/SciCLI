@@ -10,6 +10,7 @@ import (
 
 	"github.com/SciMate-AI/scicli/internal/config"
 	"github.com/SciMate-AI/scicli/internal/llm/agent"
+	"github.com/SciMate-AI/scicli/internal/logging"
 	"github.com/SciMate-AI/scicli/internal/orchestrator"
 	runtimex "github.com/SciMate-AI/scicli/internal/runtime"
 	"github.com/SciMate-AI/scicli/internal/scientistbench"
@@ -276,12 +277,12 @@ func (app *App) tryBeginScientistBenchContinuation(caseID string) bool {
 	app.scientistBenchContinuationMu.Lock()
 	defer app.scientistBenchContinuationMu.Unlock()
 	if app.scientistBenchContinuation == nil {
-		app.scientistBenchContinuation = make(map[string]struct{})
+		app.scientistBenchContinuation = make(map[string]int)
 	}
-	if _, exists := app.scientistBenchContinuation[caseID]; exists {
+	if app.scientistBenchContinuation[caseID] > 0 {
 		return false
 	}
-	app.scientistBenchContinuation[caseID] = struct{}{}
+	app.scientistBenchContinuation[caseID] = 1
 	return true
 }
 
@@ -296,6 +297,149 @@ func (app *App) startScientistBenchContinuation(ctx context.Context, caseID stri
 		return app.scientistBenchStarter(ctx, caseID)
 	}
 	return app.StartScientistBenchActiveNodeRun(ctx, caseID)
+}
+
+// launchScientistBenchConcurrentNode schedules a specific node to run in parallel
+// with the current ActiveNode. It does not go through the deduplication gate used
+// by scheduleScientistBenchContinuation so multiple parallel review nodes can
+// execute simultaneously.
+func (app *App) launchScientistBenchConcurrentNode(caseID, nodeID string) {
+	caseID = strings.TrimSpace(caseID)
+	nodeID = strings.TrimSpace(nodeID)
+	if caseID == "" || nodeID == "" || app.ScientistBench == nil || app.Orchestrator == nil {
+		return
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	app.cancelFuncsMutex.Lock()
+	app.watcherCancelFuncs = append(app.watcherCancelFuncs, cancel)
+	app.cancelFuncsMutex.Unlock()
+
+	app.watcherWG.Add(1)
+	go func() {
+		defer app.watcherWG.Done()
+		defer cancel()
+		defer logging.RecoverPanic("scientistbench-concurrent-node", nil)
+
+		_, err := app.startScientistBenchNamedNodeRun(ctx, caseID, nodeID)
+		if err != nil {
+			logging.Warn("Concurrent scientist bench node failed to start", "case_id", caseID, "node_id", nodeID, "error", err)
+		}
+	}()
+}
+
+// startScientistBenchNamedNodeRun is like StartScientistBenchActiveNodeRun but
+// targets a specific node by ID rather than reading GraphState.ActiveNode.
+// This is used to launch concurrent (parallel) review nodes.
+func (app *App) startScientistBenchNamedNodeRun(ctx context.Context, caseID, nodeID string) (ScientistBenchNodeRun, error) {
+	if app.ScientistBench == nil || app.Orchestrator == nil || app.Sessions == nil || app.Messages == nil {
+		return ScientistBenchNodeRun{}, fmt.Errorf("required services are not configured")
+	}
+
+	item, err := app.ScientistBench.Get(ctx, strings.TrimSpace(caseID))
+	if err != nil {
+		return ScientistBenchNodeRun{}, err
+	}
+	if scientistBenchCaseIsTerminal(item) {
+		return ScientistBenchNodeRun{}, fmt.Errorf("case %s is terminal", item.ID)
+	}
+
+	node, ok := app.Orchestrator.GetNode(nodeID)
+	if !ok {
+		return ScientistBenchNodeRun{}, fmt.Errorf("node %s is not registered", nodeID)
+	}
+
+	roleID := orchestrator.FirstAssignedRole(node)
+	if roleID == "" {
+		return ScientistBenchNodeRun{}, fmt.Errorf("node %s has no assigned roles", nodeID)
+	}
+	profile, ok := app.Orchestrator.WorkerProfileForRole(roleID)
+	if !ok {
+		return ScientistBenchNodeRun{}, fmt.Errorf("worker profile for role %s is not registered", roleID)
+	}
+
+	taskSessionID := "sbtask-" + uuid.NewString()
+	taskTitle := strings.TrimSpace(profile.SessionLabel)
+	if taskTitle == "" {
+		taskTitle = "Scientist Bench Worker"
+	}
+	taskTitle = fmt.Sprintf("%s: %s (parallel)", taskTitle, node.ID)
+
+	taskSession, err := app.Sessions.CreateTaskSession(ctx, taskSessionID, item.RootSessionID, taskTitle)
+	if err != nil {
+		return ScientistBenchNodeRun{}, fmt.Errorf("create task session: %w", err)
+	}
+	if app.shouldAutoApproveScientistBenchRoot(item.RootSessionID) {
+		app.Permissions.AutoApproveSession(taskSession.ID)
+	}
+
+	prompt := buildScientistBenchWorkerPrompt(item, node, profile, app.RuntimeRegistry, app.RuntimeExecutor)
+	if app.TaskRuns != nil {
+		app.TaskRuns.Queue(taskSession, prompt)
+	}
+
+	run := scientistbench.RunRecord{
+		ID:               "run-" + uuid.NewString(),
+		SessionID:        taskSession.ID,
+		Role:             roleID,
+		RoleInstance:     fmt.Sprintf("%s#%d", roleID, nextRoleOrdinal(item, roleID)),
+		NodeID:           node.ID,
+		Status:           "queued",
+		StartedAt:        time.Now().Unix(),
+		InputSummary:     truncateScientistBenchText(prompt, maxScientistBenchSummaryLen),
+		TaskRunSessionID: taskSession.ID,
+		TaskRunStatus:    "queued",
+	}
+
+	item = app.captureRuntimePlansForCase(item, node.ID, roleID, run.ID)
+	item, err = app.ScientistBench.UpsertRun(ctx, item.ID, run)
+	if err != nil {
+		return ScientistBenchNodeRun{}, err
+	}
+
+	worker, err := agent.NewAgent(
+		config.AgentTask,
+		app.Sessions,
+		app.Messages,
+		agent.RoleWorkerTools(profile.ToolProfile, app.Permissions, app.History, app.LSPClients, app.Skills),
+		app.Skills,
+		app.TaskRuns,
+	)
+	if err != nil {
+		return ScientistBenchNodeRun{}, fmt.Errorf("create role worker: %w", err)
+	}
+
+	done, err := worker.Run(context.Background(), taskSession.ID, prompt)
+	if err != nil {
+		run.Status = "failed"
+		run.TaskRunStatus = "failed"
+		run.Error = err.Error()
+		run.FinishedAt = time.Now().Unix()
+		_, _ = app.ScientistBench.UpsertRun(context.Background(), item.ID, run)
+		return ScientistBenchNodeRun{}, fmt.Errorf("start role worker: %w", err)
+	}
+
+	_ = app.postScientistBenchLaunch(context.Background(), item, run, "Scientist Bench parallel node started")
+	go app.watchScientistBenchNodeRun(item.ID, run, node, done)
+
+	item, err = app.ScientistBench.Get(ctx, item.ID)
+	if err != nil {
+		return ScientistBenchNodeRun{}, err
+	}
+	updatedRun, ok := findScientistBenchRun(item, run.ID)
+	if !ok {
+		return ScientistBenchNodeRun{}, fmt.Errorf("run %s not found after scheduling", run.ID)
+	}
+	return ScientistBenchNodeRun{Case: item, Run: updatedRun}, nil
+}
+
+func sliceContains(slice []string, value string) bool {
+	for _, v := range slice {
+		if v == value {
+			return true
+		}
+	}
+	return false
 }
 
 func (app *App) shouldAutoApproveScientistBenchRoot(rootSessionID string) bool {
@@ -518,6 +662,10 @@ func (app *App) watchScientistBenchNodeRun(
 	} else if node.ID == "node-aggregate" {
 		signal = scientistBenchAggregateSignal(item)
 	}
+
+	prevActiveNode := item.GraphState.ActiveNode
+	prevConcurrentNodes := append([]string(nil), item.GraphState.ConcurrentNodes...)
+
 	item, err = app.Orchestrator.ApplySignal(item, signal)
 	if err != nil {
 		return
@@ -525,7 +673,18 @@ func (app *App) watchScientistBenchNodeRun(
 	savedItem, _ := app.ScientistBench.Save(ctx, item)
 	_ = app.postScientistBenchNodeResult(context.Background(), savedItem, run)
 	if !scientistBenchCaseIsTerminal(savedItem) {
-		app.scheduleScientistBenchContinuation(caseID)
+		// Only schedule the primary continuation if the active node actually advanced.
+		// Concurrent-node signals don't change ActiveNode; scheduling again would
+		// re-run an already-running node.
+		if savedItem.GraphState.ActiveNode != prevActiveNode {
+			app.scheduleScientistBenchContinuation(caseID)
+		}
+		// Fan out any concurrent nodes that were added by ApplySignal.
+		for _, concNodeID := range savedItem.GraphState.ConcurrentNodes {
+			if !sliceContains(prevConcurrentNodes, concNodeID) {
+				app.launchScientistBenchConcurrentNode(caseID, concNodeID)
+			}
+		}
 	}
 }
 
@@ -592,9 +751,11 @@ func buildScientistBenchWorkerPrompt(
 	b.WriteString("\nExecution contract.\n")
 	b.WriteString("- Work only within your role boundary.\n")
 	b.WriteString("- Use available tools when they materially improve the output.\n")
-	b.WriteString("- Be concrete and evidence-driven.\n")
+	b.WriteString("- Be concrete and evidence-driven. Never fabricate citations, results, or data.\n")
 	b.WriteString("- Your final response must be valid JSON without markdown fences.\n")
-	b.WriteString("- Use this shape: {\"status\":\"succeeded|failed|needs_revision\",\"summary\":\"...\",\"success_signal\":\"...\",\"failure_signal\":\"...\",\"evidence_summary\":[...],\"citations\":[...],\"risks\":[...],\"ideas\":[...],\"objections\":[...],\"method_plan\":{\"summary\":\"...\",\"pipeline_steps\":[...],\"acceptance_checks\":[...],\"implementation_notes\":[...],\"runtime_hints\":[...]},\"execution\":{\"runtime_id\":\"...\",\"commands\":[...],\"verification_summary\":\"...\",\"verification_passed\":true,\"output_files\":[...],\"log_highlights\":[...]},\"review\":{\"decision\":\"...\",\"summary\":\"...\",\"strengths\":[...],\"weaknesses\":[...],\"questions\":[...],\"confidence\":0.0,\"readable_paper\":true,\"novel_insight_present\":true,\"code_runs\":true,\"scores\":{\"overall\":0.0,\"idea_quality\":0.0,\"method_soundness\":0.0,\"result_interpretation\":0.0,\"writing_quality\":0.0}},\"comparison\":{\"summary\":\"...\",\"strengths\":[...],\"weaknesses\":[...],\"motivation_alignment\":0.0,\"methodology_alignment\":0.0,\"novelty_alignment\":0.0,\"experimental_alignment\":0.0,\"confidence\":0.0}}\n")
+	b.WriteString("- Use this shape: {\"status\":\"succeeded|failed|needs_revision\",\"summary\":\"...\",\"success_signal\":\"...\",\"failure_signal\":\"...\",\"overall_score\":0.0,\"revision_decision\":\"accept|revise\",\"revision_feedback\":[\"specific actionable item 1\",...],\"evidence_summary\":[...],\"citations\":[...],\"risks\":[...],\"ideas\":[...],\"objections\":[...],\"method_plan\":{\"summary\":\"...\",\"pipeline_steps\":[...],\"acceptance_checks\":[...],\"implementation_notes\":[...],\"runtime_hints\":[...]},\"execution\":{\"runtime_id\":\"...\",\"commands\":[...],\"verification_summary\":\"...\",\"verification_passed\":true,\"output_files\":[...],\"log_highlights\":[...]},\"review\":{\"decision\":\"accept|revise|reject\",\"summary\":\"...\",\"strengths\":[...],\"weaknesses\":[...],\"questions\":[...],\"confidence\":0.0,\"readable_paper\":true,\"novel_insight_present\":true,\"code_runs\":true,\"scores\":{\"overall\":0.0,\"idea_quality\":0.0,\"method_soundness\":0.0,\"result_interpretation\":0.0,\"writing_quality\":0.0}},\"comparison\":{\"summary\":\"...\",\"strengths\":[...],\"weaknesses\":[...],\"motivation_alignment\":0.0,\"methodology_alignment\":0.0,\"novelty_alignment\":0.0,\"experimental_alignment\":0.0,\"confidence\":0.0}}\n")
+	b.WriteString("- revision_feedback: set this when status=needs_revision or revision_decision=revise. Each entry must be a specific, actionable instruction (not vague).\n")
+	b.WriteString("- overall_score: set this to the mean review score (0–5) when acting as a reviewer or revision gate.\n")
 	b.WriteString("- Only set success_signal or failure_signal if you are confident it matches the assigned node contract.\n")
 	return strings.TrimSpace(b.String())
 }
@@ -879,6 +1040,22 @@ func applyScientistBenchWorkerOutput(
 				item.IdeaModule.AcceptedIdeas = nil
 			}
 		}
+		if run.NodeID == "node-revision-gate" && len(output.RevisionFeedback) > 0 {
+			// Store the gate's distilled feedback as a Review so paper_writer
+			// context injection picks it up during the next revision round.
+			item.Reviews = append(item.Reviews, scientistbench.Review{
+				ID:           "review-gate-" + uuid.NewString(),
+				Type:         scientistbench.ReviewAdvisor,
+				ReviewerRole: "revision_gate",
+				Decision:     output.RevisionDecision,
+				Summary:      output.Summary,
+				Weaknesses:   output.RevisionFeedback,
+				Scores: scientistbench.ReviewScores{
+					Overall: output.OverallScore,
+				},
+				CreatedAt: time.Now().Unix(),
+			})
+		}
 	case "method_planner":
 		if output.MethodPlan != nil {
 			item.IdeaModule.Status = "planned"
@@ -921,7 +1098,7 @@ func sanitizeStrings(items []string) []string {
 
 func artifactKindForNode(node orchestrator.NodeSpec) scientistbench.ArtifactKind {
 	switch node.ID {
-	case "node-research-plan", "node-corpus-retrieval":
+	case "node-research-plan", "node-corpus-retrieval", "node-deep-arxiv-search":
 		return scientistbench.ArtifactCitation
 	case "node-idea-gate":
 		return scientistbench.ArtifactLog
@@ -933,7 +1110,7 @@ func artifactKindForNode(node orchestrator.NodeSpec) scientistbench.ArtifactKind
 		return scientistbench.ArtifactAdvisorReport
 	case "node-judge-review":
 		return scientistbench.ArtifactJudgeReport
-	case "node-domain-review", "node-paper-compare":
+	case "node-domain-review", "node-paper-compare", "node-revision-gate":
 		return scientistbench.ArtifactReview
 	case "node-execution":
 		return scientistbench.ArtifactDockerLog
@@ -946,6 +1123,8 @@ func artifactLabelForNode(node orchestrator.NodeSpec) string {
 	switch node.ID {
 	case "node-research-plan":
 		return "Research Plan"
+	case "node-deep-arxiv-search":
+		return "Deep arXiv Search"
 	case "node-corpus-retrieval":
 		return "Evidence Summary"
 	case "node-idea-gate":
@@ -964,6 +1143,8 @@ func artifactLabelForNode(node orchestrator.NodeSpec) string {
 		return "Domain Expert Review"
 	case "node-paper-compare":
 		return "Paper Comparison Review"
+	case "node-revision-gate":
+		return "Revision Gate Decision"
 	case "node-execution":
 		return "Execution Summary"
 	default:
@@ -1077,6 +1258,57 @@ func appendScientistBenchContextSections(
 			if review.Scores.Overall > 0 {
 				fmt.Fprintf(b, "  Overall score: %.2f\n", review.Scores.Overall)
 			}
+		}
+	}
+
+	// Revision gate context: show all review details + decision logic
+	if node.ID == "node-revision-gate" {
+		maxRevisions := item.GraphState.MaxRevisions
+		if maxRevisions <= 0 {
+			maxRevisions = 2
+		}
+		fmt.Fprintf(b, "\nRevision gate context.\n")
+		fmt.Fprintf(b, "Current revision round: %d / max %d\n", item.GraphState.RevisionRound, maxRevisions)
+		b.WriteString("Decision rule: compute the mean of all review overall_scores.\n")
+		b.WriteString("  If mean >= 3.5: emit paper_quality_acceptable (advance to aggregate).\n")
+		b.WriteString("  If mean < 3.5 AND rounds remain: emit paper_needs_revision.\n")
+		b.WriteString("    Include revision_feedback: a list of specific, actionable items\n")
+		b.WriteString("    that address the most critical weaknesses across all reviewers.\n")
+		b.WriteString("All reviewer feedback for this decision:\n")
+		for _, review := range item.Reviews {
+			fmt.Fprintf(b, "  Reviewer: %s | Score: %.1f | Decision: %s\n",
+				review.ReviewerRole, review.Scores.Overall, review.Decision)
+			for _, w := range review.Weaknesses {
+				fmt.Fprintf(b, "    Weakness: %s\n", w)
+			}
+			for _, q := range review.Questions {
+				fmt.Fprintf(b, "    Question: %s\n", q)
+			}
+		}
+	}
+
+	// Revision feedback injection: paper_writer on rounds > 0 sees all prior weaknesses
+	if profile.RoleID == "paper_writer" && item.GraphState.RevisionRound > 0 {
+		fmt.Fprintf(b, "\nRevision round %d — you MUST address all feedback below.\n", item.GraphState.RevisionRound)
+		b.WriteString("Begin the paper with a comment block: %% Changes in revision N: ...\n")
+		b.WriteString("Do not reduce quality in sections not mentioned in the feedback.\n")
+		anyFeedback := false
+		for _, review := range item.Reviews {
+			if len(review.Weaknesses) == 0 && len(review.Questions) == 0 {
+				continue
+			}
+			anyFeedback = true
+			fmt.Fprintf(b, "\nFeedback from %s reviewer (score %.1f/5):\n",
+				review.ReviewerRole, review.Scores.Overall)
+			for _, w := range review.Weaknesses {
+				fmt.Fprintf(b, "  [weakness] %s\n", w)
+			}
+			for _, q := range review.Questions {
+				fmt.Fprintf(b, "  [question] %s\n", q)
+			}
+		}
+		if !anyFeedback {
+			b.WriteString("  (No specific feedback recorded — improve overall depth and rigor.)\n")
 		}
 	}
 

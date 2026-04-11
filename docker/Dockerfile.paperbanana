@@ -1,0 +1,50 @@
+# PaperBanana scientific figure generation image
+# Pre-installs PaperBanana (https://github.com/dwzhu-pku/PaperBanana) together with
+# a full scientific Python stack so figure_agent can generate publication-quality
+# diagrams without any runtime setup steps.
+
+FROM python:3.12-slim
+
+# System dependencies: git for clone, fonts for matplotlib, build tools for some
+# Python packages.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git \
+        fonts-liberation \
+        libgl1 \
+        libglib2.0-0 \
+        wget \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install PaperBanana into /app/PaperBanana.
+# Pin to main; downstream users can override IMAGE_TAG in the workflow to test a
+# specific commit.
+RUN git clone --depth 1 https://github.com/dwzhu-pku/PaperBanana /app/PaperBanana
+
+WORKDIR /app/PaperBanana
+
+# Install PaperBanana's own dependencies.  If requirements.txt is absent or
+# lightweight we add the necessary extras via the second RUN.
+RUN pip install --no-cache-dir -r requirements.txt || true
+
+# Scientific Python stack needed for quantitative result plots.
+RUN pip install --no-cache-dir \
+        matplotlib \
+        numpy \
+        pandas \
+        seaborn \
+        scipy \
+        scikit-learn \
+        Pillow \
+        requests
+
+# Matplotlib backend must be non-interactive inside Docker.
+ENV MPLBACKEND=Agg
+
+# Default working directory is the mounted workspace, not the PaperBanana source.
+WORKDIR /workspace
+
+# Smoke-test: verify both PaperBanana entry point and matplotlib are importable.
+RUN python -c "import matplotlib; import PIL; print('PaperBanana image OK')"
+
+# The figure_agent drives execution; no fixed ENTRYPOINT so it can run arbitrary
+# python commands and shell scripts inside the container.

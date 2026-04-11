@@ -1,0 +1,37 @@
+# LaTeX runtime image for scicli paper writing
+# Extends texlive/texlive with the specific packages required by the paper_writer
+# agent (algorithm2e, natbib, booktabs, hyperref, etc.) and a latexmk wrapper
+# that produces a compilation report that paper_writer can parse.
+FROM texlive/texlive:latest
+
+# Extra packages not always present in the base texlive image.
+RUN tlmgr update --self --all --no-auto-install 2>/dev/null || true && \
+    tlmgr install \
+        algorithm2e \
+        algorithms \
+        booktabs \
+        caption \
+        cleveref \
+        enumitem \
+        hyperref \
+        microtype \
+        natbib \
+        pgfplots \
+        subcaption \
+        xcolor \
+        2>/dev/null || true
+
+# Python 3 + matplotlib so paper_writer can regenerate a figure inline if needed.
+# --break-system-packages is required on Debian testing (texlive base image)
+# which enforces PEP 668 (externally-managed-environment).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3 \
+        python3-pip \
+    && rm -rf /var/lib/apt/lists/* \
+    && python3 -m pip install --no-cache-dir --break-system-packages matplotlib numpy
+
+# Wrapper script: compile paper.tex and emit a JSON compilation report.
+COPY docker/scripts/scicli-latex-build /usr/local/bin/scicli-latex-build
+RUN chmod +x /usr/local/bin/scicli-latex-build
+
+WORKDIR /workspace

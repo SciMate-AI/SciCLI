@@ -145,9 +145,17 @@ type GraphState struct {
 	CurrentStage   string   `json:"current_stage,omitempty"`
 	ActiveNode     string   `json:"active_node,omitempty"`
 	ActiveRole     string   `json:"active_role,omitempty"`
-	PendingNodes   []string `json:"pending_nodes,omitempty"`
+	// ConcurrentNodes holds the IDs of nodes being run in parallel with ActiveNode.
+	ConcurrentNodes []string `json:"concurrent_nodes,omitempty"`
+	// ReceivedSignals records signals emitted by concurrent nodes for fan-in checks.
+	ReceivedSignals []string `json:"received_signals,omitempty"`
+	// RevisionRound tracks how many paper revision cycles have completed (0 = initial draft).
+	RevisionRound int `json:"revision_round,omitempty"`
+	// MaxRevisions caps the total number of revision cycles (0 means use default of 2).
+	MaxRevisions int `json:"max_revisions,omitempty"`
+	PendingNodes  []string `json:"pending_nodes,omitempty"`
 	CompletedNodes []string `json:"completed_nodes,omitempty"`
-	BlockedNodes   []string `json:"blocked_nodes,omitempty"`
+	BlockedNodes  []string `json:"blocked_nodes,omitempty"`
 }
 
 type IdeaCandidate struct {

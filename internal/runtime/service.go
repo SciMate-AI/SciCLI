@@ -38,9 +38,12 @@ type service struct {
 func NewService() Service {
 	items := []Spec{
 		{
+			// Pre-built image provided by the project; includes OpenFOAM 2412,
+			// Python 3.12, matplotlib, numpy and ParaFoam.
+			// Source: https://hub.docker.com/r/fzj1214/openfoam-env
 			ID:               "docker.openfoam.v1",
 			RuntimeClass:     "docker",
-			Image:            "openfoam/openfoam-org:latest",
+			Image:            "fzj1214/openfoam-env:latest",
 			EntrypointPolicy: "restricted",
 			ResourceLimits:   ResourceLimits{CPU: 8, MemoryGB: 16, TimeoutMinutes: 60},
 			AllowedRoles:     []string{"execution_agent"},
@@ -49,9 +52,12 @@ func NewService() Service {
 			SafetyFlags:      []string{"network_restricted", "readonly_inputs"},
 		},
 		{
+			// Built from docker/Dockerfile.latex; extends texlive with the full set of
+			// packages required by paper_writer (algorithm2e, natbib, booktabs …) and
+			// the scicli-latex-build wrapper that emits a JSON compilation report.
 			ID:               "docker.latexmk.v1",
 			RuntimeClass:     "docker",
-			Image:            "texlive/texlive:latest",
+			Image:            "ghcr.io/scimate-ai/latex-scicli:latest",
 			EntrypointPolicy: "restricted",
 			ResourceLimits:   ResourceLimits{CPU: 4, MemoryGB: 8, TimeoutMinutes: 20},
 			AllowedRoles:     []string{"execution_agent", "paper_writer"},
@@ -80,6 +86,28 @@ func NewService() Service {
 			AllowedNodes:     []string{"node-execution"},
 			ArtifactsEmitted: []string{"result_bundle", "docker_log"},
 			SafetyFlags:      []string{"network_restricted", "readonly_inputs"},
+		},
+		{
+			// Built from docker/Dockerfile.paperbanana.
+			// PaperBanana calls an external LLM API so network access is required.
+			// API keys are injected at runtime from the scicli config / host environment
+			// via EnvTemplate: keys with an empty value are resolved from config then env.
+			ID:               "docker.paperbanana.v1",
+			RuntimeClass:     "docker",
+			Image:            "ghcr.io/scimate-ai/paperbanana:latest",
+			EntrypointPolicy: "open",
+			ResourceLimits:   ResourceLimits{CPU: 4, MemoryGB: 8, TimeoutMinutes: 30},
+			AllowedRoles:     []string{"figure_agent"},
+			AllowedNodes:     []string{"node-analysis-figures"},
+			ArtifactsEmitted: []string{"figure"},
+			// No network_restricted: PaperBanana must reach the LLM API endpoint.
+			// OPENAI_API_KEY is forwarded from the host environment.
+			EnvTemplate: map[string]string{
+				"OPENAI_API_KEY":       "",
+				"OPENAI_BASE_URL":      "",
+				"ANTHROPIC_API_KEY":    "",
+				"PAPERBANANA_MODEL":    "gpt-4o",
+			},
 		},
 	}
 

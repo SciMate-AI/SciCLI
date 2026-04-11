@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -11,6 +12,8 @@ import (
 	"github.com/SciMate-AI/scicli/internal/scientistbench"
 	"github.com/SciMate-AI/scicli/internal/taskrun"
 )
+
+const maxScientistBenchAgentMessageLen = 500
 
 func (app *App) startScientistBenchRunSync(ctx context.Context) {
 	if app.ScientistBench == nil || app.TaskRuns == nil || app.Messages == nil {
@@ -217,4 +220,83 @@ func scientistBenchNodeResultLine(item scientistbench.Case, run scientistbench.R
 		parts = append(parts, "next role "+item.GraphState.ActiveRole)
 	}
 	return strings.Join(parts, " | ")
+}
+
+// startScientistBenchMessageSync subscribes to message creation events and mirrors
+// assistant messages from sub-agent sessions (sbtask-*) to the root session, so
+// users can see what each agent is actually writing as it works.
+func (app *App) startScientistBenchMessageSync(ctx context.Context) {
+	if app.ScientistBench == nil || app.Messages == nil {
+		return
+	}
+
+	watchCtx, cancel := context.WithCancel(ctx)
+	app.cancelFuncsMutex.Lock()
+	app.watcherCancelFuncs = append(app.watcherCancelFuncs, cancel)
+	app.cancelFuncsMutex.Unlock()
+
+	app.watcherWG.Add(1)
+	go func() {
+		defer app.watcherWG.Done()
+		defer logging.RecoverPanic("scientistbench-message-sync", nil)
+
+		sub := app.Messages.Subscribe(watchCtx)
+		for {
+			select {
+			case <-watchCtx.Done():
+				return
+			case event, ok := <-sub:
+				if !ok {
+					return
+				}
+				if event.Type != pubsub.CreatedEvent {
+					continue
+				}
+				msg := event.Payload
+				if !looksLikeScientistBenchTask(msg.SessionID) {
+					continue
+				}
+				if msg.Role != message.Assistant {
+					continue
+				}
+				text := strings.TrimSpace(msg.Content().Text)
+				if text == "" || isScientistBenchStructuredOutput(text) {
+					continue
+				}
+				item, run, ok := app.findScientistBenchRunByTaskSession(watchCtx, msg.SessionID)
+				if !ok {
+					continue
+				}
+				line := scientistBenchAgentMessageLine(item, run, text)
+				if strings.TrimSpace(line) == "" {
+					continue
+				}
+				if err := app.postScientistBenchText(watchCtx, item.RootSessionID, line); err != nil {
+					logging.Warn("Failed to mirror scientist bench agent message", "case_id", item.ID, "session_id", msg.SessionID, "error", err)
+				}
+			}
+		}
+	}()
+}
+
+// isScientistBenchStructuredOutput detects the final JSON WorkerOutput blob that
+// agents emit at the end of their run. We skip mirroring this because it is
+// already captured and summarised by watchScientistBenchNodeRun.
+func isScientistBenchStructuredOutput(text string) bool {
+	return strings.HasPrefix(text, "{") && strings.Contains(text, `"status":`)
+}
+
+// scientistBenchAgentMessageLine formats a single agent turn for display in the
+// root session, prefixed with the agent role so the user knows who is speaking.
+func scientistBenchAgentMessageLine(item scientistbench.Case, run scientistbench.RunRecord, text string) string {
+	role := firstNonEmpty(run.Role, item.GraphState.ActiveRole, "agent")
+	excerpt := truncateWithEllipsis(text, maxScientistBenchAgentMessageLen)
+	return fmt.Sprintf("[%s] %s", role, excerpt)
+}
+
+func truncateWithEllipsis(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "…"
 }

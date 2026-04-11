@@ -537,7 +537,7 @@ func TestScheduleScientistBenchContinuationDeduplicatesCase(t *testing.T) {
 			<-release
 			return ScientistBenchNodeRun{}, nil
 		},
-		scientistBenchContinuation: map[string]struct{}{},
+		scientistBenchContinuation: map[string]int{},
 		ScientistBench:             trueScientistBenchService{},
 		Orchestrator:               orchestrator.NewService(),
 	}

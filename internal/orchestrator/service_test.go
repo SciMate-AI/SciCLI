@@ -62,12 +62,12 @@ func TestWorkerProfileForRole(t *testing.T) {
 	profile, ok := svc.WorkerProfileForRole("research_agent")
 	require.True(t, ok)
 	assert.Equal(t, WorkerToolProfileResearch, profile.ToolProfile)
-	assert.Contains(t, profile.PromptPreamble, "Research Agent")
+	assert.Contains(t, profile.PromptPreamble, "arxiv")
 
 	profile, ok = svc.WorkerProfileForRole("idea_hater")
 	require.True(t, ok)
 	assert.Equal(t, WorkerToolProfileDeliberation, profile.ToolProfile)
-	assert.Contains(t, profile.PromptPreamble, "Idea Hater")
+	assert.Contains(t, profile.PromptPreamble, "reject")
 
 	profile, ok = svc.WorkerProfileForRole("code_agent")
 	require.True(t, ok)
@@ -80,6 +80,7 @@ func TestWorkerProfileForRole(t *testing.T) {
 	profile, ok = svc.WorkerProfileForRole("paper_writer")
 	require.True(t, ok)
 	assert.Equal(t, WorkerToolProfileCode, profile.ToolProfile)
+	assert.Contains(t, profile.PromptPreamble, "LaTeX")
 
 	profile, ok = svc.WorkerProfileForRole("domain_expert_reviewer")
 	require.True(t, ok)

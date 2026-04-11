@@ -88,6 +88,13 @@ type WorkerOutput struct {
 	Execution       *ExecutionPayload  `json:"execution,omitempty"`
 	Review          *ReviewPayload     `json:"review,omitempty"`
 	Comparison      *ComparisonPayload `json:"comparison,omitempty"`
+	// RevisionFeedback contains specific, actionable revision instructions from
+	// the revision-gate node, forwarded to the paper_writer on the next draft round.
+	RevisionFeedback []string `json:"revision_feedback,omitempty"`
+	// RevisionDecision is set by the revision-gate node: "accept" or "revise".
+	RevisionDecision string `json:"revision_decision,omitempty"`
+	// OverallScore is the aggregated quality score (0–5) used by the revision gate.
+	OverallScore float64 `json:"overall_score,omitempty"`
 }
 
 func ParseWorkerOutput(raw string) WorkerOutput {

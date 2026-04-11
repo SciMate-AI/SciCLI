@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -uo pipefail
+TEX=${1:-paper.tex}
+latexmk -pdf -interaction=nonstopmode "$TEX" 2>&1 | tee /tmp/latex.log
+EXIT=$?
+ERRORS=$(grep -c "^!" /tmp/latex.log 2>/dev/null || true)
+ERRORS=${ERRORS:-0}
+WARNINGS=$(grep -c "^LaTeX Warning" /tmp/latex.log 2>/dev/null || true)
+WARNINGS=${WARNINGS:-0}
+PDF=${TEX%.tex}.pdf
+if [ -f "$PDF" ]; then
+    PDF_PATH="$PDF"
+else
+    PDF_PATH=""
+fi
+echo "{\"exit_code\":$EXIT,\"errors\":$ERRORS,\"warnings\":$WARNINGS,\"pdf\":\"$PDF_PATH\"}"

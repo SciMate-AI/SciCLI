@@ -53,7 +53,7 @@ type App struct {
 	watcherWG          sync.WaitGroup
 
 	scientistBenchContinuationMu sync.Mutex
-	scientistBenchContinuation   map[string]struct{}
+	scientistBenchContinuation   map[string]int // number of in-flight continuations per case
 	scientistBenchStarter        func(context.Context, string) (ScientistBenchNodeRun, error)
 }
 
@@ -71,7 +71,7 @@ func New(ctx context.Context, conn *sql.DB) (*App, error) {
 		LSPClients:                 make(map[string]*lsp.Client),
 		Skills:                     skills.NewService(),
 		TaskRuns:                   taskrun.NewService(conn),
-		scientistBenchContinuation: make(map[string]struct{}),
+		scientistBenchContinuation: make(map[string]int),
 	}
 
 	researchSvc, err := research.NewService()
@@ -120,6 +120,7 @@ func New(ctx context.Context, conn *sql.DB) (*App, error) {
 
 	app.startResearchRunSync(ctx)
 	app.startScientistBenchRunSync(ctx)
+	app.startScientistBenchMessageSync(ctx)
 
 	return app, nil
 }
