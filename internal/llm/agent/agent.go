@@ -359,7 +359,7 @@ func (a *agent) processGeneration(ctx context.Context, sessionID, content string
 			availableTools = nil
 		}
 
-		agentMessage, toolResults, err := a.streamAndHandleEvents(ctx, sessionID, requestHistory, availableTools)
+		agentMessage, toolResults, err := a.streamWithRetry(ctx, sessionID, requestHistory, availableTools)
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				agentMessage.AddFinish(message.FinishReasonCanceled)
@@ -417,6 +417,47 @@ func (a *agent) createUserMessage(ctx context.Context, sessionID, content string
 		Role:  message.User,
 		Parts: parts,
 	})
+}
+
+const (
+	maxStreamRetries    = 3
+	streamRetryBaseWait = 2 * time.Second
+)
+
+// streamWithRetry wraps streamAndHandleEvents with exponential-backoff retries
+// for transient network errors (connection resets, EOF, timeouts from the LLM
+// API).  Context cancellation and permission errors are never retried.
+func (a *agent) streamWithRetry(ctx context.Context, sessionID string, msgHistory []message.Message, availableTools []tools.BaseTool) (message.Message, *message.Message, error) {
+	var (
+		msg         message.Message
+		toolResults *message.Message
+		err         error
+	)
+	for attempt := 0; attempt <= maxStreamRetries; attempt++ {
+		if attempt > 0 {
+			wait := streamRetryBaseWait * time.Duration(1<<(attempt-1))
+			logging.Warn("Retrying LLM stream after transient error",
+				"session_id", sessionID, "attempt", attempt, "wait", wait, "error", err)
+			select {
+			case <-ctx.Done():
+				return msg, toolResults, ctx.Err()
+			case <-time.After(wait):
+			}
+		}
+		msg, toolResults, err = a.streamAndHandleEvents(ctx, sessionID, msgHistory, availableTools)
+		if err == nil {
+			return msg, toolResults, nil
+		}
+		// Never retry on explicit cancellation or permission denial.
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, ErrRequestCancelled) {
+			return msg, toolResults, err
+		}
+		// Give up after the last attempt.
+		if attempt == maxStreamRetries {
+			break
+		}
+	}
+	return msg, toolResults, err
 }
 
 func (a *agent) streamAndHandleEvents(ctx context.Context, sessionID string, msgHistory []message.Message, availableTools []tools.BaseTool) (message.Message, *message.Message, error) {

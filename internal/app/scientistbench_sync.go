@@ -249,7 +249,12 @@ func (app *App) startScientistBenchMessageSync(ctx context.Context) {
 				if !ok {
 					return
 				}
-				if event.Type != pubsub.CreatedEvent {
+				// Messages are created empty and updated with each streaming
+				// token. We want the final, complete turn — that is the
+				// UpdatedEvent fired when the provider emits EventStop
+				// (FinishReasonEndTurn) or EventError (FinishReasonError).
+				// CreatedEvents carry empty content and are useless here.
+				if event.Type != pubsub.UpdatedEvent {
 					continue
 				}
 				msg := event.Payload
@@ -257,6 +262,13 @@ func (app *App) startScientistBenchMessageSync(ctx context.Context) {
 					continue
 				}
 				if msg.Role != message.Assistant {
+					continue
+				}
+				// Only forward complete turns, not mid-stream token updates.
+				// ToolUse finish means the LLM called a tool — no prose to
+				// show. Empty finish reason means the stream is still open.
+				fr := msg.FinishReason()
+				if fr == "" || fr == message.FinishReasonToolUse {
 					continue
 				}
 				text := strings.TrimSpace(msg.Content().Text)
