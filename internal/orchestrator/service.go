@@ -60,13 +60,21 @@ type NodeSpec struct {
 	RetryPolicy     RetryPolicy `json:"retry_policy,omitempty"`
 	NextOnSuccess   string      `json:"next_on_success,omitempty"`
 	NextOnFailure   string      `json:"next_on_failure,omitempty"`
-	// ConcurrentSuccessors lists nodes that should be launched in parallel alongside
-	// NextOnSuccess when this node succeeds. They share inputs from completed artifacts
-	// and all contribute signals that RequiredPredecessorSignals nodes await.
+	// ConcurrentSuccessors lists nodes launched in parallel alongside NextOnSuccess.
 	ConcurrentSuccessors []string `json:"concurrent_successors,omitempty"`
 	// RequiredPredecessorSignals lists signals that must all be received before this
-	// node is considered eligible to run. Used to implement fan-in after parallel stages.
+	// node is eligible to run. Used for fan-in after parallel stages.
 	RequiredPredecessorSignals []string `json:"required_predecessor_signals,omitempty"`
+	// DynamicRoutes maps additional signal names → target node IDs that the chief
+	// scientist (or any assigned role) may emit to override the normal NextOnSuccess /
+	// NextOnFailure routing. This is the mechanism by which the CS can dynamically
+	// redirect work to any earlier or later stage when it detects a quality issue.
+	// Example: {"retry_research": "node-corpus-retrieval", "skip_experiment": "node-paper-draft"}
+	DynamicRoutes map[string]string `json:"dynamic_routes,omitempty"`
+	// MaxDynamicRetries caps how many times a DynamicRoute back-jump may repeat
+	// for this node before the system forces the normal forward path instead.
+	// 0 means unlimited (use StageRetries in GraphState to track).
+	MaxDynamicRetries int `json:"max_dynamic_retries,omitempty"`
 }
 
 type Service interface {
@@ -142,15 +150,41 @@ func (s *service) WorkerProfileForRole(id string) (WorkerProfile, bool) {
 			SessionLabel: "Chief Scientist",
 			ToolProfile:  WorkerToolProfileDeliberation,
 			PromptPreamble: strings.TrimSpace(`
-You are the Chief Scientist in a multi-agent scientist benchmark workflow.
-Your responsibilities:
-- Make bounded control decisions based only on prior node outputs and explicit case constraints.
-- Synthesize evidence from all prior stages to decide whether the work advances or needs correction.
-- When acting as revision-gate: read the judge scores, domain review, and comparison review; compute
-  a weighted overall score; if score >= 3.5 out of 5, emit paper_quality_acceptable; otherwise emit
-  paper_needs_revision and include a revision_feedback list with precise, actionable improvements.
-- When acting as aggregator: produce the final case decision with concrete evidence.
-- Never invent data. Ground every decision in the artifacts provided.
+You are the Chief Scientist — the directing intelligence of a multi-agent research pipeline.
+You are NOT just a validator. You are the decision-maker and orchestrator.
+
+YOUR RESPONSIBILITIES vary by which node you are currently running:
+
+1. node-case-intake: Parse the case inputs. Confirm all required fields are present.
+   Emit idea_gate_passed if inputs are valid, invalid_case_input if critically broken.
+
+2. node-idea-gate: Review ideas from idea_maker and objections from idea_hater.
+   Check the pipeline status section — it tells you what evidence is available.
+   Decision rules:
+   - If NO evidence and NO core_idea: emit "research_insufficient" (triggers research retry).
+   - If evidence is thin but a core_idea exists: proceed — generate hypotheses from the
+     core_idea and your domain knowledge. Do not block just because evidence is sparse.
+   - If ideas are weak/derivative after fair debate: emit "idea_gate_rejected".
+   - If at least one strong, testable idea emerged: emit "idea_gate_passed".
+   PRIORITY: lean toward proceeding. A retry costs a full research pass. Use it only
+   when you have literally no grounding for ideation.
+
+3. node-revision-gate: Read all review scores. Compute weighted mean.
+   If mean >= 3.5 → emit "paper_quality_acceptable".
+   If mean < 3.5 AND revision rounds remain → emit "paper_needs_revision" with
+   specific, actionable revision_feedback items.
+
+4. node-aggregate: Synthesize all artifacts into a final case assessment.
+   Emit case_resolved if the paper and experiment meet quality standards.
+   Emit case_not_resolved if there are critical unremedied issues.
+
+DYNAMIC ROUTING: At certain nodes you have special routing signals listed in the
+"Dynamic routing signals" section of your context. Use them sparingly:
+- Only emit a back-routing signal when the quality gap is fundamental, not cosmetic.
+- Each back-route costs a full agent pass; prefer proceeding with available context.
+- The system automatically caps retries to prevent infinite loops.
+
+Always ground decisions in the artifacts listed in your context. Do not invent data.
 `),
 		}, true
 	case "research_agent":
@@ -653,6 +687,32 @@ func (s *service) ApplySignal(item scientistbench.Case, signal string) (scientis
 		item.GraphState.BlockedNodes = appendUnique(item.GraphState.BlockedNodes, current.ID)
 		return s.advanceToNext(item, current.NextOnFailure, signal)
 	default:
+		// Check DynamicRoutes — the chief scientist can emit custom signals that
+		// redirect the pipeline to any registered target node.
+		if targetNodeID, ok := current.DynamicRoutes[signal]; ok {
+			maxRetries := current.MaxDynamicRetries
+			if maxRetries <= 0 {
+				maxRetries = 2 // default cap
+			}
+			if item.GraphState.StageRetries == nil {
+				item.GraphState.StageRetries = make(map[string]int)
+			}
+			retries := item.GraphState.StageRetries[current.ID]
+			if retries >= maxRetries {
+				// Retry budget exhausted — force the normal success path instead
+				// so the pipeline does not loop forever.
+				item.GraphState.CompletedNodes = appendUnique(item.GraphState.CompletedNodes, current.ID)
+				return s.advanceToNext(item, current.NextOnSuccess, current.SuccessSignal)
+			}
+			item.GraphState.StageRetries[current.ID] = retries + 1
+			// Remove the current node from completed so it can run again after the
+			// back-jump target completes.
+			item.GraphState.CompletedNodes = removeFromSlice(item.GraphState.CompletedNodes, current.ID)
+			// Clear concurrent tracking state so the fan-out can restart cleanly.
+			item.GraphState.ConcurrentNodes = nil
+			item.GraphState.ReceivedSignals = nil
+			return s.advanceToNext(item, targetNodeID, signal)
+		}
 		return scientistbench.Case{}, fmt.Errorf("signal %s is not accepted by node %s (concurrent: %v)", signal, current.ID, item.GraphState.ConcurrentNodes)
 	}
 }
@@ -987,6 +1047,10 @@ func defaultNodes() []NodeSpec {
 			FailureSignal: "idea_gate_rejected",
 			RetryPolicy:   RetryPolicy{MaxRetries: 2, RequiresNewEvidence: true},
 			NextOnSuccess: "node-method-plan",
+			// Chief scientist can signal research_insufficient to trigger more research
+			// instead of stopping.  MaxDynamicRetries=1 prevents infinite loops.
+			DynamicRoutes:     map[string]string{"research_insufficient": "node-corpus-retrieval"},
+			MaxDynamicRetries: 1,
 		},
 		{
 			ID:            "node-method-plan",
@@ -999,6 +1063,9 @@ func defaultNodes() []NodeSpec {
 			FailureSignal: "method_underdefined",
 			RetryPolicy:   RetryPolicy{MaxRetries: 2, RequiresNewEvidence: false},
 			NextOnSuccess: "node-implementation",
+			// CS can request a deeper ideation pass if the method is still too vague.
+			DynamicRoutes:     map[string]string{"ideation_insufficient": "node-idea-gate"},
+			MaxDynamicRetries: 1,
 		},
 		{
 			ID:            "node-implementation",
@@ -1011,6 +1078,9 @@ func defaultNodes() []NodeSpec {
 			FailureSignal: "implementation_failed",
 			RetryPolicy:   RetryPolicy{MaxRetries: 2, RequiresNewEvidence: false},
 			NextOnSuccess: "node-execution",
+			// CS can request a method re-plan if code is fundamentally unimplementable.
+			DynamicRoutes:     map[string]string{"replan_needed": "node-method-plan"},
+			MaxDynamicRetries: 1,
 		},
 		{
 			ID:            "node-execution",
@@ -1023,6 +1093,9 @@ func defaultNodes() []NodeSpec {
 			FailureSignal: "code_not_executable",
 			RetryPolicy:   RetryPolicy{MaxRetries: 2, RequiresNewEvidence: false},
 			NextOnSuccess: "node-analysis-figures",
+			// CS can route back to re-implement if execution reveals a design flaw.
+			DynamicRoutes:     map[string]string{"reimplementation_needed": "node-implementation"},
+			MaxDynamicRetries: 1,
 		},
 		{
 			ID:            "node-analysis-figures",

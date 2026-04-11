@@ -661,6 +661,11 @@ func (app *App) watchScientistBenchNodeRun(
 		signal = node.FailureSignal
 	} else if node.ID == "node-aggregate" {
 		signal = scientistBenchAggregateSignal(item)
+	} else if parsed.SuccessSignal != "" {
+		// Check if the agent emitted a DynamicRoute signal. If so, honour it.
+		if _, isDynamic := node.DynamicRoutes[parsed.SuccessSignal]; isDynamic {
+			signal = parsed.SuccessSignal
+		}
 	}
 
 	prevActiveNode := item.GraphState.ActiveNode
@@ -1181,6 +1186,37 @@ func appendScientistBenchContextSections(
 		return
 	}
 
+	// Chief scientist always gets a full pipeline status summary so it knows
+	// exactly what has been completed and what is missing.
+	isCS := profile.RoleID == "chief_scientist"
+	if isCS {
+		b.WriteString("\nPipeline status (completed stages).\n")
+		if len(item.GraphState.CompletedNodes) == 0 {
+			b.WriteString("  (no stages completed yet)\n")
+		} else {
+			for _, n := range item.GraphState.CompletedNodes {
+				fmt.Fprintf(b, "  - %s\n", n)
+			}
+		}
+		if len(item.GraphState.BlockedNodes) > 0 {
+			b.WriteString("Blocked stages: " + strings.Join(item.GraphState.BlockedNodes, ", ") + "\n")
+		}
+		b.WriteString("\nDynamic routing signals you can emit (besides the node success/failure signals):\n")
+		for sig, target := range node.DynamicRoutes {
+			retries := 0
+			if item.GraphState.StageRetries != nil {
+				retries = item.GraphState.StageRetries[node.ID]
+			}
+			max := node.MaxDynamicRetries
+			if max <= 0 {
+				max = 2
+			}
+			fmt.Fprintf(b, "  - \"%s\" → routes back to %s (used %d/%d times)\n", sig, target, retries, max)
+		}
+		b.WriteString("Emit a dynamic signal by setting success_signal to one of the above keys.\n")
+		b.WriteString("If evidence or context is thin but workable, proceed rather than requesting a retry.\n")
+	}
+
 	if evidence := latestEvidenceArtifact(item); evidence != nil {
 		b.WriteString("\nPrior evidence pack.\n")
 		if summary := strings.TrimSpace(evidence.Metadata["summary"]); summary != "" {
@@ -1195,6 +1231,11 @@ func appendScientistBenchContextSections(
 		if evidenceText := strings.TrimSpace(evidence.Metadata["evidence"]); evidenceText != "" {
 			fmt.Fprintf(b, "Evidence bullets: %s\n", evidenceText)
 		}
+	} else if isCS || node.ID == "node-idea-gate" {
+		// No evidence artifact found — tell CS so it can make a decision.
+		b.WriteString("\nEvidence pack status: NO evidence artifacts found from research stages.\n")
+		b.WriteString("You may emit \"research_insufficient\" to request a research retry,\n")
+		b.WriteString("OR proceed using the core_idea and constraints as the basis for ideation.\n")
 	}
 
 	if len(item.IdeaModule.AcceptedIdeas) > 0 {
@@ -1487,7 +1528,9 @@ func (app *App) reconcileScientistBenchRuntimeExecution(
 }
 
 func latestEvidenceArtifact(item scientistbench.Case) *scientistbench.Artifact {
-	for _, artifact := range item.Artifacts {
+	// Iterate newest-first (artifacts are appended in creation order, so reverse).
+	for i := len(item.Artifacts) - 1; i >= 0; i-- {
+		artifact := item.Artifacts[i]
 		if artifact.Kind != scientistbench.ArtifactCitation {
 			continue
 		}

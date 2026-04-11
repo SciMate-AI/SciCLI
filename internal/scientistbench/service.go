@@ -153,9 +153,13 @@ type GraphState struct {
 	RevisionRound int `json:"revision_round,omitempty"`
 	// MaxRevisions caps the total number of revision cycles (0 means use default of 2).
 	MaxRevisions int `json:"max_revisions,omitempty"`
-	PendingNodes  []string `json:"pending_nodes,omitempty"`
+	// StageRetries tracks how many times the chief scientist has dynamically re-routed
+	// back to an earlier stage, keyed by the source node ID. Used to prevent infinite
+	// loops when the CS keeps requesting retries.
+	StageRetries   map[string]int `json:"stage_retries,omitempty"`
+	PendingNodes   []string `json:"pending_nodes,omitempty"`
 	CompletedNodes []string `json:"completed_nodes,omitempty"`
-	BlockedNodes  []string `json:"blocked_nodes,omitempty"`
+	BlockedNodes   []string `json:"blocked_nodes,omitempty"`
 }
 
 type IdeaCandidate struct {
