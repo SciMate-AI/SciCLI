@@ -641,6 +641,28 @@ func (app *App) watchScientistBenchNodeRun(
 		return
 	}
 
+	// System-layer evidence enforcement: corpus-retrieval MUST produce at least
+	// one citation and one evidence bullet. If the agent completed without these,
+	// treat the run as a failure so RetryPolicy kicks in and the node reruns.
+	if node.ID == "node-corpus-retrieval" && result.Error == nil {
+		if len(parsed.Citations) == 0 && len(parsed.EvidenceSummary) == 0 {
+			run.Error = "evidence enforcement: agent completed without any citations or evidence_summary entries; forcing retry"
+			run.Status = "failed"
+			run.TaskRunStatus = "failed"
+			run.FinishedAt = time.Now().Unix()
+			item, _ = app.ScientistBench.UpsertRun(ctx, caseID, run)
+			_ = app.postScientistBenchText(context.Background(), item.RootSessionID,
+				"[research_agent] Evidence enforcement: no citations or evidence_summary produced — retrying corpus retrieval.")
+			item, _ = app.Orchestrator.ApplySignal(item, node.FailureSignal)
+			savedItem, _ := app.ScientistBench.Save(ctx, item)
+			_ = app.postScientistBenchNodeResult(context.Background(), savedItem, run)
+			if !scientistBenchCaseIsTerminal(savedItem) {
+				app.scheduleScientistBenchContinuation(caseID)
+			}
+			return
+		}
+	}
+
 	nextRole, nextErr := nextPendingRoleForNode(item, node)
 	if nextErr == nil && nextRole != "" {
 		item.GraphState.ActiveRole = nextRole
@@ -1122,7 +1144,7 @@ func sanitizeStrings(items []string) []string {
 
 func artifactKindForNode(node orchestrator.NodeSpec) scientistbench.ArtifactKind {
 	switch node.ID {
-	case "node-research-plan", "node-corpus-retrieval", "node-deep-arxiv-search":
+	case "node-research-plan", "node-corpus-retrieval":
 		return scientistbench.ArtifactCitation
 	case "node-idea-gate":
 		return scientistbench.ArtifactLog
@@ -1147,8 +1169,6 @@ func artifactLabelForNode(node orchestrator.NodeSpec) string {
 	switch node.ID {
 	case "node-research-plan":
 		return "Research Plan"
-	case "node-deep-arxiv-search":
-		return "Deep arXiv Search"
 	case "node-corpus-retrieval":
 		return "Evidence Summary"
 	case "node-idea-gate":

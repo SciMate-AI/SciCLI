@@ -193,67 +193,59 @@ Always ground decisions in the artifacts listed in your context. Do not invent d
 			SessionLabel: "Research Agent",
 			ToolProfile:  WorkerToolProfileResearch,
 			PromptPreamble: strings.TrimSpace(`
-You are the Deep Research Agent in a multi-agent scientific paper writing workflow.
-Your task: systematic, evidence-grounded literature retrieval and synthesis.
+You are the Research Agent. Your sole job in this session is to produce a complete,
+grounded evidence pack that the rest of the pipeline will build on.
 
-COMPLETION RULE (read first):
-Do NOT output your final JSON until ALL of the following are done:
-  1. At least 3 different search queries executed across Semantic Scholar AND arXiv.
-  2. At least 8 unique papers retrieved with title, year, abstract.
-  3. At least 3 papers read at full-abstract or method-section depth.
-  4. A structured comparison table written (this work vs. baselines).
-  5. A novelty gap analysis written.
-If any step is incomplete, output <agent_loop_status>continue</agent_loop_status> and keep working.
-NEVER output status="needs_revision". Output status="succeeded" when done, "failed" only if APIs are totally unreachable.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+MANDATORY OUTPUT REQUIREMENTS (enforced by the system)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+The system will REJECT your output and force a retry if either field is missing:
 
-SEARCH TOOLS (use all three, in this order):
+  citations[]       — at least 5 entries, each in the form:
+                      "Authors. Year. Title. Venue. URL. 1-sentence key claim."
 
-1. web_search tool (fastest — use first for broad discovery):
-   web_search(query="attention mechanism transformer survey", max_results=15)
-   - No API key needed. Returns titles, URLs, snippets from DuckDuckGo.
-   - Run 3–4 queries with different angles.
-   - After getting URLs, use fetch to read the full pages that look relevant.
+  evidence_summary[] — at least 5 bullets covering:
+                       • what prior methods do and their metric results
+                       • the key gap or limitation this case targets
+                       • available datasets and evaluation protocols
+                       • reproducibility risks
 
-2. Semantic Scholar API (best for academic papers — structured JSON, citation counts):
+Do NOT emit your final JSON until both arrays have ≥5 entries. If you haven't
+collected enough yet, output <agent_loop_status>continue</agent_loop_status>
+and keep searching.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SEARCH STRATEGY (use all three sources)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. web_search tool — broad first pass:
+   web_search(query="<topic> survey benchmark", max_results=15)
+   Run 3–4 queries with different angles. After getting URLs, fetch the most
+   relevant pages to extract paper titles, authors, and key claims.
+
+2. Semantic Scholar API — structured academic search (preferred for papers):
    https://api.semanticscholar.org/graph/v1/paper/search?query=KEYWORDS&fields=title,abstract,year,authors,citationCount,externalIds&limit=20
-   Paper details: https://api.semanticscholar.org/graph/v1/paper/PAPER_ID?fields=title,abstract,year,authors,references
-   - Replace spaces with + in KEYWORDS. No API key needed for basic use.
-   - If you get 429 errors, slow down: wait 2 seconds between requests.
-   - SEMANTIC_SCHOLAR_API_KEY env var (if set) is injected automatically — raises limit to 1000 req/min.
-   - citationCount helps identify landmark papers.
+   - No API key needed for basic use; SEMANTIC_SCHOLAR_API_KEY is auto-injected if set.
+   - If you get 429, wait 2 seconds and retry (handled automatically).
+   - Sort by citationCount to find landmark papers first.
+   - Run at least 3 queries covering: method name, task/benchmark, and key baselines.
 
-3. arXiv API (for preprints, especially ML/CS):
+3. arXiv API — recent preprints:
    https://export.arxiv.org/api/query?search_query=TERMS&max_results=15&sortBy=relevance
    - Field prefixes: ti: (title), abs: (abstract), cat: (e.g. cs.LG)
 
-WORKFLOW:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+WORKFLOW
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Step 1 — SEARCH (do not skip or abbreviate):
-  Run at least 3 queries on Semantic Scholar covering:
-    - The core method/technique name
-    - The evaluation task and dataset
-    - Key baselines and comparison methods
-  Run at least 2 queries on arXiv for recent preprints.
+Step 1 — SEARCH: run ≥3 Semantic Scholar queries + ≥2 web_search queries.
+Step 2 — RETRIEVE: for the top 10 results, collect title/year/abstract/URL.
+Step 3 — DEEP-READ: for the 3–5 most relevant, fetch the full abstract page
+          or PDF landing page to extract method details and metric numbers.
+Step 4 — SYNTHESIZE: write the comparison table and novelty gap analysis
+          inline in your summary, then populate citations[] and evidence_summary[].
 
-Step 2 — RETRIEVE:
-  For the top 10 most relevant papers (by citation count + relevance):
-    - Record: title, authors, year, venue, abstract, URL
-    - Mark as primary / secondary / baseline
-
-Step 3 — DEEP-READ:
-  For the 3–5 most relevant papers, fetch the full abstract page or PDF landing page.
-  Extract: method description, experimental setup, key metrics, limitations.
-
-Step 4 — SYNTHESIZE (required before outputting JSON):
-  Produce:
-  - citations[]: each entry = "Author et al. YEAR. Title. URL. Key point."
-  - evidence_summary[]: 5–8 bullet points of the most important findings
-  - risks[]: reproducibility risks, missing baselines, data availability issues
-  - A comparison table (in the summary field): | Method | Metric | Dataset | Year |
-
-Hard constraints:
-- Only cite papers you actually fetched. Never hallucinate paper titles or results.
-- If a search returns 0 results, try different keywords before giving up.
+Never fabricate citations. Only list papers you actually fetched.
 `),
 		}, true
 	case "idea_maker":
@@ -1009,20 +1001,7 @@ func defaultNodes() []NodeSpec {
 			SuccessSignal: "research_plan_ready",
 			FailureSignal: "planning_failed",
 			RetryPolicy:   RetryPolicy{MaxRetries: 2, RequiresNewEvidence: false},
-			NextOnSuccess: "node-deep-arxiv-search",
-		},
-		{
-			ID:            "node-deep-arxiv-search",
-			Type:          "retrieval",
-			Stage:         "deep_research",
-			AssignedRoles: []string{"research_agent"},
-			Inputs:        []string{"research_plan"},
-			Outputs:       []string{"arxiv_pack"},
-			SuccessSignal: "arxiv_ready",
-			FailureSignal: "arxiv_unavailable",
-			RetryPolicy:   RetryPolicy{MaxRetries: 1, RequiresNewEvidence: false},
 			NextOnSuccess: "node-corpus-retrieval",
-			NextOnFailure: "node-corpus-retrieval", // arxiv failure is non-blocking
 		},
 		{
 			ID:            "node-corpus-retrieval",
@@ -1033,7 +1012,10 @@ func defaultNodes() []NodeSpec {
 			Outputs:       []string{"evidence_pack", "citation_bundle"},
 			SuccessSignal: "evidence_ready",
 			FailureSignal: "missing_sources",
-			RetryPolicy:   RetryPolicy{MaxRetries: 2, RequiresNewEvidence: true},
+			// High retry budget because evidence is mandatory — the orchestrator
+			// also validates at the application layer and forces a retry if
+			// citations[] or evidence_summary[] are empty.
+			RetryPolicy:   RetryPolicy{MaxRetries: 3, RequiresNewEvidence: true},
 			NextOnSuccess: "node-idea-gate",
 		},
 		{
