@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -154,9 +155,49 @@ func (t *fetchTool) Run(ctx context.Context, call ToolCall) (ToolResponse, error
 
 	req.Header.Set("User-Agent", "scicli/1.0")
 
-	resp, err := client.Do(req)
-	if err != nil {
-		return ToolResponse{}, fmt.Errorf("failed to fetch URL: %w", err)
+	// Inject Semantic Scholar API key when available — raises rate limit from
+	// ~1 req/s to 1000 req/min for api.semanticscholar.org endpoints.
+	if ssKey := os.Getenv("SEMANTIC_SCHOLAR_API_KEY"); ssKey != "" &&
+		strings.Contains(params.URL, "semanticscholar.org") {
+		req.Header.Set("x-api-key", ssKey)
+	}
+
+	// Execute with automatic retry on 429 (rate-limited) using the Retry-After
+	// header value when present, falling back to exponential backoff.
+	const maxFetchRetries = 3
+	var resp *http.Response
+	for attempt := 0; attempt <= maxFetchRetries; attempt++ {
+		var doReq *http.Request
+		doReq, err = http.NewRequestWithContext(ctx, "GET", params.URL, nil)
+		if err != nil {
+			return ToolResponse{}, fmt.Errorf("failed to create request: %w", err)
+		}
+		doReq.Header = req.Header.Clone()
+
+		resp, err = client.Do(doReq)
+		if err != nil {
+			if attempt < maxFetchRetries {
+				continue
+			}
+			return ToolResponse{}, fmt.Errorf("failed to fetch URL: %w", err)
+		}
+
+		if resp.StatusCode == http.StatusTooManyRequests && attempt < maxFetchRetries {
+			resp.Body.Close()
+			wait := time.Duration(1<<attempt) * time.Second // 1s, 2s, 4s
+			if ra := resp.Header.Get("Retry-After"); ra != "" {
+				if secs, parseErr := time.ParseDuration(ra + "s"); parseErr == nil {
+					wait = secs
+				}
+			}
+			select {
+			case <-ctx.Done():
+				return ToolResponse{}, ctx.Err()
+			case <-time.After(wait):
+			}
+			continue
+		}
+		break // success or non-retryable status
 	}
 	defer resp.Body.Close()
 

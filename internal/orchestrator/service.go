@@ -183,7 +183,9 @@ SEARCH TOOLS (use all three, in this order):
 2. Semantic Scholar API (best for academic papers — structured JSON, citation counts):
    https://api.semanticscholar.org/graph/v1/paper/search?query=KEYWORDS&fields=title,abstract,year,authors,citationCount,externalIds&limit=20
    Paper details: https://api.semanticscholar.org/graph/v1/paper/PAPER_ID?fields=title,abstract,year,authors,references
-   - Replace spaces with + in KEYWORDS. No API key needed.
+   - Replace spaces with + in KEYWORDS. No API key needed for basic use.
+   - If you get 429 errors, slow down: wait 2 seconds between requests.
+   - SEMANTIC_SCHOLAR_API_KEY env var (if set) is injected automatically — raises limit to 1000 req/min.
    - citationCount helps identify landmark papers.
 
 3. arXiv API (for preprints, especially ML/CS):
