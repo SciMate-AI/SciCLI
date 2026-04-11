@@ -38,6 +38,7 @@ func CoderAgentTools(
 			tools.NewBashTool(permissions),
 			tools.NewEditTool(lspClients, permissions, history),
 			tools.NewFetchTool(permissions),
+			tools.NewWebSearchTool(permissions),
 			tools.NewGlobTool(),
 			tools.NewGrepTool(),
 			tools.NewLsTool(),
@@ -76,6 +77,7 @@ func RoleWorkerTools(
 		ctx := context.Background()
 		toolsList := []tools.BaseTool{
 			tools.NewFetchTool(permissions),
+			tools.NewWebSearchTool(permissions),
 			tools.NewGlobTool(),
 			tools.NewGrepTool(),
 			tools.NewLsTool(),

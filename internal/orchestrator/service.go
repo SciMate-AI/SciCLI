@@ -172,21 +172,23 @@ Do NOT output your final JSON until ALL of the following are done:
 If any step is incomplete, output <agent_loop_status>continue</agent_loop_status> and keep working.
 NEVER output status="needs_revision". Output status="succeeded" when done, "failed" only if APIs are totally unreachable.
 
-SEARCH TOOLS (use both, in this order):
+SEARCH TOOLS (use all three, in this order):
 
-1. Semantic Scholar API (preferred — free, structured JSON, fast):
-   Search:
-     https://api.semanticscholar.org/graph/v1/paper/search?query=KEYWORDS&fields=title,abstract,year,authors,citationCount,externalIds&limit=20
-   Paper details (for a specific paper ID):
-     https://api.semanticscholar.org/graph/v1/paper/PAPER_ID?fields=title,abstract,year,authors,references,citations
+1. web_search tool (fastest — use first for broad discovery):
+   web_search(query="attention mechanism transformer survey", max_results=15)
+   - No API key needed. Returns titles, URLs, snippets from DuckDuckGo.
+   - Run 3–4 queries with different angles.
+   - After getting URLs, use fetch to read the full pages that look relevant.
+
+2. Semantic Scholar API (best for academic papers — structured JSON, citation counts):
+   https://api.semanticscholar.org/graph/v1/paper/search?query=KEYWORDS&fields=title,abstract,year,authors,citationCount,externalIds&limit=20
+   Paper details: https://api.semanticscholar.org/graph/v1/paper/PAPER_ID?fields=title,abstract,year,authors,references
    - Replace spaces with + in KEYWORDS. No API key needed.
-   - Run 3–5 queries with different keyword angles.
    - citationCount helps identify landmark papers.
 
-2. arXiv API (for preprints and ML papers):
+3. arXiv API (for preprints, especially ML/CS):
    https://export.arxiv.org/api/query?search_query=TERMS&max_results=15&sortBy=relevance
-   - Use field prefixes: ti: (title), abs: (abstract), cat: (category, e.g. cs.LG)
-   - Example: ti:attention+AND+cat:cs.LG
+   - Field prefixes: ti: (title), abs: (abstract), cat: (e.g. cs.LG)
 
 WORKFLOW:
 
