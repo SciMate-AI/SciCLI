@@ -35,6 +35,9 @@ function cleanTemp() {
 
 function ensureLauncherScript() {
   if (fs.existsSync(launcherPath)) {
+    if (process.platform !== "win32") {
+      fs.chmodSync(launcherPath, 0o755);
+    }
     return;
   }
 
