@@ -48,18 +48,21 @@ type WorkerProfile struct {
 }
 
 type NodeSpec struct {
-	ID              string      `json:"node_id"`
-	Type            string      `json:"node_type,omitempty"`
-	Stage           string      `json:"stage,omitempty"`
-	EntryConditions []string    `json:"entry_conditions,omitempty"`
-	AssignedRoles   []string    `json:"assigned_roles,omitempty"`
-	Inputs          []string    `json:"inputs,omitempty"`
-	Outputs         []string    `json:"outputs,omitempty"`
-	SuccessSignal   string      `json:"success_signal,omitempty"`
-	FailureSignal   string      `json:"failure_signal,omitempty"`
-	RetryPolicy     RetryPolicy `json:"retry_policy,omitempty"`
-	NextOnSuccess   string      `json:"next_on_success,omitempty"`
-	NextOnFailure   string      `json:"next_on_failure,omitempty"`
+	ID              string   `json:"node_id"`
+	Type            string   `json:"node_type,omitempty"`
+	Stage           string   `json:"stage,omitempty"`
+	EntryConditions []string `json:"entry_conditions,omitempty"`
+	AssignedRoles   []string `json:"assigned_roles,omitempty"`
+	// RoleDependencies expresses an intra-node role DAG. A role becomes runnable
+	// only after all listed predecessor roles have completed successfully.
+	RoleDependencies map[string][]string `json:"role_dependencies,omitempty"`
+	Inputs           []string            `json:"inputs,omitempty"`
+	Outputs          []string            `json:"outputs,omitempty"`
+	SuccessSignal    string              `json:"success_signal,omitempty"`
+	FailureSignal    string              `json:"failure_signal,omitempty"`
+	RetryPolicy      RetryPolicy         `json:"retry_policy,omitempty"`
+	NextOnSuccess    string              `json:"next_on_success,omitempty"`
+	NextOnFailure    string              `json:"next_on_failure,omitempty"`
 	// ConcurrentSuccessors lists nodes launched in parallel alongside NextOnSuccess.
 	ConcurrentSuccessors []string `json:"concurrent_successors,omitempty"`
 	// RequiredPredecessorSignals lists signals that must all be received before this
@@ -667,6 +670,9 @@ func (s *service) ApplySignal(item scientistbench.Case, signal string) (scientis
 	switch signal {
 	case current.SuccessSignal:
 		item.GraphState.CompletedNodes = appendUnique(item.GraphState.CompletedNodes, current.ID)
+		if item.GraphState.NodeRetries != nil {
+			delete(item.GraphState.NodeRetries, current.ID)
+		}
 		// Fan out concurrent successors into ConcurrentNodes so the app can
 		// schedule them in parallel alongside the primary NextOnSuccess node.
 		for _, concID := range current.ConcurrentSuccessors {
@@ -676,6 +682,21 @@ func (s *service) ApplySignal(item scientistbench.Case, signal string) (scientis
 		item.GraphState.ReceivedSignals = appendUnique(item.GraphState.ReceivedSignals, signal)
 		return s.advanceToNext(item, current.NextOnSuccess, signal)
 	case current.FailureSignal:
+		if current.RetryPolicy.MaxRetries > 0 {
+			if item.GraphState.NodeRetries == nil {
+				item.GraphState.NodeRetries = make(map[string]int)
+			}
+			retries := item.GraphState.NodeRetries[current.ID]
+			if retries < current.RetryPolicy.MaxRetries {
+				item.GraphState.NodeRetries[current.ID] = retries + 1
+				item.GraphState.BlockedNodes = removeFromSlice(item.GraphState.BlockedNodes, current.ID)
+				item.GraphState.ConcurrentNodes = nil
+				item.GraphState.ReceivedSignals = nil
+				item.GraphState.PendingNodes = s.pendingNodes(current.ID, item.GraphState.CompletedNodes, item.GraphState.BlockedNodes)
+				item.Status = scientistbench.StatusRunning
+				return item, nil
+			}
+		}
 		item.GraphState.BlockedNodes = appendUnique(item.GraphState.BlockedNodes, current.ID)
 		return s.advanceToNext(item, current.NextOnFailure, signal)
 	default:
@@ -753,6 +774,9 @@ func (s *service) advanceToNext(item scientistbench.Case, nextNodeID string, sig
 	nextNode, ok := s.GetNode(nextNodeID)
 	if !ok {
 		return scientistbench.Case{}, fmt.Errorf("next node %s is not registered", nextNodeID)
+	}
+	if item.GraphState.NodeRetries != nil {
+		delete(item.GraphState.NodeRetries, nextNode.ID)
 	}
 
 	// Fan-in check: if the next node requires predecessor signals, only advance
@@ -1023,6 +1047,9 @@ func defaultNodes() []NodeSpec {
 			Type:          "debate_gate",
 			Stage:         "ideation",
 			AssignedRoles: []string{"idea_maker", "idea_hater", "chief_scientist"},
+			RoleDependencies: map[string][]string{
+				"chief_scientist": {"idea_maker", "idea_hater"},
+			},
 			Inputs:        []string{"evidence_pack", "core_idea"},
 			Outputs:       []string{"accepted_idea_set", "rejected_idea_set"},
 			SuccessSignal: "idea_gate_passed",

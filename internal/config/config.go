@@ -1431,6 +1431,44 @@ func SetSkillDisabled(skillID string, disabled bool) error {
 	})
 }
 
+func SetMCPServer(name string, server MCPServer, overwrite bool) error {
+	if cfg == nil {
+		return fmt.Errorf("config not loaded")
+	}
+
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("mcp server name is required")
+	}
+	if strings.TrimSpace(server.Command) == "" && strings.TrimSpace(server.URL) == "" {
+		return fmt.Errorf("mcp server command or url is required")
+	}
+	if server.Type == "" {
+		server.Type = MCPStdio
+	}
+	if !overwrite {
+		if _, exists := cfg.MCPServers[name]; exists {
+			return fmt.Errorf("mcp server %q already exists", name)
+		}
+	}
+	if cfg.MCPServers == nil {
+		cfg.MCPServers = make(map[string]MCPServer)
+	}
+	cfg.MCPServers[name] = server
+
+	return updateCfgFile(func(fileCfg *Config) {
+		if fileCfg.MCPServers == nil {
+			fileCfg.MCPServers = make(map[string]MCPServer)
+		}
+		if !overwrite {
+			if _, exists := fileCfg.MCPServers[name]; exists {
+				return
+			}
+		}
+		fileCfg.MCPServers[name] = server
+	})
+}
+
 // Tries to load Github token from all possible locations
 func LoadGitHubToken() (string, error) {
 	// First check environment variable

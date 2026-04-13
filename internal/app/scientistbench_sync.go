@@ -50,6 +50,9 @@ func (app *App) startScientistBenchRunSync(ctx context.Context) {
 				if !ok {
 					continue
 				}
+				if toolName := strings.TrimSpace(payload.ToolName); toolName != "" {
+					_ = app.recordScientistBenchToolCall(watchCtx, item.ID, run.ID, toolName, string(payload.Status))
+				}
 				line := scientistBenchTaskEventLine(item, run, payload)
 				if strings.TrimSpace(line) == "" {
 					continue
@@ -304,6 +307,43 @@ func scientistBenchAgentMessageLine(item scientistbench.Case, run scientistbench
 	role := firstNonEmpty(run.Role, item.GraphState.ActiveRole, "agent")
 	excerpt := truncateWithEllipsis(text, maxScientistBenchAgentMessageLen)
 	return fmt.Sprintf("[%s] %s", role, excerpt)
+}
+
+func (app *App) recordScientistBenchToolCall(ctx context.Context, caseID string, runID string, toolName string, taskStatus string) error {
+	if app.ScientistBench == nil {
+		return nil
+	}
+	toolName = strings.TrimSpace(toolName)
+	taskStatus = strings.TrimSpace(taskStatus)
+	if strings.TrimSpace(caseID) == "" || strings.TrimSpace(runID) == "" || toolName == "" {
+		return nil
+	}
+	_, err := app.ScientistBench.MutateCase(ctx, caseID, func(item *scientistbench.Case) error {
+		run, ok := findScientistBenchRun(*item, runID)
+		if !ok {
+			return nil
+		}
+		run.ToolCalls = appendUniqueString(run.ToolCalls, toolName)
+		if taskStatus != "" {
+			run.TaskRunStatus = taskStatus
+		}
+		item.Runs = upsertScientistBenchRunLocal(item.Runs, run)
+		return nil
+	})
+	return err
+}
+
+func appendUniqueString(items []string, value string) []string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return items
+	}
+	for _, item := range items {
+		if item == value {
+			return items
+		}
+	}
+	return append(items, value)
 }
 
 func truncateWithEllipsis(s string, max int) string {

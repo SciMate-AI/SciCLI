@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -16,6 +17,7 @@ import (
 	runtimex "github.com/SciMate-AI/scicli/internal/runtime"
 	"github.com/SciMate-AI/scicli/internal/scientistbench"
 	"github.com/SciMate-AI/scicli/internal/session"
+	"github.com/SciMate-AI/scicli/internal/skills"
 	"github.com/SciMate-AI/scicli/internal/taskrun"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -27,6 +29,35 @@ type stubRuntimeRunner struct {
 
 func (s stubRuntimeRunner) RunPlan(context.Context, runtimex.Plan, runtimex.RunRequest) runtimex.RunResult {
 	return s.result
+}
+
+type stubSkillService struct {
+	items       []skills.Skill
+	recommended []skills.Skill
+}
+
+func (s stubSkillService) List(context.Context) ([]skills.Skill, error) {
+	return s.items, nil
+}
+
+func (s stubSkillService) Recommend(context.Context, string, int) ([]skills.Skill, error) {
+	return s.recommended, nil
+}
+
+func (s stubSkillService) Activate(context.Context, string, string) (skills.Skill, error) {
+	return skills.Skill{}, nil
+}
+
+func (s stubSkillService) Install(context.Context, string) (skills.Skill, error) {
+	return skills.Skill{}, nil
+}
+
+func (s stubSkillService) Uninstall(context.Context, string) error {
+	return nil
+}
+
+func (s stubSkillService) Active(string) []skills.Skill {
+	return nil
 }
 
 func TestNextPendingRoleForNode(t *testing.T) {
@@ -120,7 +151,7 @@ func TestBuildScientistBenchWorkerPromptIncludesEvidenceAndIdeas(t *testing.T) {
 	node := orchestrator.NodeSpec{ID: "node-method-plan", Stage: "method_planning"}
 	profile := orchestrator.WorkerProfile{RoleID: "method_planner", PromptPreamble: "Method planner preamble"}
 
-	prompt := buildScientistBenchWorkerPrompt(item, node, profile, nil, nil)
+	prompt := buildScientistBenchWorkerPrompt(item, node, profile, nil, nil, nil)
 	assert.True(t, strings.Contains(prompt, "Found 18 relevant papers"))
 	assert.True(t, strings.Contains(prompt, "Idea A"))
 	assert.True(t, strings.Contains(prompt, "Novelty may be weak"))
@@ -143,10 +174,79 @@ func TestBuildScientistBenchWorkerPromptIncludesMethodPlan(t *testing.T) {
 	node := orchestrator.NodeSpec{ID: "node-implementation", Stage: "implementation"}
 	profile := orchestrator.WorkerProfile{RoleID: "code_agent", PromptPreamble: "Code agent preamble"}
 
-	prompt := buildScientistBenchWorkerPrompt(item, node, profile, nil, nil)
+	prompt := buildScientistBenchWorkerPrompt(item, node, profile, nil, nil, nil)
 	assert.True(t, strings.Contains(prompt, "Train a hybrid encoder"))
 	assert.True(t, strings.Contains(prompt, "encode data | optimize ranking loss"))
 	assert.True(t, strings.Contains(prompt, "use small batch smoke test first"))
+}
+
+func TestBuildScientistBenchWorkerPromptIncludesNormalizedReferenceBundle(t *testing.T) {
+	refs := []orchestrator.ReferencePayload{
+		{
+			Key:                "smith2024",
+			Title:              "Structured Citation Grounding",
+			Authors:            []string{"Alice Smith", "Bob Jones"},
+			Year:               2024,
+			Venue:              "ICML",
+			URL:                "https://example.com/paper",
+			ZoteroKey:          "ABCD1234",
+			FormattedReference: "Smith, A., & Jones, B. (2024). Structured Citation Grounding. ICML.",
+			BibTeX:             "@inproceedings{smith2024,title={Structured Citation Grounding}}",
+			KeyClaim:           "Normalizing references reduces citation errors.",
+		},
+	}
+	rawRefs, err := json.Marshal(refs)
+	require.NoError(t, err)
+
+	item := scientistbench.Case{
+		Artifacts: []scientistbench.Artifact{
+			{
+				Kind: scientistbench.ArtifactCitation,
+				Metadata: map[string]string{
+					"summary":              "Collected normalized references",
+					"references_json":      string(rawRefs),
+					"citation_keys":        "smith2024",
+					"bibtex_bundle":        refs[0].BibTeX,
+					"formatted_references": refs[0].FormattedReference,
+				},
+			},
+		},
+	}
+	node := orchestrator.NodeSpec{ID: "node-paper-draft", Stage: "paper_generation"}
+	profile := orchestrator.WorkerProfile{RoleID: "paper_writer", PromptPreamble: "Paper writer preamble"}
+
+	prompt := buildScientistBenchWorkerPrompt(item, node, profile, nil, nil, nil)
+	assert.Contains(t, prompt, "Structured Citation Grounding")
+	assert.Contains(t, prompt, "smith2024")
+	assert.Contains(t, prompt, "@inproceedings{smith2024")
+	assert.Contains(t, prompt, "Create references.bib")
+}
+
+func TestBuildScientistBenchWorkerPromptIncludesSkillRecommendations(t *testing.T) {
+	item := scientistbench.Case{
+		Title: "CRISPR off-target analysis",
+		Inputs: scientistbench.Inputs{
+			CoreIdea: "Compare retrieval grounded literature review pipelines",
+		},
+	}
+	node := orchestrator.NodeSpec{ID: "node-corpus-retrieval", Stage: "literature_review"}
+	profile := orchestrator.WorkerProfile{RoleID: "research_agent", PromptPreamble: "Research agent preamble"}
+	skillSvc := stubSkillService{
+		items: []skills.Skill{
+			{ID: "citation-management", Description: "Validate and format citations."},
+			{ID: "research-lookup", Description: "Find authoritative research references."},
+		},
+		recommended: []skills.Skill{
+			{ID: "citation-management", Description: "Validate and format citations."},
+			{ID: "research-lookup", Description: "Find authoritative research references."},
+		},
+	}
+
+	prompt := buildScientistBenchWorkerPrompt(item, node, profile, nil, nil, skillSvc)
+	assert.Contains(t, prompt, "Recommended skills for this worker")
+	assert.Contains(t, prompt, "activate_skill")
+	assert.Contains(t, prompt, "citation-management")
+	assert.Contains(t, prompt, "research-lookup")
 }
 
 func TestBuildScientistBenchWorkerPromptIncludesRuntimeProfiles(t *testing.T) {
@@ -156,7 +256,7 @@ func TestBuildScientistBenchWorkerPromptIncludesRuntimeProfiles(t *testing.T) {
 	node := orchestrator.NodeSpec{ID: "node-execution", Stage: "execution"}
 	profile := orchestrator.WorkerProfile{RoleID: "execution_agent", PromptPreamble: "Execution agent preamble"}
 
-	prompt := buildScientistBenchWorkerPrompt(item, node, profile, registry, executor)
+	prompt := buildScientistBenchWorkerPrompt(item, node, profile, registry, executor, nil)
 	assert.True(t, strings.Contains(prompt, "docker.openfoam.v1"))
 	assert.True(t, strings.Contains(prompt, "docker.benchmark-runner.v1"))
 	assert.True(t, strings.Contains(prompt, "docker run --rm"))
@@ -671,6 +771,140 @@ func TestPostScientistBenchNodeResultWritesNextStepSummary(t *testing.T) {
 	assert.Contains(t, text, "next role execution_agent")
 }
 
+func TestReadyRolesForNodeHonorsDependencies(t *testing.T) {
+	app := &App{Orchestrator: orchestrator.NewService()}
+	node, ok := app.Orchestrator.GetNode("node-idea-gate")
+	require.True(t, ok)
+
+	item := scientistbench.Case{}
+	assert.ElementsMatch(t, []string{"idea_maker", "idea_hater"}, readyRolesForNode(item, node))
+
+	item.Runs = []scientistbench.RunRecord{
+		{ID: "run-maker", NodeID: "node-idea-gate", Role: "idea_maker", Status: "complete"},
+	}
+	assert.Equal(t, []string{"idea_hater"}, readyRolesForNode(item, node))
+
+	item.Runs = append(item.Runs, scientistbench.RunRecord{
+		ID: "run-hater", NodeID: "node-idea-gate", Role: "idea_hater", Status: "complete",
+	})
+	assert.Equal(t, []string{"chief_scientist"}, readyRolesForNode(item, node))
+}
+
+func TestScientistBenchBudgetExceededByAgentSteps(t *testing.T) {
+	app := &App{}
+	item := scientistbench.Case{
+		Budget: scientistbench.Budget{MaxAgentSteps: 2},
+		Runs: []scientistbench.RunRecord{
+			{ID: "run-1"},
+			{ID: "run-2"},
+		},
+	}
+	exhausted, reason, err := app.scientistBenchBudgetExceeded(context.Background(), item)
+	require.NoError(t, err)
+	assert.True(t, exhausted)
+	assert.Contains(t, reason, "agent step budget exceeded")
+}
+
+func TestScientistBenchArtifactsForOutputStoresStructuredReferences(t *testing.T) {
+	artifacts := scientistBenchArtifactsForOutput(
+		scientistbench.RunRecord{ID: "run-ref", Role: "research_agent", SessionID: "sess-ref"},
+		orchestrator.NodeSpec{ID: "node-corpus-retrieval"},
+		orchestrator.WorkerOutput{
+			Status:  "succeeded",
+			Summary: "done",
+			References: []orchestrator.ReferencePayload{
+				{
+					Key:                "smith2024",
+					Title:              "Structured Citation Grounding",
+					Authors:            []string{"Alice Smith"},
+					Year:               2024,
+					URL:                "https://example.com/paper",
+					ZoteroKey:          "ABCD1234",
+					FormattedReference: "Smith, A. (2024). Structured Citation Grounding.",
+					BibTeX:             "@article{smith2024,title={Structured Citation Grounding}}",
+				},
+			},
+		},
+		123,
+	)
+	require.NotEmpty(t, artifacts)
+	assert.Contains(t, artifacts[0].Metadata["references_json"], "\"smith2024\"")
+	assert.Contains(t, artifacts[0].Metadata["bibtex_bundle"], "@article{smith2024")
+	assert.Equal(t, "smith2024", artifacts[0].Metadata["citation_keys"])
+}
+
+func TestScientistBenchSessionTreeCostSkipsVisitedSessions(t *testing.T) {
+	app := &App{
+		Sessions: &stubSessionService{
+			items: map[string]session.Session{
+				"root-cost":  {ID: "root-cost", Cost: 1.25},
+				"child-a":    {ID: "child-a", Cost: 2.5},
+				"child-b":    {ID: "child-b", Cost: 0.75},
+				"grandchild": {ID: "grandchild", Cost: 4.0},
+			},
+			children: map[string][]string{
+				"root-cost":  {"child-a", "child-b"},
+				"child-a":    {"grandchild"},
+				"child-b":    {"grandchild"},
+				"grandchild": {"root-cost"},
+			},
+		},
+	}
+
+	cost, err := app.scientistBenchSessionTreeCost(context.Background(), "root-cost", map[string]struct{}{})
+	require.NoError(t, err)
+	assert.InDelta(t, 8.5, cost, 0.001)
+}
+
+func TestWatchScientistBenchNodeRunRejectsMalformedWorkerOutput(t *testing.T) {
+	run := scientistbench.RunRecord{
+		ID:            "run-malformed",
+		NodeID:        "node-method-plan",
+		Role:          "method_planner",
+		Status:        "queued",
+		SessionID:     "sess-malformed",
+		TaskRunStatus: "running",
+	}
+	item := scientistbench.Case{
+		ID:            "case-malformed",
+		RootSessionID: "root-malformed",
+		Status:        scientistbench.StatusRunning,
+		GraphState: scientistbench.GraphState{
+			CurrentStage: "method_planning",
+			ActiveNode:   "node-method-plan",
+			ActiveRole:   "method_planner",
+		},
+		Runs: []scientistbench.RunRecord{run},
+	}
+
+	msgs := newStubMessageService()
+	svc := newStubScientistBenchService(item)
+	app := &App{
+		Messages:       msgs,
+		ScientistBench: svc,
+		Orchestrator:   orchestrator.NewService(),
+	}
+	node, ok := app.Orchestrator.GetNode("node-method-plan")
+	require.True(t, ok)
+
+	done := make(chan agent.AgentEvent, 1)
+	done <- agent.AgentEvent{
+		Message: message.Message{
+			Parts: []message.ContentPart{message.TextContent{Text: "plain text summary"}},
+		},
+	}
+	close(done)
+
+	app.watchScientistBenchNodeRun(item.ID, run, node, done)
+
+	saved, err := svc.Get(context.Background(), item.ID)
+	require.NoError(t, err)
+	savedRun, ok := findScientistBenchRun(saved, run.ID)
+	require.True(t, ok)
+	assert.Equal(t, "failed", savedRun.Status)
+	assert.Contains(t, savedRun.Error, "worker output must be valid JSON")
+}
+
 func TestScientistBenchRegressionFixtures(t *testing.T) {
 	now := time.Now()
 	taskRuns := taskrun.NewService(nil)
@@ -811,6 +1045,10 @@ func (trueScientistBenchService) List(context.Context) ([]scientistbench.Case, e
 }
 
 func (trueScientistBenchService) Save(context.Context, scientistbench.Case) (scientistbench.Case, error) {
+	return scientistbench.Case{}, nil
+}
+
+func (trueScientistBenchService) MutateCase(context.Context, string, func(*scientistbench.Case) error) (scientistbench.Case, error) {
 	return scientistbench.Case{}, nil
 }
 
@@ -961,6 +1199,69 @@ type stubScientistBenchService struct {
 	items map[string]scientistbench.Case
 }
 
+type stubSessionService struct {
+	items    map[string]session.Session
+	children map[string][]string
+}
+
+func (s *stubSessionService) Subscribe(context.Context) <-chan pubsub.Event[session.Session] {
+	return nil
+}
+
+func (s *stubSessionService) Create(context.Context, string) (session.Session, error) {
+	return session.Session{}, nil
+}
+
+func (s *stubSessionService) CreateTitleSession(context.Context, string) (session.Session, error) {
+	return session.Session{}, nil
+}
+
+func (s *stubSessionService) CreateTaskSession(context.Context, string, string, string) (session.Session, error) {
+	return session.Session{}, nil
+}
+
+func (s *stubSessionService) Get(_ context.Context, id string) (session.Session, error) {
+	item, ok := s.items[id]
+	if !ok {
+		return session.Session{}, fmt.Errorf("session %s not found", id)
+	}
+	return item, nil
+}
+
+func (s *stubSessionService) List(context.Context) ([]session.Session, error) {
+	out := make([]session.Session, 0, len(s.items))
+	for _, item := range s.items {
+		out = append(out, item)
+	}
+	return out, nil
+}
+
+func (s *stubSessionService) ListChildren(_ context.Context, parentSessionID string) ([]session.Session, error) {
+	ids := s.children[parentSessionID]
+	out := make([]session.Session, 0, len(ids))
+	for _, id := range ids {
+		item, ok := s.items[id]
+		if !ok {
+			return nil, fmt.Errorf("session %s not found", id)
+		}
+		out = append(out, item)
+	}
+	return out, nil
+}
+
+func (s *stubSessionService) Save(_ context.Context, sess session.Session) (session.Session, error) {
+	if s.items == nil {
+		s.items = make(map[string]session.Session)
+	}
+	s.items[sess.ID] = sess
+	return sess, nil
+}
+
+func (s *stubSessionService) Delete(_ context.Context, id string) error {
+	delete(s.items, id)
+	return nil
+}
+
 func newStubScientistBenchService(items ...scientistbench.Case) *stubScientistBenchService {
 	svc := &stubScientistBenchService{items: make(map[string]scientistbench.Case, len(items))}
 	for _, item := range items {
@@ -995,6 +1296,20 @@ func (s *stubScientistBenchService) List(context.Context) ([]scientistbench.Case
 
 func (s *stubScientistBenchService) Save(_ context.Context, item scientistbench.Case) (scientistbench.Case, error) {
 	s.items[item.ID] = item
+	return item, nil
+}
+
+func (s *stubScientistBenchService) MutateCase(_ context.Context, caseID string, mutate func(*scientistbench.Case) error) (scientistbench.Case, error) {
+	item, ok := s.items[caseID]
+	if !ok {
+		return scientistbench.Case{}, fmt.Errorf("case %s not found", caseID)
+	}
+	if mutate != nil {
+		if err := mutate(&item); err != nil {
+			return scientistbench.Case{}, err
+		}
+	}
+	s.items[caseID] = item
 	return item, nil
 }
 

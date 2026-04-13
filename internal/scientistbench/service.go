@@ -142,9 +142,9 @@ type Inputs struct {
 }
 
 type GraphState struct {
-	CurrentStage   string   `json:"current_stage,omitempty"`
-	ActiveNode     string   `json:"active_node,omitempty"`
-	ActiveRole     string   `json:"active_role,omitempty"`
+	CurrentStage string `json:"current_stage,omitempty"`
+	ActiveNode   string `json:"active_node,omitempty"`
+	ActiveRole   string `json:"active_role,omitempty"`
 	// ConcurrentNodes holds the IDs of nodes being run in parallel with ActiveNode.
 	ConcurrentNodes []string `json:"concurrent_nodes,omitempty"`
 	// ReceivedSignals records signals emitted by concurrent nodes for fan-in checks.
@@ -156,10 +156,14 @@ type GraphState struct {
 	// StageRetries tracks how many times the chief scientist has dynamically re-routed
 	// back to an earlier stage, keyed by the source node ID. Used to prevent infinite
 	// loops when the CS keeps requesting retries.
-	StageRetries   map[string]int `json:"stage_retries,omitempty"`
-	PendingNodes   []string `json:"pending_nodes,omitempty"`
-	CompletedNodes []string `json:"completed_nodes,omitempty"`
-	BlockedNodes   []string `json:"blocked_nodes,omitempty"`
+	StageRetries map[string]int `json:"stage_retries,omitempty"`
+	// NodeRetries tracks ordinary node retry attempts after a node emits its
+	// failure signal. This is distinct from StageRetries, which only tracks
+	// chief-scientist dynamic reroutes.
+	NodeRetries    map[string]int `json:"node_retries,omitempty"`
+	PendingNodes   []string       `json:"pending_nodes,omitempty"`
+	CompletedNodes []string       `json:"completed_nodes,omitempty"`
+	BlockedNodes   []string       `json:"blocked_nodes,omitempty"`
 }
 
 type IdeaCandidate struct {
@@ -321,6 +325,7 @@ type Service interface {
 	Get(ctx context.Context, caseID string) (Case, error)
 	List(ctx context.Context) ([]Case, error)
 	Save(ctx context.Context, item Case) (Case, error)
+	MutateCase(ctx context.Context, caseID string, mutate func(*Case) error) (Case, error)
 	UpdateGraphState(ctx context.Context, caseID string, graph GraphState) (Case, error)
 	SetTermination(ctx context.Context, caseID string, signal TerminationSignal, reason string) (Case, error)
 	UpsertRun(ctx context.Context, caseID string, run RunRecord) (Case, error)
@@ -428,11 +433,6 @@ func (s *service) Save(_ context.Context, item Case) (Case, error) {
 	if item.ID == "" {
 		return Case{}, fmt.Errorf("case ID is required")
 	}
-	now := time.Now().Unix()
-	if item.CreatedAt == 0 {
-		item.CreatedAt = now
-	}
-	item.UpdatedAt = now
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -441,8 +441,39 @@ func (s *service) Save(_ context.Context, item Case) (Case, error) {
 	if err != nil {
 		return Case{}, err
 	}
-	state.Cases[item.ID] = item
-	if err := s.saveLocked(state); err != nil {
+	if err := s.saveCaseLocked(state, item); err != nil {
+		return Case{}, err
+	}
+	s.Publish(pubsub.UpdatedEvent, item)
+	return item, nil
+}
+
+func (s *service) MutateCase(_ context.Context, caseID string, mutate func(*Case) error) (Case, error) {
+	caseID = strings.TrimSpace(caseID)
+	if caseID == "" {
+		return Case{}, fmt.Errorf("case ID is required")
+	}
+	if mutate == nil {
+		return Case{}, fmt.Errorf("mutate callback is required")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	state, err := s.loadLocked()
+	if err != nil {
+		return Case{}, err
+	}
+	item, ok := state.Cases[caseID]
+	if !ok {
+		return Case{}, fmt.Errorf("case %s not found", caseID)
+	}
+	item = normalizeCase(item)
+	if err := mutate(&item); err != nil {
+		return Case{}, err
+	}
+	item = normalizeCase(item)
+	if err := s.saveCaseLocked(state, item); err != nil {
 		return Case{}, err
 	}
 	s.Publish(pubsub.UpdatedEvent, item)
@@ -583,6 +614,16 @@ func (s *service) saveLocked(state *persistedState) error {
 		return fmt.Errorf("failed to write scientist bench state: %w", err)
 	}
 	return nil
+}
+
+func (s *service) saveCaseLocked(state *persistedState, item Case) error {
+	now := time.Now().Unix()
+	if item.CreatedAt == 0 {
+		item.CreatedAt = now
+	}
+	item.UpdatedAt = now
+	state.Cases[item.ID] = item
+	return s.saveLocked(state)
 }
 
 func normalizeCase(item Case) Case {
@@ -731,9 +772,19 @@ func normalizeGraphState(graph GraphState) GraphState {
 	graph.CurrentStage = strings.TrimSpace(graph.CurrentStage)
 	graph.ActiveNode = strings.TrimSpace(graph.ActiveNode)
 	graph.ActiveRole = strings.TrimSpace(graph.ActiveRole)
+	graph.ConcurrentNodes = normalizeStrings(graph.ConcurrentNodes)
+	graph.ReceivedSignals = normalizeStrings(graph.ReceivedSignals)
+	graph.StageRetries = normalizeIntMap(graph.StageRetries)
+	graph.NodeRetries = normalizeIntMap(graph.NodeRetries)
 	graph.PendingNodes = normalizeStrings(graph.PendingNodes)
 	graph.CompletedNodes = normalizeStrings(graph.CompletedNodes)
 	graph.BlockedNodes = normalizeStrings(graph.BlockedNodes)
+	if graph.RevisionRound < 0 {
+		graph.RevisionRound = 0
+	}
+	if graph.MaxRevisions < 0 {
+		graph.MaxRevisions = 0
+	}
 	return graph
 }
 
@@ -849,6 +900,27 @@ func normalizeTermination(term Termination) Termination {
 		term.TerminatedAt = time.Now().Unix()
 	}
 	return term
+}
+
+func normalizeIntMap(items map[string]int) map[string]int {
+	if len(items) == 0 {
+		return nil
+	}
+	out := make(map[string]int, len(items))
+	for key, value := range items {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		if value < 0 {
+			value = 0
+		}
+		out[key] = value
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func normalizeStrings(items []string) []string {

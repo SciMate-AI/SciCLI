@@ -2,9 +2,11 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
 	"os"
+	"reflect"
 	"strings"
 	"time"
 
@@ -14,6 +16,7 @@ import (
 	"github.com/SciMate-AI/scicli/internal/orchestrator"
 	runtimex "github.com/SciMate-AI/scicli/internal/runtime"
 	"github.com/SciMate-AI/scicli/internal/scientistbench"
+	"github.com/SciMate-AI/scicli/internal/skills"
 	"github.com/SciMate-AI/scicli/internal/taskrun"
 	"github.com/google/uuid"
 )
@@ -112,15 +115,25 @@ func (app *App) StartScientistBenchActiveNodeRun(ctx context.Context, caseID str
 	if scientistBenchCaseIsTerminal(item) {
 		return ScientistBenchNodeRun{}, fmt.Errorf("case %s is terminal with status %s", item.ID, item.Status)
 	}
+	if exhausted, exhaustedItem, err := app.enforceScientistBenchBudget(ctx, item); err != nil {
+		return ScientistBenchNodeRun{}, err
+	} else if exhausted {
+		return ScientistBenchNodeRun{}, fmt.Errorf("case %s is terminal with status %s", exhaustedItem.ID, exhaustedItem.Status)
+	}
 
 	node, ok := app.Orchestrator.GetNode(item.GraphState.ActiveNode)
 	if !ok {
 		return ScientistBenchNodeRun{}, fmt.Errorf("active node %s is not registered", item.GraphState.ActiveNode)
 	}
-	roleID, err := nextPendingRoleForNode(item, node)
-	if err != nil {
-		return ScientistBenchNodeRun{}, err
+	readyRoles := readyRolesForNode(item, node)
+	if len(readyRoles) == 0 {
+		if liveRun, ok := latestRecoverableNodeRunForNode(item, node.ID); ok && shouldKeepScientistBenchRunAlive(app.TaskRuns, liveRun, time.Now()) {
+			_ = app.postScientistBenchLaunch(context.Background(), item, liveRun, "Scientist Bench node already running")
+			return ScientistBenchNodeRun{Case: item, Run: liveRun}, nil
+		}
+		return ScientistBenchNodeRun{}, fmt.Errorf("node %s has no ready roles to schedule", node.ID)
 	}
+	roleID := readyRoles[0]
 	profile, ok := app.Orchestrator.WorkerProfileForRole(roleID)
 	if !ok {
 		return ScientistBenchNodeRun{}, fmt.Errorf("worker profile for role %s is not registered", roleID)
@@ -158,7 +171,7 @@ func (app *App) StartScientistBenchActiveNodeRun(ctx context.Context, caseID str
 		app.Permissions.AutoApproveSession(taskSession.ID)
 	}
 
-	prompt := buildScientistBenchWorkerPrompt(item, node, profile, app.RuntimeRegistry, app.RuntimeExecutor)
+	prompt := buildScientistBenchWorkerPrompt(item, node, profile, app.RuntimeRegistry, app.RuntimeExecutor, app.Skills)
 	if app.TaskRuns != nil {
 		app.TaskRuns.Queue(taskSession, prompt)
 	}
@@ -224,6 +237,8 @@ func (app *App) StartScientistBenchActiveNodeRun(ctx context.Context, caseID str
 		return ScientistBenchNodeRun{}, fmt.Errorf("run %s not found after scheduling", run.ID)
 	}
 	_ = app.postScientistBenchLaunch(context.Background(), item, updatedRun, "Scientist Bench node started")
+	app.launchScientistBenchReadyRoles(item.ID, item, node, updatedRun.Role)
+	app.launchScientistBenchPendingConcurrentNodes(item.ID, item)
 	return ScientistBenchNodeRun{
 		Case: item,
 		Run:  updatedRun,
@@ -296,6 +311,11 @@ func (app *App) startScientistBenchContinuation(ctx context.Context, caseID stri
 	if app.scientistBenchStarter != nil {
 		return app.scientistBenchStarter(ctx, caseID)
 	}
+	if app.ScientistBench != nil {
+		if item, err := app.ScientistBench.Get(ctx, strings.TrimSpace(caseID)); err == nil {
+			app.launchScientistBenchPendingConcurrentNodes(caseID, item)
+		}
+	}
 	return app.StartScientistBenchActiveNodeRun(ctx, caseID)
 }
 
@@ -328,10 +348,57 @@ func (app *App) launchScientistBenchConcurrentNode(caseID, nodeID string) {
 	}()
 }
 
+func (app *App) launchScientistBenchConcurrentRole(caseID, nodeID, roleID string) {
+	caseID = strings.TrimSpace(caseID)
+	nodeID = strings.TrimSpace(nodeID)
+	roleID = strings.TrimSpace(roleID)
+	if caseID == "" || nodeID == "" || roleID == "" || app.ScientistBench == nil || app.Orchestrator == nil {
+		return
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	app.cancelFuncsMutex.Lock()
+	app.watcherCancelFuncs = append(app.watcherCancelFuncs, cancel)
+	app.cancelFuncsMutex.Unlock()
+
+	app.watcherWG.Add(1)
+	go func() {
+		defer app.watcherWG.Done()
+		defer cancel()
+		defer logging.RecoverPanic("scientistbench-concurrent-role", nil)
+
+		_, err := app.startScientistBenchSpecificRoleRun(ctx, caseID, nodeID, roleID, true)
+		if err != nil {
+			logging.Warn("Concurrent scientist bench role failed to start", "case_id", caseID, "node_id", nodeID, "role_id", roleID, "error", err)
+		}
+	}()
+}
+
 // startScientistBenchNamedNodeRun is like StartScientistBenchActiveNodeRun but
 // targets a specific node by ID rather than reading GraphState.ActiveNode.
 // This is used to launch concurrent (parallel) review nodes.
 func (app *App) startScientistBenchNamedNodeRun(ctx context.Context, caseID, nodeID string) (ScientistBenchNodeRun, error) {
+	if app.Orchestrator == nil {
+		return ScientistBenchNodeRun{}, fmt.Errorf("orchestrator service is not configured")
+	}
+	node, ok := app.Orchestrator.GetNode(nodeID)
+	if !ok {
+		return ScientistBenchNodeRun{}, fmt.Errorf("node %s is not registered", nodeID)
+	}
+	roleID := orchestrator.FirstAssignedRole(node)
+	if roleID == "" {
+		return ScientistBenchNodeRun{}, fmt.Errorf("node %s has no assigned roles", nodeID)
+	}
+	return app.startScientistBenchSpecificRoleRun(ctx, caseID, nodeID, roleID, true)
+}
+
+func (app *App) startScientistBenchSpecificRoleRun(
+	ctx context.Context,
+	caseID string,
+	nodeID string,
+	roleID string,
+	parallel bool,
+) (ScientistBenchNodeRun, error) {
 	if app.ScientistBench == nil || app.Orchestrator == nil || app.Sessions == nil || app.Messages == nil {
 		return ScientistBenchNodeRun{}, fmt.Errorf("required services are not configured")
 	}
@@ -343,19 +410,30 @@ func (app *App) startScientistBenchNamedNodeRun(ctx context.Context, caseID, nod
 	if scientistBenchCaseIsTerminal(item) {
 		return ScientistBenchNodeRun{}, fmt.Errorf("case %s is terminal", item.ID)
 	}
+	item, err = app.ensureScientistBenchRootSession(ctx, item)
+	if err != nil {
+		return ScientistBenchNodeRun{}, err
+	}
+	if exhausted, exhaustedItem, err := app.enforceScientistBenchBudget(ctx, item); err != nil {
+		return ScientistBenchNodeRun{}, err
+	} else if exhausted {
+		return ScientistBenchNodeRun{}, fmt.Errorf("case %s is terminal with status %s", exhaustedItem.ID, exhaustedItem.Status)
+	}
 
 	node, ok := app.Orchestrator.GetNode(nodeID)
 	if !ok {
 		return ScientistBenchNodeRun{}, fmt.Errorf("node %s is not registered", nodeID)
 	}
-
-	roleID := orchestrator.FirstAssignedRole(node)
-	if roleID == "" {
-		return ScientistBenchNodeRun{}, fmt.Errorf("node %s has no assigned roles", nodeID)
-	}
 	profile, ok := app.Orchestrator.WorkerProfileForRole(roleID)
 	if !ok {
 		return ScientistBenchNodeRun{}, fmt.Errorf("worker profile for role %s is not registered", roleID)
+	}
+	if hasSuccessfulNodeRoleRun(item, node.ID, roleID) {
+		return ScientistBenchNodeRun{}, fmt.Errorf("role %s already completed for node %s", roleID, node.ID)
+	}
+	if liveRun, ok := latestRecoverableNodeRoleRun(item, node.ID, roleID); ok && shouldKeepScientistBenchRunAlive(app.TaskRuns, liveRun, time.Now()) {
+		_ = app.postScientistBenchLaunch(context.Background(), item, liveRun, "Scientist Bench node already running")
+		return ScientistBenchNodeRun{Case: item, Run: liveRun}, nil
 	}
 
 	taskSessionID := "sbtask-" + uuid.NewString()
@@ -363,7 +441,11 @@ func (app *App) startScientistBenchNamedNodeRun(ctx context.Context, caseID, nod
 	if taskTitle == "" {
 		taskTitle = "Scientist Bench Worker"
 	}
-	taskTitle = fmt.Sprintf("%s: %s (parallel)", taskTitle, node.ID)
+	if parallel {
+		taskTitle = fmt.Sprintf("%s: %s (parallel)", taskTitle, node.ID)
+	} else {
+		taskTitle = fmt.Sprintf("%s: %s", taskTitle, node.ID)
+	}
 
 	taskSession, err := app.Sessions.CreateTaskSession(ctx, taskSessionID, item.RootSessionID, taskTitle)
 	if err != nil {
@@ -373,7 +455,7 @@ func (app *App) startScientistBenchNamedNodeRun(ctx context.Context, caseID, nod
 		app.Permissions.AutoApproveSession(taskSession.ID)
 	}
 
-	prompt := buildScientistBenchWorkerPrompt(item, node, profile, app.RuntimeRegistry, app.RuntimeExecutor)
+	prompt := buildScientistBenchWorkerPrompt(item, node, profile, app.RuntimeRegistry, app.RuntimeExecutor, app.Skills)
 	if app.TaskRuns != nil {
 		app.TaskRuns.Queue(taskSession, prompt)
 	}
@@ -419,7 +501,9 @@ func (app *App) startScientistBenchNamedNodeRun(ctx context.Context, caseID, nod
 		return ScientistBenchNodeRun{}, fmt.Errorf("start role worker: %w", err)
 	}
 
-	_ = app.postScientistBenchLaunch(context.Background(), item, run, "Scientist Bench parallel node started")
+	if parallel {
+		_ = app.postScientistBenchLaunch(context.Background(), item, run, "Scientist Bench parallel node started")
+	}
 	go app.watchScientistBenchNodeRun(item.ID, run, node, done)
 
 	item, err = app.ScientistBench.Get(ctx, item.ID)
@@ -467,7 +551,10 @@ func (app *App) watchScientistBenchNodeRun(
 		run.TaskRunStatus = "failed"
 		run.Error = fmt.Sprintf("scientist bench watcher panic: %v", recovered)
 		run.FinishedAt = time.Now().Unix()
-		_, _ = app.ScientistBench.UpsertRun(context.Background(), caseID, run)
+		_, _ = app.ScientistBench.MutateCase(context.Background(), caseID, func(item *scientistbench.Case) error {
+			item.Runs = upsertScientistBenchRunLocal(item.Runs, run)
+			return nil
+		})
 	}()
 
 	result, ok := <-done
@@ -477,203 +564,155 @@ func (app *App) watchScientistBenchNodeRun(
 		}
 	}
 	content := scientistBenchEventContent(result)
-	parsed := orchestrator.ParseWorkerOutput(content)
-	if result.Error == nil {
-		parsed = app.reconcileScientistBenchRuntimeExecution(context.Background(), run, node, parsed)
-	}
-
-	run.Status = "complete"
-	run.TaskRunStatus = "complete"
-	run.FinishedAt = time.Now().Unix()
-	if result.Error != nil {
-		run.Status = "failed"
-		run.TaskRunStatus = "failed"
-		run.Error = result.Error.Error()
-	} else {
-		run.OutputSummary = truncateScientistBenchText(parsed.Summary, maxScientistBenchSummaryLen)
-		if strings.TrimSpace(run.OutputSummary) == "" {
-			run.OutputSummary = "Completed"
+	parsed := orchestrator.WorkerOutput{}
+	outcomeErr := result.Error
+	if outcomeErr == nil {
+		var parseErr error
+		parsed, parseErr = orchestrator.StrictParseWorkerOutput(content)
+		if parseErr == nil {
+			parsed = app.reconcileScientistBenchRuntimeExecution(context.Background(), run, node, parsed)
+			parseErr = orchestrator.ValidateWorkerOutputForRole(node, run.Role, parsed)
 		}
-		run.SignalsEmitted = normalizeRunSignals(parsed, node)
+		if parseErr != nil {
+			outcomeErr = parseErr
+		}
 	}
 
-	ctx := context.Background()
-	item, err := app.ScientistBench.UpsertRun(ctx, caseID, run)
+	item, savedRun, shouldContinue, err := app.persistScientistBenchNodeRunOutcome(
+		context.Background(),
+		caseID,
+		run,
+		node,
+		parsed,
+		content,
+		outcomeErr,
+	)
 	if err != nil {
 		return
 	}
-
-	if result.Error == nil && strings.TrimSpace(content) != "" {
-		artifact := scientistbench.Artifact{
-			ID:            "artifact-" + uuid.NewString(),
-			Kind:          artifactKindForNode(node),
-			Label:         artifactLabelForNode(node),
-			ProducerRole:  run.Role,
-			ProducerRunID: run.ID,
-			CreatedAt:     time.Now().Unix(),
-			Metadata: map[string]string{
-				"node_id":    node.ID,
-				"session_id": run.SessionID,
-				"summary":    run.OutputSummary,
-				"status":     parsed.Status,
-			},
-		}
-		if len(parsed.Citations) > 0 {
-			artifact.Metadata["citations"] = strings.Join(parsed.Citations, " | ")
-		}
-		if len(parsed.EvidenceSummary) > 0 {
-			artifact.Metadata["evidence"] = strings.Join(parsed.EvidenceSummary, " | ")
-		}
-		if len(parsed.Risks) > 0 {
-			artifact.Metadata["risks"] = strings.Join(parsed.Risks, " | ")
-		}
-		if parsed.Review != nil {
-			if decision := strings.TrimSpace(parsed.Review.Decision); decision != "" {
-				artifact.Metadata["review_decision"] = decision
-			}
-			if summary := strings.TrimSpace(parsed.Review.Summary); summary != "" {
-				artifact.Metadata["review_summary"] = summary
-			}
-			if len(parsed.Review.Strengths) > 0 {
-				artifact.Metadata["review_strengths"] = strings.Join(parsed.Review.Strengths, " | ")
-			}
-			if len(parsed.Review.Weaknesses) > 0 {
-				artifact.Metadata["review_weaknesses"] = strings.Join(parsed.Review.Weaknesses, " | ")
-			}
-			if len(parsed.Review.Questions) > 0 {
-				artifact.Metadata["review_questions"] = strings.Join(parsed.Review.Questions, " | ")
-			}
-			if parsed.Review.Confidence > 0 {
-				artifact.Metadata["review_confidence"] = fmt.Sprintf("%.2f", parsed.Review.Confidence)
-			}
-			if parsed.Review.Scores.Overall > 0 {
-				artifact.Metadata["review_overall"] = fmt.Sprintf("%.2f", parsed.Review.Scores.Overall)
-			}
-		}
-		if parsed.Comparison != nil {
-			if summary := strings.TrimSpace(parsed.Comparison.Summary); summary != "" {
-				artifact.Metadata["comparison_summary"] = summary
-			}
-			if parsed.Comparison.MotivationAlignment > 0 {
-				artifact.Metadata["motivation_alignment"] = fmt.Sprintf("%.2f", parsed.Comparison.MotivationAlignment)
-			}
-			if parsed.Comparison.MethodologyAlignment > 0 {
-				artifact.Metadata["methodology_alignment"] = fmt.Sprintf("%.2f", parsed.Comparison.MethodologyAlignment)
-			}
-			if parsed.Comparison.NoveltyAlignment > 0 {
-				artifact.Metadata["novelty_alignment"] = fmt.Sprintf("%.2f", parsed.Comparison.NoveltyAlignment)
-			}
-			if parsed.Comparison.ExperimentalAlignment > 0 {
-				artifact.Metadata["experimental_alignment"] = fmt.Sprintf("%.2f", parsed.Comparison.ExperimentalAlignment)
-			}
-		}
-		if parsed.MethodPlan != nil {
-			if parsed.MethodPlan.Summary != "" {
-				artifact.Metadata["method_summary"] = parsed.MethodPlan.Summary
-			}
-			if len(parsed.MethodPlan.PipelineSteps) > 0 {
-				artifact.Metadata["method_pipeline"] = strings.Join(parsed.MethodPlan.PipelineSteps, " | ")
-			}
-			if len(parsed.MethodPlan.AcceptanceChecks) > 0 {
-				artifact.Metadata["acceptance_checks"] = strings.Join(parsed.MethodPlan.AcceptanceChecks, " | ")
-			}
-			if len(parsed.MethodPlan.ImplementationNotes) > 0 {
-				artifact.Metadata["implementation_notes"] = strings.Join(parsed.MethodPlan.ImplementationNotes, " | ")
-			}
-			if len(parsed.MethodPlan.RuntimeHints) > 0 {
-				artifact.Metadata["runtime_hints"] = strings.Join(parsed.MethodPlan.RuntimeHints, " | ")
-			}
-		}
-		item, _ = app.ScientistBench.UpsertArtifact(ctx, caseID, artifact)
-		if parsed.Execution != nil {
-			if len(parsed.Execution.LogHighlights) > 0 || strings.TrimSpace(parsed.Execution.VerificationSummary) != "" {
-				runtimeArtifact := scientistbench.Artifact{
-					ID:            "artifact-" + uuid.NewString(),
-					Kind:          scientistbench.ArtifactDockerLog,
-					Label:         "Runtime Log",
-					ProducerRole:  run.Role,
-					ProducerRunID: run.ID,
-					CreatedAt:     time.Now().Unix(),
-					Metadata: map[string]string{
-						"runtime_id":           strings.TrimSpace(parsed.Execution.RuntimeID),
-						"verification_summary": strings.TrimSpace(parsed.Execution.VerificationSummary),
-						"verification_passed":  fmt.Sprintf("%t", parsed.Execution.VerificationPassed),
-						"executed":             fmt.Sprintf("%t", parsed.Execution.Executed),
-						"blocked":              fmt.Sprintf("%t", parsed.Execution.Blocked),
-						"exit_code":            fmt.Sprintf("%d", parsed.Execution.ExitCode),
-						"stdout_excerpt":       strings.TrimSpace(parsed.Execution.StdoutExcerpt),
-						"stderr_excerpt":       strings.TrimSpace(parsed.Execution.StderrExcerpt),
-						"log_highlights":       strings.Join(parsed.Execution.LogHighlights, " | "),
-						"commands":             strings.Join(parsed.Execution.Commands, " | "),
-					},
-				}
-				item, _ = app.ScientistBench.UpsertArtifact(ctx, caseID, runtimeArtifact)
-			}
-			if len(parsed.Execution.OutputFiles) > 0 {
-				resultArtifact := scientistbench.Artifact{
-					ID:            "artifact-" + uuid.NewString(),
-					Kind:          scientistbench.ArtifactResultBundle,
-					Label:         "Execution Outputs",
-					ProducerRole:  run.Role,
-					ProducerRunID: run.ID,
-					CreatedAt:     time.Now().Unix(),
-					Metadata: map[string]string{
-						"runtime_id":   strings.TrimSpace(parsed.Execution.RuntimeID),
-						"output_files": strings.Join(parsed.Execution.OutputFiles, " | "),
-						"commands":     strings.Join(parsed.Execution.Commands, " | "),
-					},
-				}
-				item, _ = app.ScientistBench.UpsertArtifact(ctx, caseID, resultArtifact)
-			}
-		}
-	}
-
-	item = applyScientistBenchWorkerOutput(item, run, parsed)
-	item = applyScientistBenchReviewOutput(item, run, parsed)
-	item = refreshScientistBenchMetrics(item)
-	if result.Error != nil {
-		item, _ = app.Orchestrator.ApplySignal(item, node.FailureSignal)
-		savedItem, _ := app.ScientistBench.Save(ctx, item)
-		_ = app.postScientistBenchNodeResult(context.Background(), savedItem, run)
-		if !scientistBenchCaseIsTerminal(savedItem) {
-			app.scheduleScientistBenchContinuation(caseID)
-		}
+	_ = app.postScientistBenchNodeResult(context.Background(), item, savedRun)
+	if scientistBenchCaseIsTerminal(item) {
 		return
 	}
+	if shouldContinue {
+		app.scheduleScientistBenchContinuation(caseID)
+	}
+	if activeNode, ok := app.Orchestrator.GetNode(item.GraphState.ActiveNode); ok {
+		app.launchScientistBenchReadyRoles(caseID, item, activeNode, savedRun.Role)
+	}
+	app.launchScientistBenchPendingConcurrentNodes(caseID, item)
+}
 
-	// System-layer evidence enforcement: corpus-retrieval MUST produce at least
-	// one citation and one evidence bullet. If the agent completed without these,
-	// treat the run as a failure so RetryPolicy kicks in and the node reruns.
-	if node.ID == "node-corpus-retrieval" && result.Error == nil {
-		if len(parsed.Citations) == 0 && len(parsed.EvidenceSummary) == 0 {
-			run.Error = "evidence enforcement: agent completed without any citations or evidence_summary entries; forcing retry"
+func (app *App) persistScientistBenchNodeRunOutcome(
+	ctx context.Context,
+	caseID string,
+	run scientistbench.RunRecord,
+	node orchestrator.NodeSpec,
+	parsed orchestrator.WorkerOutput,
+	content string,
+	outcomeErr error,
+) (scientistbench.Case, scientistbench.RunRecord, bool, error) {
+	var (
+		savedRun       scientistbench.RunRecord
+		shouldContinue bool
+	)
+
+	item, err := app.ScientistBench.MutateCase(ctx, caseID, func(item *scientistbench.Case) error {
+		now := time.Now().Unix()
+		if currentRun, ok := findScientistBenchRun(*item, run.ID); ok {
+			if len(run.ToolCalls) == 0 {
+				run.ToolCalls = append([]string(nil), currentRun.ToolCalls...)
+			}
+			if strings.TrimSpace(run.TaskRunStatus) == "" {
+				run.TaskRunStatus = currentRun.TaskRunStatus
+			}
+		}
+
+		run.Status = "complete"
+		run.TaskRunStatus = "complete"
+		run.FinishedAt = now
+		run.Error = ""
+		run.OutputSummary = ""
+		run.SignalsEmitted = nil
+
+		if outcomeErr != nil {
 			run.Status = "failed"
-			run.TaskRunStatus = "failed"
-			run.FinishedAt = time.Now().Unix()
-			item, _ = app.ScientistBench.UpsertRun(ctx, caseID, run)
-			_ = app.postScientistBenchText(context.Background(), item.RootSessionID,
-				"[research_agent] Evidence enforcement: no citations or evidence_summary produced — retrying corpus retrieval.")
-			item, _ = app.Orchestrator.ApplySignal(item, node.FailureSignal)
-			savedItem, _ := app.ScientistBench.Save(ctx, item)
-			_ = app.postScientistBenchNodeResult(context.Background(), savedItem, run)
-			if !scientistBenchCaseIsTerminal(savedItem) {
-				app.scheduleScientistBenchContinuation(caseID)
+			run.TaskRunStatus = firstNonEmpty(run.TaskRunStatus, "failed")
+			run.Error = outcomeErr.Error()
+		} else {
+			run.OutputSummary = truncateScientistBenchText(parsed.Summary, maxScientistBenchSummaryLen)
+			if strings.TrimSpace(run.OutputSummary) == "" {
+				run.OutputSummary = "Completed"
 			}
-			return
+			run.SignalsEmitted = normalizeRunSignals(parsed, node)
+		}
+		item.Runs = upsertScientistBenchRunLocal(item.Runs, run)
+
+		if outcomeErr == nil && strings.TrimSpace(content) != "" {
+			item.Artifacts = append(item.Artifacts, scientistBenchArtifactsForOutput(run, node, parsed, now)...)
+			*item = applyScientistBenchWorkerOutput(*item, run, parsed)
+			*item = applyScientistBenchReviewOutput(*item, run, parsed)
+			*item = refreshScientistBenchMetrics(*item)
+		}
+
+		if outcomeErr != nil {
+			updated, applyErr := app.Orchestrator.ApplySignal(*item, node.FailureSignal)
+			if applyErr != nil {
+				return applyErr
+			}
+			*item = updated
+			shouldContinue = !scientistBenchCaseIsTerminal(*item)
+			savedRun = run
+			return nil
+		}
+
+		readyRoles := readyRolesForNode(*item, node)
+		if len(readyRoles) > 0 {
+			item.GraphState.ActiveRole = readyRoles[0]
+			shouldContinue = true
+			savedRun = run
+			return nil
+		}
+		if !allAssignedRolesCompleted(*item, node) {
+			if liveRole := firstLiveNodeRoleForNode(*item, node.ID); liveRole != "" {
+				item.GraphState.ActiveRole = liveRole
+			}
+			savedRun = run
+			return nil
+		}
+
+		prevActiveNode := item.GraphState.ActiveNode
+		signal := determineScientistBenchNodeSignal(*item, node, parsed)
+		updated, applyErr := app.Orchestrator.ApplySignal(*item, signal)
+		if applyErr != nil {
+			return applyErr
+		}
+		*item = updated
+		if item.GraphState.ActiveNode != prevActiveNode {
+			shouldContinue = true
+		}
+		savedRun = run
+		return nil
+	})
+	if err != nil {
+		return scientistbench.Case{}, scientistbench.RunRecord{}, false, err
+	}
+	if currentRun, ok := findScientistBenchRun(item, run.ID); ok {
+		savedRun = currentRun
+	}
+	if !shouldContinue && !scientistBenchCaseIsTerminal(item) {
+		if activeNode, ok := app.Orchestrator.GetNode(item.GraphState.ActiveNode); ok && len(readyRolesForNode(item, activeNode)) > 0 {
+			shouldContinue = true
 		}
 	}
+	return item, savedRun, shouldContinue, nil
+}
 
-	nextRole, nextErr := nextPendingRoleForNode(item, node)
-	if nextErr == nil && nextRole != "" {
-		item.GraphState.ActiveRole = nextRole
-		savedItem, _ := app.ScientistBench.Save(ctx, item)
-		_ = app.postScientistBenchNodeResult(context.Background(), savedItem, run)
-		if !scientistBenchCaseIsTerminal(savedItem) {
-			app.scheduleScientistBenchContinuation(caseID)
-		}
-		return
-	}
-
+func determineScientistBenchNodeSignal(
+	item scientistbench.Case,
+	node orchestrator.NodeSpec,
+	parsed orchestrator.WorkerOutput,
+) string {
 	signal := node.SuccessSignal
 	if parsed.FailureSignal == node.FailureSignal {
 		signal = node.FailureSignal
@@ -684,35 +723,381 @@ func (app *App) watchScientistBenchNodeRun(
 	} else if node.ID == "node-aggregate" {
 		signal = scientistBenchAggregateSignal(item)
 	} else if parsed.SuccessSignal != "" {
-		// Check if the agent emitted a DynamicRoute signal. If so, honour it.
 		if _, isDynamic := node.DynamicRoutes[parsed.SuccessSignal]; isDynamic {
 			signal = parsed.SuccessSignal
 		}
 	}
+	return signal
+}
 
-	prevActiveNode := item.GraphState.ActiveNode
-	prevConcurrentNodes := append([]string(nil), item.GraphState.ConcurrentNodes...)
+func scientistBenchArtifactsForOutput(
+	run scientistbench.RunRecord,
+	node orchestrator.NodeSpec,
+	parsed orchestrator.WorkerOutput,
+	createdAt int64,
+) []scientistbench.Artifact {
+	artifacts := make([]scientistbench.Artifact, 0, 3)
+	artifact := scientistbench.Artifact{
+		ID:            "artifact-" + uuid.NewString(),
+		Kind:          artifactKindForNode(node),
+		Label:         artifactLabelForNode(node),
+		ProducerRole:  run.Role,
+		ProducerRunID: run.ID,
+		CreatedAt:     createdAt,
+		Metadata: map[string]string{
+			"node_id":    node.ID,
+			"session_id": run.SessionID,
+			"summary":    run.OutputSummary,
+			"status":     parsed.Status,
+		},
+	}
+	if len(parsed.Citations) > 0 {
+		artifact.Metadata["citations"] = strings.Join(parsed.Citations, " | ")
+	}
+	applyScientistBenchReferenceMetadata(artifact.Metadata, parsed.References)
+	if len(parsed.EvidenceSummary) > 0 {
+		artifact.Metadata["evidence"] = strings.Join(parsed.EvidenceSummary, " | ")
+	}
+	if len(parsed.Risks) > 0 {
+		artifact.Metadata["risks"] = strings.Join(parsed.Risks, " | ")
+	}
+	if parsed.Review != nil {
+		if decision := strings.TrimSpace(parsed.Review.Decision); decision != "" {
+			artifact.Metadata["review_decision"] = decision
+		}
+		if summary := strings.TrimSpace(parsed.Review.Summary); summary != "" {
+			artifact.Metadata["review_summary"] = summary
+		}
+		if len(parsed.Review.Strengths) > 0 {
+			artifact.Metadata["review_strengths"] = strings.Join(parsed.Review.Strengths, " | ")
+		}
+		if len(parsed.Review.Weaknesses) > 0 {
+			artifact.Metadata["review_weaknesses"] = strings.Join(parsed.Review.Weaknesses, " | ")
+		}
+		if len(parsed.Review.Questions) > 0 {
+			artifact.Metadata["review_questions"] = strings.Join(parsed.Review.Questions, " | ")
+		}
+		if parsed.Review.Confidence > 0 {
+			artifact.Metadata["review_confidence"] = fmt.Sprintf("%.2f", parsed.Review.Confidence)
+		}
+		if parsed.Review.Scores.Overall > 0 {
+			artifact.Metadata["review_overall"] = fmt.Sprintf("%.2f", parsed.Review.Scores.Overall)
+		}
+	}
+	if parsed.Comparison != nil {
+		if summary := strings.TrimSpace(parsed.Comparison.Summary); summary != "" {
+			artifact.Metadata["comparison_summary"] = summary
+		}
+		if parsed.Comparison.MotivationAlignment > 0 {
+			artifact.Metadata["motivation_alignment"] = fmt.Sprintf("%.2f", parsed.Comparison.MotivationAlignment)
+		}
+		if parsed.Comparison.MethodologyAlignment > 0 {
+			artifact.Metadata["methodology_alignment"] = fmt.Sprintf("%.2f", parsed.Comparison.MethodologyAlignment)
+		}
+		if parsed.Comparison.NoveltyAlignment > 0 {
+			artifact.Metadata["novelty_alignment"] = fmt.Sprintf("%.2f", parsed.Comparison.NoveltyAlignment)
+		}
+		if parsed.Comparison.ExperimentalAlignment > 0 {
+			artifact.Metadata["experimental_alignment"] = fmt.Sprintf("%.2f", parsed.Comparison.ExperimentalAlignment)
+		}
+	}
+	if parsed.MethodPlan != nil {
+		if parsed.MethodPlan.Summary != "" {
+			artifact.Metadata["method_summary"] = parsed.MethodPlan.Summary
+		}
+		if len(parsed.MethodPlan.PipelineSteps) > 0 {
+			artifact.Metadata["method_pipeline"] = strings.Join(parsed.MethodPlan.PipelineSteps, " | ")
+		}
+		if len(parsed.MethodPlan.AcceptanceChecks) > 0 {
+			artifact.Metadata["acceptance_checks"] = strings.Join(parsed.MethodPlan.AcceptanceChecks, " | ")
+		}
+		if len(parsed.MethodPlan.ImplementationNotes) > 0 {
+			artifact.Metadata["implementation_notes"] = strings.Join(parsed.MethodPlan.ImplementationNotes, " | ")
+		}
+		if len(parsed.MethodPlan.RuntimeHints) > 0 {
+			artifact.Metadata["runtime_hints"] = strings.Join(parsed.MethodPlan.RuntimeHints, " | ")
+		}
+	}
+	artifacts = append(artifacts, artifact)
 
-	item, err = app.Orchestrator.ApplySignal(item, signal)
-	if err != nil {
+	if parsed.Execution == nil {
+		return artifacts
+	}
+	if len(parsed.Execution.LogHighlights) > 0 || strings.TrimSpace(parsed.Execution.VerificationSummary) != "" {
+		artifacts = append(artifacts, scientistbench.Artifact{
+			ID:            "artifact-" + uuid.NewString(),
+			Kind:          scientistbench.ArtifactDockerLog,
+			Label:         "Runtime Log",
+			ProducerRole:  run.Role,
+			ProducerRunID: run.ID,
+			CreatedAt:     createdAt,
+			Metadata: map[string]string{
+				"runtime_id":           strings.TrimSpace(parsed.Execution.RuntimeID),
+				"verification_summary": strings.TrimSpace(parsed.Execution.VerificationSummary),
+				"verification_passed":  fmt.Sprintf("%t", parsed.Execution.VerificationPassed),
+				"executed":             fmt.Sprintf("%t", parsed.Execution.Executed),
+				"blocked":              fmt.Sprintf("%t", parsed.Execution.Blocked),
+				"exit_code":            fmt.Sprintf("%d", parsed.Execution.ExitCode),
+				"stdout_excerpt":       strings.TrimSpace(parsed.Execution.StdoutExcerpt),
+				"stderr_excerpt":       strings.TrimSpace(parsed.Execution.StderrExcerpt),
+				"log_highlights":       strings.Join(parsed.Execution.LogHighlights, " | "),
+				"commands":             strings.Join(parsed.Execution.Commands, " | "),
+			},
+		})
+	}
+	if len(parsed.Execution.OutputFiles) > 0 {
+		artifacts = append(artifacts, scientistbench.Artifact{
+			ID:            "artifact-" + uuid.NewString(),
+			Kind:          scientistbench.ArtifactResultBundle,
+			Label:         "Execution Outputs",
+			ProducerRole:  run.Role,
+			ProducerRunID: run.ID,
+			CreatedAt:     createdAt,
+			Metadata: map[string]string{
+				"runtime_id":   strings.TrimSpace(parsed.Execution.RuntimeID),
+				"output_files": strings.Join(parsed.Execution.OutputFiles, " | "),
+				"commands":     strings.Join(parsed.Execution.Commands, " | "),
+			},
+		})
+	}
+	return artifacts
+}
+
+func applyScientistBenchReferenceMetadata(metadata map[string]string, refs []orchestrator.ReferencePayload) {
+	if metadata == nil || len(refs) == 0 {
 		return
 	}
-	savedItem, _ := app.ScientistBench.Save(ctx, item)
-	_ = app.postScientistBenchNodeResult(context.Background(), savedItem, run)
-	if !scientistBenchCaseIsTerminal(savedItem) {
-		// Only schedule the primary continuation if the active node actually advanced.
-		// Concurrent-node signals don't change ActiveNode; scheduling again would
-		// re-run an already-running node.
-		if savedItem.GraphState.ActiveNode != prevActiveNode {
-			app.scheduleScientistBenchContinuation(caseID)
+	payload, err := json.Marshal(refs)
+	if err == nil {
+		metadata["references_json"] = string(payload)
+	}
+
+	formatted := make([]string, 0, len(refs))
+	keys := make([]string, 0, len(refs))
+	bibtex := make([]string, 0, len(refs))
+	citations := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		if line := strings.TrimSpace(ref.FormattedReference); line != "" {
+			formatted = append(formatted, line)
+			citations = append(citations, line)
+		} else if line := strings.TrimSpace(scientistBenchReferenceDisplay(ref)); line != "" {
+			citations = append(citations, line)
 		}
-		// Fan out any concurrent nodes that were added by ApplySignal.
-		for _, concNodeID := range savedItem.GraphState.ConcurrentNodes {
-			if !sliceContains(prevConcurrentNodes, concNodeID) {
-				app.launchScientistBenchConcurrentNode(caseID, concNodeID)
+		if key := strings.TrimSpace(ref.Key); key != "" {
+			keys = append(keys, key)
+		}
+		if entry := strings.TrimSpace(ref.BibTeX); entry != "" {
+			bibtex = append(bibtex, entry)
+		}
+	}
+	if len(formatted) > 0 {
+		metadata["formatted_references"] = strings.Join(formatted, "\n")
+	}
+	if len(keys) > 0 {
+		metadata["citation_keys"] = strings.Join(keys, " | ")
+	}
+	if len(bibtex) > 0 {
+		metadata["bibtex_bundle"] = strings.Join(bibtex, "\n\n")
+	}
+	if strings.TrimSpace(metadata["citations"]) == "" && len(citations) > 0 {
+		metadata["citations"] = strings.Join(citations, " | ")
+	}
+	metadata["reference_count"] = fmt.Sprintf("%d", len(refs))
+}
+
+func scientistBenchArtifactReferences(artifact scientistbench.Artifact) []orchestrator.ReferencePayload {
+	raw := strings.TrimSpace(artifact.Metadata["references_json"])
+	if raw == "" {
+		return nil
+	}
+	var refs []orchestrator.ReferencePayload
+	if err := json.Unmarshal([]byte(raw), &refs); err != nil {
+		return nil
+	}
+	return refs
+}
+
+func scientistBenchReferenceDisplay(ref orchestrator.ReferencePayload) string {
+	if line := strings.TrimSpace(ref.FormattedReference); line != "" {
+		return line
+	}
+	parts := make([]string, 0, 5)
+	if len(ref.Authors) > 0 {
+		parts = append(parts, strings.Join(ref.Authors, ", "))
+	}
+	if ref.Year > 0 {
+		parts = append(parts, fmt.Sprintf("%d", ref.Year))
+	}
+	if title := strings.TrimSpace(ref.Title); title != "" {
+		parts = append(parts, title)
+	}
+	if venue := strings.TrimSpace(ref.Venue); venue != "" {
+		parts = append(parts, venue)
+	}
+	if url := strings.TrimSpace(ref.URL); url != "" {
+		parts = append(parts, url)
+	}
+	return strings.Join(parts, ". ")
+}
+
+func appendScientistBenchRoleContractOverride(b *strings.Builder, node orchestrator.NodeSpec, profile orchestrator.WorkerProfile) {
+	if b == nil {
+		return
+	}
+	switch {
+	case profile.RoleID == "research_agent" && node.ID == "node-corpus-retrieval":
+		b.WriteString("- OVERRIDE: references[] is now the canonical bibliography payload. Do not rely on free-form citations[] alone.\n")
+		b.WriteString("- Provide at least 3 normalized references[]. Each reference must include key, title, authors[], year, formatted_reference, bibtex, and at least one of doi/url/zotero_key.\n")
+		b.WriteString("- Preferred workflow: discover candidate papers, then use Zotero MCP tools if available to search the library, add missing papers by DOI/URL, and export normalized metadata plus BibTeX.\n")
+		b.WriteString("- citations[] is optional human-readable support text. references[] is mandatory for successful research output.\n")
+	case profile.RoleID == "paper_writer":
+		b.WriteString("- OVERRIDE: use the normalized reference bundle from context as the only citation source of truth.\n")
+		b.WriteString("- Create references.bib from the provided BibTeX bundle before drafting the paper.\n")
+		b.WriteString("- Every \\cite{key} must use a key from the normalized reference bundle. Do not invent keys or cite uncatalogued papers.\n")
+	}
+}
+
+func appendScientistBenchSkillRecommendations(
+	b *strings.Builder,
+	item scientistbench.Case,
+	node orchestrator.NodeSpec,
+	profile orchestrator.WorkerProfile,
+	skillsSvc skills.Service,
+) {
+	if b == nil || skillsSvc == nil {
+		return
+	}
+
+	recommended := scientistBenchRecommendedSkills(context.Background(), item, node, profile, skillsSvc, 6)
+	if len(recommended) == 0 {
+		return
+	}
+
+	b.WriteString("\nRecommended skills for this worker.\n")
+	b.WriteString("- If one matches the task, call activate_skill before using the skill's instructions or files.\n")
+	for _, skill := range recommended {
+		fmt.Fprintf(b, "- %s: %s\n", skill.ID, skill.Description)
+	}
+}
+
+func scientistBenchRecommendedSkills(
+	ctx context.Context,
+	item scientistbench.Case,
+	node orchestrator.NodeSpec,
+	profile orchestrator.WorkerProfile,
+	skillsSvc skills.Service,
+	limit int,
+) []skills.Skill {
+	if skillsSvc == nil {
+		return nil
+	}
+	if limit <= 0 {
+		limit = 6
+	}
+
+	available, err := skillsSvc.List(ctx)
+	if err != nil || len(available) == 0 {
+		return nil
+	}
+
+	curated := scientistBenchCuratedSkillIDs(node, profile)
+	query := scientistBenchSkillRecommendationQuery(item, node, profile)
+	dynamic, err := skillsSvc.Recommend(ctx, query, limit)
+	if err != nil {
+		dynamic = nil
+	}
+
+	out := make([]skills.Skill, 0, limit)
+	seen := make(map[string]struct{}, limit)
+	appendSkill := func(skill skills.Skill) {
+		if len(out) >= limit {
+			return
+		}
+		key := strings.ToLower(strings.TrimSpace(skill.ID))
+		if key == "" {
+			return
+		}
+		if _, exists := seen[key]; exists {
+			return
+		}
+		seen[key] = struct{}{}
+		out = append(out, skill)
+	}
+
+	for _, id := range curated {
+		for _, skill := range available {
+			if strings.EqualFold(skill.ID, id) {
+				appendSkill(skill)
+				break
 			}
 		}
 	}
+	for _, skill := range dynamic {
+		appendSkill(skill)
+	}
+	return out
+}
+
+func scientistBenchCuratedSkillIDs(node orchestrator.NodeSpec, profile orchestrator.WorkerProfile) []string {
+	ids := []string{}
+	switch profile.RoleID {
+	case "research_agent":
+		ids = append(ids, "citation-management", "research-lookup", "arxiv-database", "biorxiv-database", "bgpt-paper-search")
+	case "paper_writer":
+		ids = append(ids, "scientific-writing", "venue-templates", "citation-management")
+	case "judge_agent", "advisor_agent", "domain_expert_reviewer", "paper_comparison_reviewer", "chief_scientist":
+		ids = append(ids, "scholar-evaluation", "scientific-critical-thinking", "research-lookup", "citation-management")
+	case "execution_agent":
+		ids = append(ids, "scientific-visualization")
+	}
+
+	switch node.ID {
+	case "node-corpus-retrieval":
+		ids = append(ids, "citation-management", "research-lookup")
+	case "node-paper-draft":
+		ids = append(ids, "scientific-writing", "venue-templates")
+	case "node-paper-compare":
+		ids = append(ids, "scholar-evaluation", "scientific-critical-thinking")
+	}
+	return ids
+}
+
+func scientistBenchSkillRecommendationQuery(
+	item scientistbench.Case,
+	node orchestrator.NodeSpec,
+	profile orchestrator.WorkerProfile,
+) string {
+	parts := []string{
+		profile.RoleID,
+		node.ID,
+		node.Stage,
+		item.Title,
+		item.Inputs.CoreIdea,
+		item.Inputs.Dataset.Name,
+		item.Inputs.TargetPaper.Title,
+	}
+
+	switch profile.RoleID {
+	case "research_agent":
+		parts = append(parts, "literature review papers citations bibliography doi bibtex zotero academic search")
+	case "paper_writer":
+		parts = append(parts, "scientific writing manuscript paper draft references citations bibtex venue formatting")
+	case "judge_agent", "advisor_agent", "domain_expert_reviewer", "paper_comparison_reviewer", "chief_scientist":
+		parts = append(parts, "peer review scholarly evaluation critique paper comparison novelty methodology evidence")
+	case "execution_agent":
+		parts = append(parts, "reproducibility experiment execution runtime benchmark figures")
+	}
+
+	switch node.ID {
+	case "node-corpus-retrieval":
+		parts = append(parts, "reference discovery citation normalization")
+	case "node-paper-draft":
+		parts = append(parts, "paper writing introduction methods results discussion bibliography")
+	case "node-paper-compare":
+		parts = append(parts, "paper comparison reviewer alignment")
+	}
+
+	return strings.Join(sanitizeStrings(parts), " ")
 }
 
 func buildScientistBenchWorkerPrompt(
@@ -725,6 +1110,7 @@ func buildScientistBenchWorkerPrompt(
 	executor interface {
 		BuildPlans([]runtimex.Spec, runtimex.ExecutionRequest) []runtimex.Plan
 	},
+	skillsSvc skills.Service,
 ) string {
 	var b strings.Builder
 	b.WriteString(strings.TrimSpace(profile.PromptPreamble))
@@ -796,13 +1182,15 @@ func buildScientistBenchWorkerPrompt(
 		b.WriteString("- status must be \"succeeded\" or \"failed\" only. Do NOT use \"needs_revision\".\n")
 	} else {
 		b.WriteString("- status must be \"succeeded\" or \"failed\" only.\n")
-		b.WriteString("- IMPORTANT: If your work is not yet complete, do NOT say complete in the loop controller — say continue and keep working.\n")
+		b.WriteString("- IMPORTANT: If your work is not yet complete, do NOT say complete in the loop controller - say continue and keep working.\n")
 		b.WriteString("- Only output JSON when you are genuinely done with all required steps. Incomplete work = keep looping.\n")
 	}
 
-	b.WriteString("- Use this shape: {\"status\":\"succeeded|failed\",\"summary\":\"...\",\"success_signal\":\"...\",\"failure_signal\":\"...\",\"overall_score\":0.0,\"revision_decision\":\"accept|revise\",\"revision_feedback\":[...],\"evidence_summary\":[...],\"citations\":[...],\"risks\":[...],\"ideas\":[...],\"objections\":[...],\"method_plan\":{\"summary\":\"...\",\"pipeline_steps\":[...],\"acceptance_checks\":[...],\"implementation_notes\":[...],\"runtime_hints\":[...]},\"execution\":{\"runtime_id\":\"...\",\"commands\":[...],\"verification_summary\":\"...\",\"verification_passed\":true,\"output_files\":[...],\"log_highlights\":[...]},\"review\":{\"decision\":\"accept|revise|reject\",\"summary\":\"...\",\"strengths\":[...],\"weaknesses\":[...],\"questions\":[...],\"confidence\":0.0,\"readable_paper\":true,\"novel_insight_present\":true,\"code_runs\":true,\"scores\":{\"overall\":0.0,\"idea_quality\":0.0,\"method_soundness\":0.0,\"result_interpretation\":0.0,\"writing_quality\":0.0}},\"comparison\":{\"summary\":\"...\",\"strengths\":[...],\"weaknesses\":[...],\"motivation_alignment\":0.0,\"methodology_alignment\":0.0,\"novelty_alignment\":0.0,\"experimental_alignment\":0.0,\"confidence\":0.0}}\n")
-	b.WriteString("- overall_score: set to the mean review score (0–5) when acting as reviewer or revision gate.\n")
+	b.WriteString("- Use this shape: {\"status\":\"succeeded|failed\",\"summary\":\"...\",\"success_signal\":\"...\",\"failure_signal\":\"...\",\"overall_score\":0.0,\"revision_decision\":\"accept|revise\",\"revision_feedback\":[...],\"evidence_summary\":[...],\"citations\":[...],\"references\":[{\"key\":\"smith2024\",\"title\":\"...\",\"authors\":[\"...\"],\"year\":2024,\"venue\":\"...\",\"doi\":\"...\",\"url\":\"...\",\"zotero_key\":\"...\",\"formatted_reference\":\"...\",\"bibtex\":\"@article{...}\",\"key_claim\":\"...\"}],\"risks\":[...],\"ideas\":[...],\"objections\":[...],\"method_plan\":{\"summary\":\"...\",\"pipeline_steps\":[...],\"acceptance_checks\":[...],\"implementation_notes\":[...],\"runtime_hints\":[...]},\"execution\":{\"runtime_id\":\"...\",\"commands\":[...],\"verification_summary\":\"...\",\"verification_passed\":true,\"output_files\":[...],\"log_highlights\":[...]},\"review\":{\"decision\":\"accept|revise|reject\",\"summary\":\"...\",\"strengths\":[...],\"weaknesses\":[...],\"questions\":[...],\"confidence\":0.0,\"readable_paper\":true,\"novel_insight_present\":true,\"code_runs\":true,\"scores\":{\"overall\":0.0,\"idea_quality\":0.0,\"method_soundness\":0.0,\"result_interpretation\":0.0,\"writing_quality\":0.0}},\"comparison\":{\"summary\":\"...\",\"strengths\":[...],\"weaknesses\":[...],\"motivation_alignment\":0.0,\"methodology_alignment\":0.0,\"novelty_alignment\":0.0,\"experimental_alignment\":0.0,\"confidence\":0.0}}\n")
+	b.WriteString("- overall_score: set to the mean review score (0-5) when acting as reviewer or revision gate.\n")
 	b.WriteString("- Only set success_signal or failure_signal if you are confident it matches the assigned node contract.\n")
+	appendScientistBenchRoleContractOverride(&b, node, profile)
+	appendScientistBenchSkillRecommendations(&b, item, node, profile, skillsSvc)
 	return strings.TrimSpace(b.String())
 }
 
@@ -825,6 +1213,217 @@ func nextRoleOrdinal(item scientistbench.Case, roleID string) int {
 	return count + 1
 }
 
+func latestRecoverableNodeRunForNode(item scientistbench.Case, nodeID string) (scientistbench.RunRecord, bool) {
+	for _, run := range item.Runs {
+		if run.NodeID != nodeID {
+			continue
+		}
+		if isScientistBenchRunTerminal(run) {
+			continue
+		}
+		return run, true
+	}
+	return scientistbench.RunRecord{}, false
+}
+
+func firstLiveNodeRoleForNode(item scientistbench.Case, nodeID string) string {
+	for _, run := range item.Runs {
+		if run.NodeID != nodeID {
+			continue
+		}
+		if isScientistBenchRunTerminal(run) {
+			continue
+		}
+		return strings.TrimSpace(run.Role)
+	}
+	return ""
+}
+
+func (app *App) launchScientistBenchReadyRoles(caseID string, item scientistbench.Case, node orchestrator.NodeSpec, excludeRole string) {
+	excludeRole = strings.TrimSpace(excludeRole)
+	slots := app.scientistBenchAvailableWorkerSlots(item)
+	if slots == 0 {
+		return
+	}
+	for _, roleID := range readyRolesForNode(item, node) {
+		if roleID == excludeRole {
+			continue
+		}
+		if slots > 0 {
+			app.launchScientistBenchConcurrentRole(caseID, node.ID, roleID)
+			slots--
+		}
+	}
+}
+
+func (app *App) launchScientistBenchPendingConcurrentNodes(caseID string, item scientistbench.Case) {
+	slots := app.scientistBenchAvailableWorkerSlots(item)
+	if slots == 0 || app.Orchestrator == nil {
+		return
+	}
+	for _, nodeID := range item.GraphState.ConcurrentNodes {
+		if slots == 0 {
+			return
+		}
+		node, ok := app.Orchestrator.GetNode(nodeID)
+		if !ok {
+			continue
+		}
+		if allAssignedRolesCompleted(item, node) || firstLiveNodeRoleForNode(item, nodeID) != "" {
+			continue
+		}
+		app.launchScientistBenchConcurrentNode(caseID, nodeID)
+		slots--
+	}
+}
+
+func (app *App) scientistBenchAvailableWorkerSlots(item scientistbench.Case) int {
+	maxParallel := item.Budget.MaxParallelWorkers
+	if maxParallel <= 0 {
+		return 1 << 20
+	}
+	used := 0
+	for _, run := range item.Runs {
+		if isScientistBenchRunTerminal(run) {
+			continue
+		}
+		used++
+	}
+	if used >= maxParallel {
+		return 0
+	}
+	return maxParallel - used
+}
+
+func (app *App) enforceScientistBenchBudget(ctx context.Context, item scientistbench.Case) (bool, scientistbench.Case, error) {
+	exhausted, reason, err := app.scientistBenchBudgetExceeded(ctx, item)
+	if err != nil || !exhausted || app.ScientistBench == nil || strings.TrimSpace(item.ID) == "" {
+		return exhausted, item, err
+	}
+	saved, err := app.ScientistBench.MutateCase(ctx, item.ID, func(caseItem *scientistbench.Case) error {
+		if scientistBenchCaseIsTerminal(*caseItem) {
+			return nil
+		}
+		caseItem.Termination = scientistbench.Termination{
+			Signal:       scientistbench.SignalBudgetExhausted,
+			Reason:       strings.TrimSpace(reason),
+			Resolved:     false,
+			TerminatedAt: time.Now().Unix(),
+		}
+		caseItem.Status = scientistbench.StatusNotResolved
+		caseItem.GraphState.PendingNodes = nil
+		return nil
+	})
+	return true, saved, err
+}
+
+func (app *App) scientistBenchBudgetExceeded(ctx context.Context, item scientistbench.Case) (bool, string, error) {
+	if maxMinutes := item.Budget.MaxWallClockMinutes; maxMinutes > 0 && item.CreatedAt > 0 {
+		if time.Since(time.Unix(item.CreatedAt, 0)) > time.Duration(maxMinutes)*time.Minute {
+			return true, fmt.Sprintf("wall clock budget exceeded (%d minutes)", maxMinutes), nil
+		}
+	}
+	if maxSteps := item.Budget.MaxAgentSteps; maxSteps > 0 && len(item.Runs) >= maxSteps {
+		return true, fmt.Sprintf("agent step budget exceeded (%d)", maxSteps), nil
+	}
+	if maxToolCalls := item.Budget.MaxToolCalls; maxToolCalls > 0 && scientistBenchToolCallCount(item) >= maxToolCalls {
+		return true, fmt.Sprintf("tool call budget exceeded (%d)", maxToolCalls), nil
+	}
+	if maxJudgeRepeats := item.Budget.MaxJudgeRepeats; maxJudgeRepeats > 0 && scientistBenchRoleRunCount(item, "judge_agent") >= maxJudgeRepeats {
+		return true, fmt.Sprintf("judge repeat budget exceeded (%d)", maxJudgeRepeats), nil
+	}
+	if maxCost := item.Budget.MaxCostUSD; maxCost > 0 {
+		cost, err := app.scientistBenchSessionTreeCost(ctx, item.RootSessionID, map[string]struct{}{})
+		if err != nil {
+			return false, "", err
+		}
+		if cost >= maxCost {
+			return true, fmt.Sprintf("cost budget exceeded (%.2f USD)", maxCost), nil
+		}
+	}
+	return false, "", nil
+}
+
+func scientistBenchRoleRunCount(item scientistbench.Case, roleID string) int {
+	count := 0
+	for _, run := range item.Runs {
+		if run.Role == roleID {
+			count++
+		}
+	}
+	return count
+}
+
+func scientistBenchToolCallCount(item scientistbench.Case) int {
+	total := 0
+	for _, run := range item.Runs {
+		total += len(run.ToolCalls)
+	}
+	return total
+}
+
+func (app *App) scientistBenchSessionTreeCost(ctx context.Context, sessionID string, visited map[string]struct{}) (float64, error) {
+	if app.Sessions == nil {
+		return 0, nil
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return 0, nil
+	}
+	if _, ok := visited[sessionID]; ok {
+		return 0, nil
+	}
+	visited[sessionID] = struct{}{}
+
+	sess, err := app.Sessions.Get(ctx, sessionID)
+	if err != nil {
+		return 0, err
+	}
+	total := sess.Cost
+	children, err := app.Sessions.ListChildren(ctx, sessionID)
+	if err != nil {
+		return 0, err
+	}
+	for _, child := range children {
+		childCost, childErr := app.scientistBenchSessionTreeCost(ctx, child.ID, visited)
+		if childErr != nil {
+			return 0, childErr
+		}
+		total += childCost
+	}
+	return total, nil
+}
+
+func readyRolesForNode(item scientistbench.Case, node orchestrator.NodeSpec) []string {
+	ready := make([]string, 0, len(node.AssignedRoles))
+	for _, roleID := range node.AssignedRoles {
+		roleID = strings.TrimSpace(roleID)
+		if roleID == "" {
+			continue
+		}
+		if hasSuccessfulNodeRoleRun(item, node.ID, roleID) || hasLiveNodeRoleRun(item, node.ID, roleID) {
+			continue
+		}
+		if !roleDependenciesSatisfied(item, node, roleID) {
+			continue
+		}
+		ready = append(ready, roleID)
+	}
+	return ready
+}
+
+func roleDependenciesSatisfied(item scientistbench.Case, node orchestrator.NodeSpec, roleID string) bool {
+	if len(node.RoleDependencies) == 0 {
+		return true
+	}
+	for _, dependency := range node.RoleDependencies[strings.TrimSpace(roleID)] {
+		if !hasSuccessfulNodeRoleRun(item, node.ID, dependency) {
+			return false
+		}
+	}
+	return true
+}
+
 func (app *App) reconcileScientistBenchGraphFromRuns(item scientistbench.Case) (scientistbench.Case, bool, error) {
 	if app.Orchestrator == nil {
 		return item, false, nil
@@ -840,6 +1439,15 @@ func (app *App) reconcileScientistBenchGraphFromRuns(item scientistbench.Case) (
 			return scientistbench.Case{}, changed, fmt.Errorf("active node %s is not registered", item.GraphState.ActiveNode)
 		}
 
+		item, concurrentChanged, err := app.reconcileScientistBenchConcurrentSignals(item)
+		if err != nil {
+			return scientistbench.Case{}, changed, err
+		}
+		if concurrentChanged {
+			changed = true
+			continue
+		}
+
 		nextRole, err := nextPendingRoleForNode(item, node)
 		if err == nil && nextRole != "" {
 			if item.GraphState.ActiveRole != nextRole {
@@ -853,12 +1461,17 @@ func (app *App) reconcileScientistBenchGraphFromRuns(item scientistbench.Case) (
 		if signal == "" {
 			return item, changed, nil
 		}
+		before := item
 		updated, applyErr := app.Orchestrator.ApplySignal(item, signal)
 		if applyErr != nil {
 			return scientistbench.Case{}, changed, applyErr
 		}
+		if scientistBenchProgressEqual(before, updated) {
+			return item, changed, nil
+		}
 		item = updated
 		changed = true
+		return item, changed, nil
 	}
 	return scientistbench.Case{}, changed, fmt.Errorf("scientist bench graph reconciliation exceeded safety limit")
 }
@@ -909,10 +1522,12 @@ func firstRole(items []string) string {
 }
 
 func nextPendingRoleForNode(item scientistbench.Case, node orchestrator.NodeSpec) (string, error) {
-	for _, roleID := range node.AssignedRoles {
-		if !hasSuccessfulNodeRoleRun(item, node.ID, roleID) {
-			return strings.TrimSpace(roleID), nil
-		}
+	ready := readyRolesForNode(item, node)
+	if len(ready) > 0 {
+		return ready[0], nil
+	}
+	if !allAssignedRolesCompleted(item, node) {
+		return "", fmt.Errorf("node %s is waiting on running or blocked roles", node.ID)
 	}
 	return "", fmt.Errorf("no pending roles remain for node %s", node.ID)
 }
@@ -922,6 +1537,19 @@ func hasSuccessfulNodeRoleRun(item scientistbench.Case, nodeID string, roleID st
 		if run.NodeID == nodeID && run.Role == roleID && run.Status == "complete" && strings.TrimSpace(run.Error) == "" {
 			return true
 		}
+	}
+	return false
+}
+
+func hasLiveNodeRoleRun(item scientistbench.Case, nodeID string, roleID string) bool {
+	for _, run := range item.Runs {
+		if run.NodeID != nodeID || run.Role != roleID {
+			continue
+		}
+		if isScientistBenchRunTerminal(run) {
+			continue
+		}
+		return true
 	}
 	return false
 }
@@ -940,6 +1568,10 @@ func scientistBenchRecoveredNodeSignal(item scientistbench.Case, node orchestrat
 				return node.SuccessSignal
 			case node.FailureSignal:
 				return node.FailureSignal
+			default:
+				if _, ok := node.DynamicRoutes[strings.TrimSpace(signal)]; ok {
+					return strings.TrimSpace(signal)
+				}
 			}
 		}
 	}
@@ -947,6 +1579,39 @@ func scientistBenchRecoveredNodeSignal(item scientistbench.Case, node orchestrat
 		return node.SuccessSignal
 	}
 	return ""
+}
+
+func (app *App) reconcileScientistBenchConcurrentSignals(item scientistbench.Case) (scientistbench.Case, bool, error) {
+	if app.Orchestrator == nil || len(item.GraphState.ConcurrentNodes) == 0 {
+		return item, false, nil
+	}
+
+	changed := false
+	for i := 0; i < 32; i++ {
+		for _, nodeID := range item.GraphState.ConcurrentNodes {
+			node, ok := app.Orchestrator.GetNode(nodeID)
+			if !ok {
+				continue
+			}
+			signal := scientistBenchRecoveredNodeSignal(item, node)
+			if signal == "" {
+				continue
+			}
+			before := item
+			updated, err := app.Orchestrator.ApplySignal(item, signal)
+			if err != nil {
+				return scientistbench.Case{}, changed, err
+			}
+			if scientistBenchProgressEqual(before, updated) {
+				return item, changed, nil
+			}
+			item = updated
+			changed = true
+			return item, changed, nil
+		}
+		return item, changed, nil
+	}
+	return scientistbench.Case{}, changed, fmt.Errorf("scientist bench concurrent reconciliation exceeded safety limit")
 }
 
 func allAssignedRolesCompleted(item scientistbench.Case, node orchestrator.NodeSpec) bool {
@@ -959,6 +1624,12 @@ func allAssignedRolesCompleted(item scientistbench.Case, node orchestrator.NodeS
 		}
 	}
 	return true
+}
+
+func scientistBenchProgressEqual(a scientistbench.Case, b scientistbench.Case) bool {
+	return a.Status == b.Status &&
+		reflect.DeepEqual(a.GraphState, b.GraphState) &&
+		reflect.DeepEqual(a.Termination, b.Termination)
 }
 
 func scientistBenchCaseIsTerminal(item scientistbench.Case) bool {
@@ -1119,10 +1790,15 @@ func normalizeRunSignals(output orchestrator.WorkerOutput, node orchestrator.Nod
 	if output.SuccessSignal == node.SuccessSignal && output.SuccessSignal != "" {
 		signals = append(signals, output.SuccessSignal)
 	}
+	if output.SuccessSignal != "" {
+		if _, ok := node.DynamicRoutes[output.SuccessSignal]; ok {
+			signals = append(signals, output.SuccessSignal)
+		}
+	}
 	if output.FailureSignal == node.FailureSignal && output.FailureSignal != "" {
 		signals = append(signals, output.FailureSignal)
 	}
-	return signals
+	return sanitizeStrings(signals)
 }
 
 func sanitizeStrings(items []string) []string {
@@ -1231,7 +1907,7 @@ func appendScientistBenchContextSections(
 			if max <= 0 {
 				max = 2
 			}
-			fmt.Fprintf(b, "  - \"%s\" → routes back to %s (used %d/%d times)\n", sig, target, retries, max)
+			fmt.Fprintf(b, "  - \"%s\" -> routes back to %s (used %d/%d times)\n", sig, target, retries, max)
 		}
 		b.WriteString("Emit a dynamic signal by setting success_signal to one of the above keys.\n")
 		b.WriteString("If evidence or context is thin but workable, proceed rather than requesting a retry.\n")
@@ -1251,8 +1927,30 @@ func appendScientistBenchContextSections(
 		if evidenceText := strings.TrimSpace(evidence.Metadata["evidence"]); evidenceText != "" {
 			fmt.Fprintf(b, "Evidence bullets: %s\n", evidenceText)
 		}
+		if refs := scientistBenchArtifactReferences(*evidence); len(refs) > 0 {
+			fmt.Fprintf(b, "Normalized references: %d\n", len(refs))
+			limit := len(refs)
+			if limit > 12 {
+				limit = 12
+			}
+			for i := 0; i < limit; i++ {
+				ref := refs[i]
+				fmt.Fprintf(b, "- [%s] %s\n", firstNonEmpty(ref.Key, ref.ZoteroKey, fmt.Sprintf("ref-%d", i+1)), scientistBenchReferenceDisplay(ref))
+				if claim := strings.TrimSpace(ref.KeyClaim); claim != "" {
+					fmt.Fprintf(b, "  Key claim: %s\n", claim)
+				}
+			}
+		}
+		if keys := strings.TrimSpace(evidence.Metadata["citation_keys"]); keys != "" {
+			fmt.Fprintf(b, "Citation keys: %s\n", keys)
+		}
+		if (profile.RoleID == "paper_writer" || node.ID == "node-paper-draft") && strings.TrimSpace(evidence.Metadata["bibtex_bundle"]) != "" {
+			b.WriteString("BibTeX bundle:\n")
+			b.WriteString(strings.TrimSpace(evidence.Metadata["bibtex_bundle"]))
+			b.WriteString("\n")
+		}
 	} else if isCS || node.ID == "node-idea-gate" {
-		// No evidence artifact found — tell CS so it can make a decision.
+		// No evidence artifact found - tell CS so it can make a decision.
 		b.WriteString("\nEvidence pack status: NO evidence artifacts found from research stages.\n")
 		b.WriteString("You may emit \"research_insufficient\" to request a research retry,\n")
 		b.WriteString("OR proceed using the core_idea and constraints as the basis for ideation.\n")
@@ -1369,7 +2067,7 @@ func appendScientistBenchContextSections(
 
 	// Revision feedback injection: paper_writer on rounds > 0 sees all prior weaknesses
 	if profile.RoleID == "paper_writer" && item.GraphState.RevisionRound > 0 {
-		fmt.Fprintf(b, "\nRevision round %d — you MUST address all feedback below.\n", item.GraphState.RevisionRound)
+		fmt.Fprintf(b, "\nRevision round %d - you MUST address all feedback below.\n", item.GraphState.RevisionRound)
 		b.WriteString("Begin the paper with a comment block: %% Changes in revision N: ...\n")
 		b.WriteString("Do not reduce quality in sections not mentioned in the feedback.\n")
 		anyFeedback := false
@@ -1388,7 +2086,7 @@ func appendScientistBenchContextSections(
 			}
 		}
 		if !anyFeedback {
-			b.WriteString("  (No specific feedback recorded — improve overall depth and rigor.)\n")
+			b.WriteString("  (No specific feedback recorded - improve overall depth and rigor.)\n")
 		}
 	}
 
@@ -1554,7 +2252,10 @@ func latestEvidenceArtifact(item scientistbench.Case) *scientistbench.Artifact {
 		if artifact.Kind != scientistbench.ArtifactCitation {
 			continue
 		}
-		if strings.TrimSpace(artifact.Metadata["citations"]) == "" && strings.TrimSpace(artifact.Metadata["evidence"]) == "" {
+		if strings.TrimSpace(artifact.Metadata["citations"]) == "" &&
+			strings.TrimSpace(artifact.Metadata["evidence"]) == "" &&
+			strings.TrimSpace(artifact.Metadata["references_json"]) == "" &&
+			strings.TrimSpace(artifact.Metadata["bibtex_bundle"]) == "" {
 			continue
 		}
 		copyArtifact := artifact

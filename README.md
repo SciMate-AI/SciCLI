@@ -87,6 +87,28 @@ Add MCP servers to `~/.scicli.json` or `./.scicli.json`:
 
 SciCLI does not ship built-in remote CAE, run-management, or service-specific MCP presets. If you need remote tools, add them explicitly in configuration.
 
+For Scientist Bench literature review and paper writing, a Zotero MCP server is useful because it can normalize references into formatted citations and BibTeX instead of relying on model-written citation strings. A typical local stdio setup looks like:
+
+```json
+{
+  "mcpServers": {
+    "zotero": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": ["zotero-mcp"]
+    }
+  }
+}
+```
+
+Or install the built-in preset into your config:
+
+```bash
+scicli mcp install zotero
+```
+
+With that configured, the `research_agent` can discover papers from web/API search, then normalize them through Zotero before passing structured references to the `paper_writer`.
+
 ### 4. Optional local dependencies
 
 SciCLI works without these tools, but some features are better with them installed:
@@ -187,6 +209,8 @@ Discovered roots include:
 - bundled extension skills under `./.scicli/extensions/*/skills`, `./.gemini/extensions/*/skills`, `./.claude/extensions/*/skills`, `$HOME/.scicli/extensions/*/skills`, `$HOME/.gemini/extensions/*/skills`, and `$HOME/.claude/extensions/*/skills`
 
 The agent receives a catalog of recommended skills for the current user request and can call `activate_skill` to inject a skill into the current session context on demand. Relative paths referenced by a skill are resolved from that skill's directory.
+
+Scientist Bench workers use the same mechanism. In addition to generic session-level recommendation, worker prompts now include role-aware and node-aware skill suggestions, so literature-review nodes can proactively activate skills like `citation-management` or `research-lookup`, and paper-drafting nodes can activate `scientific-writing` or `venue-templates` when those skills are available.
 
 ### Context Management
 

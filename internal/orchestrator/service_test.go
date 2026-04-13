@@ -90,3 +90,32 @@ func TestWorkerProfileForRole(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, WorkerToolProfileDeliberation, profile.ToolProfile)
 }
+
+func TestApplySignalFailureRespectsRetryBudget(t *testing.T) {
+	svc := NewService()
+	item := scientistbench.Case{
+		ID:     "case-retry",
+		Status: scientistbench.StatusRunning,
+		GraphState: scientistbench.GraphState{
+			CurrentStage: "execution",
+			ActiveNode:   "node-execution",
+			ActiveRole:   "execution_agent",
+		},
+	}
+
+	item, err := svc.ApplySignal(item, "code_not_executable")
+	require.NoError(t, err)
+	assert.Equal(t, scientistbench.StatusRunning, item.Status)
+	assert.Equal(t, "node-execution", item.GraphState.ActiveNode)
+	assert.Equal(t, 1, item.GraphState.NodeRetries["node-execution"])
+
+	item, err = svc.ApplySignal(item, "code_not_executable")
+	require.NoError(t, err)
+	assert.Equal(t, scientistbench.StatusRunning, item.Status)
+	assert.Equal(t, 2, item.GraphState.NodeRetries["node-execution"])
+
+	item, err = svc.ApplySignal(item, "code_not_executable")
+	require.NoError(t, err)
+	assert.Equal(t, scientistbench.StatusBlocked, item.Status)
+	assert.Contains(t, item.GraphState.BlockedNodes, "node-execution")
+}

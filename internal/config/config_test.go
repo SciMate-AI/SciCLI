@@ -292,6 +292,49 @@ func TestSetWorkModeRuntimeOnly(t *testing.T) {
 	assert.Equal(t, WorkModeAuto, cfg.Automation.WorkMode)
 }
 
+func TestSetMCPServerPersistsConfig(t *testing.T) {
+	resetConfigTestState()
+
+	tmpDir := t.TempDir()
+	configFile := filepath.Join(tmpDir, ".scicli.json")
+	require.NoError(t, os.WriteFile(configFile, []byte("{}"), 0o644))
+
+	viper.SetConfigFile(configFile)
+	require.NoError(t, viper.ReadInConfig())
+
+	cfg = &Config{}
+	require.NoError(t, SetMCPServer("zotero", MCPServer{
+		Type:    MCPStdio,
+		Command: "uvx",
+		Args:    []string{"zotero-mcp"},
+	}, false))
+
+	require.Contains(t, cfg.MCPServers, "zotero")
+	assert.Equal(t, "uvx", cfg.MCPServers["zotero"].Command)
+
+	data, err := os.ReadFile(configFile)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "\"zotero\"")
+	assert.Contains(t, string(data), "\"zotero-mcp\"")
+}
+
+func TestSetMCPServerRejectsExistingWhenOverwriteDisabled(t *testing.T) {
+	resetConfigTestState()
+	cfg = &Config{
+		MCPServers: map[string]MCPServer{
+			"zotero": {Type: MCPStdio, Command: "uvx", Args: []string{"zotero-mcp"}},
+		},
+	}
+
+	err := SetMCPServer("zotero", MCPServer{
+		Type:    MCPStdio,
+		Command: "uvx",
+		Args:    []string{"zotero-mcp"},
+	}, false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "already exists")
+}
+
 func TestSetDefaultsDoesNotInjectBuiltInMCPServers(t *testing.T) {
 	resetConfigTestState()
 
