@@ -62,7 +62,9 @@ func TestWorkerProfileForRole(t *testing.T) {
 	profile, ok := svc.WorkerProfileForRole("research_agent")
 	require.True(t, ok)
 	assert.Equal(t, WorkerToolProfileResearch, profile.ToolProfile)
-	assert.Contains(t, profile.PromptPreamble, "arxiv")
+	assert.Equal(t, 4, profile.Convergence.StepBudget)
+	assert.Equal(t, WorkerCompletionModeStructuredJSON, profile.Convergence.CompletionMode)
+	assert.Contains(t, profile.PromptPreamble, "structured paper search")
 
 	profile, ok = svc.WorkerProfileForRole("idea_hater")
 	require.True(t, ok)
@@ -89,6 +91,7 @@ func TestWorkerProfileForRole(t *testing.T) {
 	profile, ok = svc.WorkerProfileForRole("judge_agent")
 	require.True(t, ok)
 	assert.Equal(t, WorkerToolProfileDeliberation, profile.ToolProfile)
+	assert.Equal(t, "score_advisor_report", profile.Convergence.Strategy)
 }
 
 func TestApplySignalFailureRespectsRetryBudget(t *testing.T) {

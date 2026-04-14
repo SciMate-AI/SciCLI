@@ -91,7 +91,7 @@ func TestHistoryNeedsCompactionWhenEstimatedUsageNearWindow(t *testing.T) {
 }
 
 func TestExecutionLoopStateDefaultsToNoFixedStepLimit(t *testing.T) {
-	state := newExecutionLoopState()
+	state := newExecutionLoopState(promptExecutionPolicy{})
 
 	if state.hasStepBudget() {
 		t.Fatal("expected default loop state to have no fixed step budget")
@@ -104,6 +104,37 @@ func TestExecutionLoopStateDefaultsToNoFixedStepLimit(t *testing.T) {
 	}
 	if got := state.promptStepLabel(); !strings.Contains(got, "no fixed step limit") {
 		t.Fatalf("expected prompt step label to describe unlimited mode, got %q", got)
+	}
+}
+
+func TestParsePromptExecutionPolicy(t *testing.T) {
+	policy := parsePromptExecutionPolicy(`<scicli_execution_policy step_budget="4" completion_mode="structured_json" terminal_json_key="status" />`)
+	if policy.stepBudget != 4 {
+		t.Fatalf("expected step budget 4, got %d", policy.stepBudget)
+	}
+	if policy.completionMode != loopCompletionModeStructuredJSON {
+		t.Fatalf("expected structured JSON mode, got %s", policy.completionMode)
+	}
+	if policy.terminalJSONKey != "status" {
+		t.Fatalf("expected status key, got %q", policy.terminalJSONKey)
+	}
+}
+
+func TestInferStructuredLoopDecisionTreatsValidJSONAsComplete(t *testing.T) {
+	state := newExecutionLoopState(promptExecutionPolicy{
+		stepBudget:      3,
+		completionMode:  loopCompletionModeStructuredJSON,
+		terminalJSONKey: "status",
+	})
+	msg := message.Message{
+		Parts: []message.ContentPart{
+			message.TextContent{Text: `{"status":"succeeded","summary":"done"}`},
+		},
+	}
+
+	decision := inferStructuredLoopDecision(msg, state)
+	if decision != loopDecisionComplete {
+		t.Fatalf("expected structured output to complete loop, got %s", decision)
 	}
 }
 

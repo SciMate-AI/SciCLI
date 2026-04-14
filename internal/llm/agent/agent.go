@@ -338,7 +338,7 @@ func (a *agent) processGeneration(ctx context.Context, sessionID, content string
 	}
 	// Append the new user message to the conversation history.
 	msgHistory := append(msgs, userMsg)
-	loopState := newExecutionLoopState()
+	loopState := newExecutionLoopState(parsePromptExecutionPolicy(userMsg.Content().Text))
 
 	for {
 		// Check for cancellation before each iteration
@@ -382,6 +382,9 @@ func (a *agent) processGeneration(ctx context.Context, sessionID, content string
 		}
 
 		decision := sanitizeLoopDecision(&agentMessage)
+		if decision == loopDecisionUnknown {
+			decision = inferStructuredLoopDecision(agentMessage, loopState)
+		}
 		if err := a.messages.Update(context.Background(), agentMessage); err != nil {
 			return a.err(fmt.Errorf("failed to update loop decision message: %w", err))
 		}

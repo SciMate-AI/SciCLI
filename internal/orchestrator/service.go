@@ -40,11 +40,26 @@ const (
 	WorkerToolProfileExecution    WorkerToolProfile = "execution"
 )
 
+type WorkerCompletionMode string
+
+const (
+	WorkerCompletionModeLoopTagged     WorkerCompletionMode = "loop_tagged"
+	WorkerCompletionModeStructuredJSON WorkerCompletionMode = "structured_json"
+)
+
+type WorkerConvergencePolicy struct {
+	StepBudget      int                  `json:"step_budget,omitempty"`
+	CompletionMode  WorkerCompletionMode `json:"completion_mode,omitempty"`
+	TerminalJSONKey string               `json:"terminal_json_key,omitempty"`
+	Strategy        string               `json:"strategy,omitempty"`
+}
+
 type WorkerProfile struct {
-	RoleID         string            `json:"role_id"`
-	SessionLabel   string            `json:"session_label,omitempty"`
-	ToolProfile    WorkerToolProfile `json:"tool_profile,omitempty"`
-	PromptPreamble string            `json:"prompt_preamble,omitempty"`
+	RoleID         string                  `json:"role_id"`
+	SessionLabel   string                  `json:"session_label,omitempty"`
+	ToolProfile    WorkerToolProfile       `json:"tool_profile,omitempty"`
+	PromptPreamble string                  `json:"prompt_preamble,omitempty"`
+	Convergence    WorkerConvergencePolicy `json:"convergence,omitempty"`
 }
 
 type NodeSpec struct {
@@ -145,6 +160,15 @@ func (s *service) GetNode(id string) (NodeSpec, bool) {
 	return node, ok
 }
 
+func scientistBenchConvergence(stepBudget int, strategy string) WorkerConvergencePolicy {
+	return WorkerConvergencePolicy{
+		StepBudget:      stepBudget,
+		CompletionMode:  WorkerCompletionModeStructuredJSON,
+		TerminalJSONKey: "status",
+		Strategy:        strategy,
+	}
+}
+
 func (s *service) WorkerProfileForRole(id string) (WorkerProfile, bool) {
 	switch strings.TrimSpace(id) {
 	case "chief_scientist":
@@ -152,6 +176,7 @@ func (s *service) WorkerProfileForRole(id string) (WorkerProfile, bool) {
 			RoleID:       "chief_scientist",
 			SessionLabel: "Chief Scientist",
 			ToolProfile:  WorkerToolProfileDeliberation,
+			Convergence:  scientistBenchConvergence(3, "gate_decision"),
 			PromptPreamble: strings.TrimSpace(`
 You are the Chief Scientist — the directing intelligence of a multi-agent research pipeline.
 You are NOT just a validator. You are the decision-maker and orchestrator.
@@ -195,58 +220,31 @@ Always ground decisions in the artifacts listed in your context. Do not invent d
 			RoleID:       "research_agent",
 			SessionLabel: "Research Agent",
 			ToolProfile:  WorkerToolProfileResearch,
+			Convergence:  scientistBenchConvergence(4, "research_pack"),
 			PromptPreamble: strings.TrimSpace(`
-You are the Research Agent. Your sole job in this session is to produce a complete,
-grounded evidence pack that the rest of the pipeline will build on.
+You are the Research Agent. Your sole job in this session is to produce a grounded
+evidence pack that the rest of the pipeline can safely build on.
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-MANDATORY OUTPUT REQUIREMENTS (enforced by the system)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-The system will REJECT your output and force a retry if either field is missing:
+Minimum acceptable evidence pack:
+  citations[]        - aim for 5 entries when available, minimum 3
+  evidence_summary[] - aim for 5 bullets when available, minimum 3
 
-  citations[]       — at least 5 entries, each in the form:
-                      "Authors. Year. Title. Venue. URL. 1-sentence key claim."
+Coverage requirements:
+- prior methods and their metric results
+- the gap or limitation this case targets
+- datasets and evaluation protocols
+- reproducibility or implementation risks
 
-  evidence_summary[] — at least 5 bullets covering:
-                       • what prior methods do and their metric results
-                       • the key gap or limitation this case targets
-                       • available datasets and evaluation protocols
-                       • reproducibility risks
+Search strategy:
+1. Use broad search first to map the space.
+2. Use structured paper search to identify the strongest references.
+3. Deep-read only the most relevant sources before synthesizing.
 
-Do NOT emit your final JSON until both arrays have ≥5 entries. If you haven't
-collected enough yet, output <agent_loop_status>continue</agent_loop_status>
-and keep searching.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-SEARCH STRATEGY (use all three sources)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-1. web_search tool — broad first pass:
-   web_search(query="<topic> survey benchmark", max_results=15)
-   Run 3–4 queries with different angles. After getting URLs, fetch the most
-   relevant pages to extract paper titles, authors, and key claims.
-
-2. Semantic Scholar API — structured academic search (preferred for papers):
-   https://api.semanticscholar.org/graph/v1/paper/search?query=KEYWORDS&fields=title,abstract,year,authors,citationCount,externalIds&limit=20
-   - No API key needed for basic use; SEMANTIC_SCHOLAR_API_KEY is auto-injected if set.
-   - If you get 429, wait 2 seconds and retry (handled automatically).
-   - Sort by citationCount to find landmark papers first.
-   - Run at least 3 queries covering: method name, task/benchmark, and key baselines.
-
-3. arXiv API — recent preprints:
-   https://export.arxiv.org/api/query?search_query=TERMS&max_results=15&sortBy=relevance
-   - Field prefixes: ti: (title), abs: (abstract), cat: (e.g. cs.LG)
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-WORKFLOW
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Step 1 — SEARCH: run ≥3 Semantic Scholar queries + ≥2 web_search queries.
-Step 2 — RETRIEVE: for the top 10 results, collect title/year/abstract/URL.
-Step 3 — DEEP-READ: for the 3–5 most relevant, fetch the full abstract page
-          or PDF landing page to extract method details and metric numbers.
-Step 4 — SYNTHESIZE: write the comparison table and novelty gap analysis
-          inline in your summary, then populate citations[] and evidence_summary[].
+Workflow:
+1. Search with multiple query angles.
+2. Retrieve metadata for the strongest candidate papers.
+3. Deep-read the top 3-5 sources.
+4. Synthesize the novelty gap and evidence summary.
 
 Never fabricate citations. Only list papers you actually fetched.
 `),
@@ -256,6 +254,7 @@ Never fabricate citations. Only list papers you actually fetched.
 			RoleID:       "idea_maker",
 			SessionLabel: "Idea Maker",
 			ToolProfile:  WorkerToolProfileDeliberation,
+			Convergence:  scientistBenchConvergence(2, "idea_generation"),
 			PromptPreamble: strings.TrimSpace(`
 You are the Scientific Idea Generator in a multi-agent research workflow.
 Generate testable, specific, non-trivial research hypotheses grounded in the provided evidence.
@@ -278,6 +277,7 @@ Generate 2–4 distinct ideas. Prefer diversity over similarity.
 			RoleID:       "idea_hater",
 			SessionLabel: "Idea Hater",
 			ToolProfile:  WorkerToolProfileDeliberation,
+			Convergence:  scientistBenchConvergence(2, "idea_critique"),
 			PromptPreamble: strings.TrimSpace(`
 You are the Critical Reviewer of research ideas in a multi-agent workflow.
 Your job: reject weak, derivative, underspecified, or unverifiable ideas with rigorous arguments.
@@ -300,6 +300,7 @@ For ideas that fail: state which specific check failed and why. Be precise, not 
 			RoleID:       "method_planner",
 			SessionLabel: "Method Planner",
 			ToolProfile:  WorkerToolProfileDeliberation,
+			Convergence:  scientistBenchConvergence(3, "method_spec"),
 			PromptPreamble: strings.TrimSpace(`
 You are the Method Planner in a multi-agent scientific workflow.
 Convert accepted ideas and available evidence into a complete, reproducible method specification.
@@ -323,6 +324,7 @@ assumption and annotate it as [ASSUMED: reason].
 			RoleID:       "code_agent",
 			SessionLabel: "Code Agent",
 			ToolProfile:  WorkerToolProfileCode,
+			Convergence:  scientistBenchConvergence(4, "implementation_patch"),
 			PromptPreamble: strings.TrimSpace(`
 You are the Code Implementation Agent in a multi-agent scientific workflow.
 Implement the planned method faithfully and minimally in the repository.
@@ -346,6 +348,7 @@ code executes without errors.
 			RoleID:       "execution_agent",
 			SessionLabel: "Execution Agent",
 			ToolProfile:  WorkerToolProfileExecution,
+			Convergence:  scientistBenchConvergence(5, "execution_report"),
 			PromptPreamble: strings.TrimSpace(`
 You are the Execution Agent in a multi-agent scientific workflow.
 Run the prepared implementation, validate correctness, and capture precise runtime evidence.
@@ -369,6 +372,7 @@ Prefer short verification loops. Do not run expensive experiments to debug setup
 			RoleID:       "figure_agent",
 			SessionLabel: "Figure Agent",
 			ToolProfile:  WorkerToolProfileCode,
+			Convergence:  scientistBenchConvergence(3, "figure_bundle"),
 			PromptPreamble: strings.TrimSpace(`
 You are the Scientific Figure Generation Agent in a multi-agent paper writing workflow.
 Produce publication-quality figures using PaperBanana for architectural/conceptual diagrams
@@ -411,6 +415,7 @@ Quality check: every figure must be readable at 8cm column width.
 			RoleID:       "paper_writer",
 			SessionLabel: "Paper Writer",
 			ToolProfile:  WorkerToolProfileCode,
+			Convergence:  scientistBenchConvergence(4, "paper_draft"),
 			PromptPreamble: strings.TrimSpace(`
 You are the Scientific Paper Writing Agent. Produce a complete, publication-ready LaTeX paper.
 
@@ -482,6 +487,7 @@ REVISION MODE (when revision_round > 0):
 			RoleID:       "domain_expert_reviewer",
 			SessionLabel: "Domain Expert Reviewer",
 			ToolProfile:  WorkerToolProfileDeliberation,
+			Convergence:  scientistBenchConvergence(2, "peer_review"),
 			PromptPreamble: strings.TrimSpace(`
 You are the Domain Expert Reviewer in a multi-agent paper workflow.
 Review the paper draft as a senior conference reviewer (NeurIPS/ICML/ICLR standard).
@@ -508,6 +514,7 @@ Compute overall_score as the mean of the 5 dimension scores.
 			RoleID:       "advisor_agent",
 			SessionLabel: "Advisor Agent",
 			ToolProfile:  WorkerToolProfileDeliberation,
+			Convergence:  scientistBenchConvergence(2, "implementation_review"),
 			PromptPreamble: strings.TrimSpace(`
 You are the Implementation Advisor in a multi-agent scientific workflow.
 Produce a detailed correctness analysis comparing the intended method (from method_spec) with
@@ -531,6 +538,7 @@ and a severity rating (critical / major / minor) for each finding.
 			RoleID:       "judge_agent",
 			SessionLabel: "Judge Agent",
 			ToolProfile:  WorkerToolProfileDeliberation,
+			Convergence:  scientistBenchConvergence(2, "score_advisor_report"),
 			PromptPreamble: strings.TrimSpace(`
 You are the Correctness Judge in a multi-agent scientific workflow.
 Score the advisor report on a calibrated 1–5 correctness scale.
@@ -554,6 +562,7 @@ Provide:
 			RoleID:       "paper_comparison_reviewer",
 			SessionLabel: "Paper Comparison Reviewer",
 			ToolProfile:  WorkerToolProfileDeliberation,
+			Convergence:  scientistBenchConvergence(2, "paper_comparison"),
 			PromptPreamble: strings.TrimSpace(`
 You are the Comparative Reviewer in a multi-agent paper workflow.
 Compare the generated paper against the target paper using structured ICLR-style criteria.
@@ -577,6 +586,7 @@ Compute confidence (0.0–1.0) based on how clearly the target paper abstract/no
 			RoleID:       strings.TrimSpace(id),
 			SessionLabel: "Task Agent",
 			ToolProfile:  WorkerToolProfileReadOnly,
+			Convergence:  scientistBenchConvergence(2, "generic_structured_output"),
 			PromptPreamble: strings.TrimSpace(`
 You are a role-specific worker in a scientist benchmark workflow.
 Execute only the responsibilities implied by your assigned node and role.

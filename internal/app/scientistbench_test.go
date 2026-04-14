@@ -180,6 +180,26 @@ func TestBuildScientistBenchWorkerPromptIncludesMethodPlan(t *testing.T) {
 	assert.True(t, strings.Contains(prompt, "use small batch smoke test first"))
 }
 
+func TestBuildScientistBenchWorkerPromptIncludesConvergencePolicy(t *testing.T) {
+	item := scientistbench.Case{}
+	node := orchestrator.NodeSpec{ID: "node-corpus-retrieval", Stage: "literature_review"}
+	profile := orchestrator.WorkerProfile{
+		RoleID:         "research_agent",
+		PromptPreamble: "Research agent preamble",
+		Convergence: orchestrator.WorkerConvergencePolicy{
+			StepBudget:      4,
+			CompletionMode:  orchestrator.WorkerCompletionModeStructuredJSON,
+			TerminalJSONKey: "status",
+			Strategy:        "research_pack",
+		},
+	}
+
+	prompt := buildScientistBenchWorkerPrompt(item, node, profile, nil, nil, nil)
+	assert.Contains(t, prompt, `<scicli_execution_policy step_budget="4" completion_mode="structured_json" terminal_json_key="status" strategy="research_pack" node="node-corpus-retrieval" role="research_agent" />`)
+	assert.Contains(t, prompt, "Do not emit <agent_loop_status> tags")
+	assert.Contains(t, prompt, "Autonomous turn budget: 4.")
+}
+
 func TestBuildScientistBenchWorkerPromptIncludesNormalizedReferenceBundle(t *testing.T) {
 	refs := []orchestrator.ReferencePayload{
 		{

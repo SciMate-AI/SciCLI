@@ -2,8 +2,10 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/SciMate-AI/scicli/internal/config"
@@ -44,16 +46,43 @@ type executionLoopState struct {
 	toolRounds      int
 	compactionCount int
 	injectControl   bool
+	completionMode  loopCompletionMode
+	terminalJSONKey string
 }
 
-var loopDecisionPattern = regexp.MustCompile(`(?is)<agent_loop_status>\s*(continue|complete)\s*</agent_loop_status>`)
+type loopCompletionMode string
 
-func newExecutionLoopState() executionLoopState {
+const (
+	loopCompletionModeTagged         loopCompletionMode = "loop_tagged"
+	loopCompletionModeStructuredJSON loopCompletionMode = "structured_json"
+)
+
+var loopDecisionPattern = regexp.MustCompile(`(?is)<agent_loop_status>\s*(continue|complete)\s*</agent_loop_status>`)
+var executionPolicyPattern = regexp.MustCompile(`(?is)<scicli_execution_policy\b([^>]*)\/>`)
+var executionPolicyAttrPattern = regexp.MustCompile(`([a-z_]+)="([^"]*)"`)
+
+type promptExecutionPolicy struct {
+	stepBudget      int
+	completionMode  loopCompletionMode
+	terminalJSONKey string
+}
+
+func newExecutionLoopState(policy promptExecutionPolicy) executionLoopState {
+	stepBudget := defaultStepBudget
+	if policy.stepBudget > 0 {
+		stepBudget = policy.stepBudget
+	}
+	completionMode := loopCompletionModeTagged
+	if policy.completionMode != "" {
+		completionMode = policy.completionMode
+	}
 	return executionLoopState{
-		stepBudget:    defaultStepBudget,
-		currentStep:   1,
-		phase:         loopPhasePlan,
-		injectControl: true,
+		stepBudget:      stepBudget,
+		currentStep:     1,
+		phase:           loopPhasePlan,
+		injectControl:   true,
+		completionMode:  completionMode,
+		terminalJSONKey: strings.TrimSpace(policy.terminalJSONKey),
 	}
 }
 
@@ -94,6 +123,9 @@ func (s executionLoopState) promptStepLabel() string {
 }
 
 func buildLoopControlMessage(state executionLoopState) message.Message {
+	if state.completionMode == loopCompletionModeStructuredJSON {
+		return buildStructuredLoopControlMessage(state)
+	}
 	switch state.phase {
 	case loopPhaseReview:
 		lastStepRule := "If more autonomous work remains, start your response with <agent_loop_status>continue</agent_loop_status> and keep going yourself."
@@ -140,6 +172,49 @@ Update your internal plan, choose the single highest-value next action, and exec
 	}
 }
 
+func buildStructuredLoopControlMessage(state executionLoopState) message.Message {
+	switch state.phase {
+	case loopPhaseReview:
+		lastStepRule := "If work remains, keep going yourself. When the role contract is satisfied, return only the final JSON payload with no control tags."
+		if state.isLastStep() {
+			lastStepRule = "This is the last allowed step. Return the best valid JSON payload now. If required information is still missing, set status to failed and summarize the blocker."
+		}
+		return message.Message{
+			Role: message.User,
+			Parts: []message.ContentPart{
+				message.TextContent{Text: strings.TrimSpace(fmt.Sprintf(`
+Autonomous loop controller.
+Current step: %s.
+Phase: review.
+
+Review the work completed so far, including tool results and verification status.
+- Do not emit <agent_loop_status> tags for this workflow.
+- If the role contract is satisfied, return only the final JSON payload now.
+- %s
+- Remove any internal planning language from the final payload.
+`, state.promptStepLabel(), lastStepRule))},
+			},
+		}
+	default:
+		return message.Message{
+			Role: message.User,
+			Parts: []message.ContentPart{
+				message.TextContent{Text: strings.TrimSpace(fmt.Sprintf(`
+Autonomous loop controller.
+Current step: %s.
+Phase: plan and execute.
+
+Update your internal plan, choose the single highest-value next action, and execute it now.
+- Use tools immediately when they help.
+- Keep plain-text in this phase minimal.
+- Do not emit <agent_loop_status> tags for this workflow.
+- Return the final JSON payload as soon as the role contract is satisfied.
+`, state.promptStepLabel()))},
+			},
+		}
+	}
+}
+
 func sanitizeLoopDecision(msg *message.Message) loopDecision {
 	content := msg.Content().Text
 	if strings.TrimSpace(content) == "" {
@@ -162,6 +237,59 @@ func sanitizeLoopDecision(msg *message.Message) loopDecision {
 	default:
 		return loopDecisionUnknown
 	}
+}
+
+func parsePromptExecutionPolicy(content string) promptExecutionPolicy {
+	policy := promptExecutionPolicy{}
+	match := executionPolicyPattern.FindStringSubmatch(content)
+	if len(match) < 2 {
+		return policy
+	}
+	for _, attr := range executionPolicyAttrPattern.FindAllStringSubmatch(match[1], -1) {
+		if len(attr) < 3 {
+			continue
+		}
+		key := strings.ToLower(strings.TrimSpace(attr[1]))
+		value := strings.TrimSpace(attr[2])
+		switch key {
+		case "step_budget":
+			if parsed, err := strconv.Atoi(value); err == nil && parsed > 0 {
+				policy.stepBudget = parsed
+			}
+		case "completion_mode":
+			switch loopCompletionMode(value) {
+			case loopCompletionModeStructuredJSON:
+				policy.completionMode = loopCompletionModeStructuredJSON
+			case loopCompletionModeTagged:
+				policy.completionMode = loopCompletionModeTagged
+			}
+		case "terminal_json_key":
+			policy.terminalJSONKey = value
+		}
+	}
+	return policy
+}
+
+func inferStructuredLoopDecision(msg message.Message, state executionLoopState) loopDecision {
+	if state.completionMode != loopCompletionModeStructuredJSON {
+		return loopDecisionUnknown
+	}
+	cleaned := strings.TrimSpace(loopDecisionPattern.ReplaceAllString(msg.Content().Text, ""))
+	if cleaned == "" || !strings.HasPrefix(cleaned, "{") {
+		return loopDecisionUnknown
+	}
+
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(cleaned), &payload); err != nil {
+		return loopDecisionUnknown
+	}
+	if state.terminalJSONKey == "" {
+		return loopDecisionComplete
+	}
+	if _, ok := payload[state.terminalJSONKey]; ok {
+		return loopDecisionComplete
+	}
+	return loopDecisionUnknown
 }
 
 func (a *agent) prepareHistoryForTurn(ctx context.Context, sessionID string, msgHistory []message.Message, state *executionLoopState) ([]message.Message, []message.Message, error) {

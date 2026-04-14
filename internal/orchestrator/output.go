@@ -3,8 +3,11 @@ package orchestrator
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 )
+
+var workerLoopStatusPattern = regexp.MustCompile(`(?is)<agent_loop_status>\s*(continue|complete)\s*</agent_loop_status>`)
 
 type IdeaPayload struct {
 	Title          string   `json:"title,omitempty"`
@@ -236,6 +239,18 @@ func cleanWorkerOutput(raw string) string {
 	cleaned = strings.TrimSpace(strings.TrimPrefix(cleaned, "```json"))
 	cleaned = strings.TrimSpace(strings.TrimPrefix(cleaned, "```"))
 	cleaned = strings.TrimSpace(strings.TrimSuffix(cleaned, "```"))
+	cleaned = strings.TrimSpace(workerLoopStatusPattern.ReplaceAllString(cleaned, ""))
+	if strings.HasPrefix(cleaned, "{") && strings.HasSuffix(cleaned, "}") {
+		return cleaned
+	}
+	start := strings.Index(cleaned, "{")
+	end := strings.LastIndex(cleaned, "}")
+	if start >= 0 && end > start {
+		candidate := strings.TrimSpace(cleaned[start : end+1])
+		if json.Valid([]byte(candidate)) {
+			return candidate
+		}
+	}
 	return cleaned
 }
 

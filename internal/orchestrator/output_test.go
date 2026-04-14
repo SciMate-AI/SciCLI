@@ -47,6 +47,19 @@ func TestStrictParseWorkerOutputRejectsPlainText(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestStrictParseWorkerOutputAcceptsLoopTagBeforeJSON(t *testing.T) {
+	out, err := StrictParseWorkerOutput(`<agent_loop_status>complete</agent_loop_status>
+{"status":"succeeded","summary":"done"}`)
+	assert.NoError(t, err)
+	assert.Equal(t, "succeeded", out.Status)
+}
+
+func TestStrictParseWorkerOutputExtractsEmbeddedJSON(t *testing.T) {
+	out, err := StrictParseWorkerOutput("Final payload follows:\n{\"status\":\"failed\",\"summary\":\"blocked\"}\nThanks.")
+	assert.NoError(t, err)
+	assert.Equal(t, "failed", out.Status)
+}
+
 func TestValidateWorkerOutputForRoleRequiresCorpusEvidence(t *testing.T) {
 	err := ValidateWorkerOutputForRole(
 		NodeSpec{ID: "node-corpus-retrieval", SuccessSignal: "evidence_ready", FailureSignal: "missing_sources"},

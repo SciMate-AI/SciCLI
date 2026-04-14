@@ -957,6 +957,122 @@ func appendScientistBenchRoleContractOverride(b *strings.Builder, node orchestra
 	}
 }
 
+func appendScientistBenchConvergenceSection(b *strings.Builder, node orchestrator.NodeSpec, profile orchestrator.WorkerProfile) {
+	if b == nil {
+		return
+	}
+
+	policy := profile.Convergence
+	if policy.CompletionMode == "" {
+		return
+	}
+
+	fmt.Fprintf(
+		b,
+		"<scicli_execution_policy step_budget=\"%d\" completion_mode=\"%s\" terminal_json_key=\"%s\" strategy=\"%s\" node=\"%s\" role=\"%s\" />\n\n",
+		policy.StepBudget,
+		policy.CompletionMode,
+		policy.TerminalJSONKey,
+		policy.Strategy,
+		node.ID,
+		profile.RoleID,
+	)
+
+	b.WriteString("Convergence strategy.\n")
+	if policy.StepBudget > 0 {
+		fmt.Fprintf(b, "- Autonomous turn budget: %d.\n", policy.StepBudget)
+	}
+	b.WriteString("- Do not emit <agent_loop_status> tags for this workflow.\n")
+	b.WriteString("- Intermediate turns may be brief progress notes or tool actions.\n")
+	b.WriteString("- As soon as your role contract is satisfied, return the terminal JSON object only.\n")
+	b.WriteString("- If you reach the final allowed turn with unresolved gaps, return best-effort JSON with status=\"failed\" and summarize the blocker.\n")
+	for _, bullet := range scientistBenchConvergenceBullets(node, profile) {
+		fmt.Fprintf(b, "- %s\n", bullet)
+	}
+	b.WriteString("\n")
+}
+
+func scientistBenchConvergenceBullets(node orchestrator.NodeSpec, profile orchestrator.WorkerProfile) []string {
+	switch profile.RoleID {
+	case "research_agent":
+		return []string{
+			"Stop once references[] and evidence_summary[] meet the minimum contract and the key gap, evaluation setup, and risks are covered.",
+			"Prefer breadth first and depth on the top sources; do not keep searching just to make the bibliography longer.",
+		}
+	case "idea_maker":
+		return []string{
+			"Stop when you have 2-4 distinct, testable ideas with concrete hypotheses, novelty claims, experiments, and falsification conditions.",
+			"Do not self-debate indefinitely once the idea set is diverse and specific.",
+		}
+	case "idea_hater":
+		return []string{
+			"Stop after every candidate idea has a concrete objection or conditional acceptance grounded in evidence.",
+			"Focus on decisive objections, not stylistic rewriting.",
+		}
+	case "method_planner":
+		return []string{
+			"Stop when the method_plan is implementable without clarifying questions and the acceptance checks are machine-verifiable.",
+			"Do not keep polishing prose once the plan is executable.",
+		}
+	case "code_agent":
+		return []string{
+			"Stop after you have a minimal patch, reproducible run instructions, and at least one smoke verification or a precise blocker.",
+			"Do not continue into unrelated refactors after the planned method is implemented.",
+		}
+	case "execution_agent":
+		return []string{
+			"Run a smoke test first, then the main command if warranted, and attempt at most one targeted fix before finalizing.",
+			"Stop once execution evidence, verification status, and blockers are captured clearly.",
+		}
+	case "figure_agent":
+		return []string{
+			"Stop once the required figures and manifest are produced or a concrete generation blocker is documented.",
+			"Do not keep regenerating variants after you have a readable figure set.",
+		}
+	case "paper_writer":
+		return []string{
+			"Stop once the draft is structurally complete, cites only the provided reference bundle, and addresses current revision feedback.",
+			"Do not keep rewriting for tone once all required sections, figures, and tables are in place.",
+		}
+	case "advisor_agent":
+		return []string{
+			"Stop once PASS/FAIL coverage, major deviations, and severity-ranked findings are complete.",
+		}
+	case "judge_agent":
+		return []string{
+			"Stop once overall_score, justification, and top issues are set from the advisor report.",
+		}
+	case "domain_expert_reviewer":
+		return []string{
+			"Stop once the review payload contains calibrated scores, strengths, weaknesses, questions, and a clear decision.",
+		}
+	case "paper_comparison_reviewer":
+		return []string{
+			"Stop once all alignment dimensions and the overall quality gap are scored with evidence.",
+		}
+	case "chief_scientist":
+		switch node.ID {
+		case "node-case-intake":
+			return []string{"Stop once the case is validated and the node routing decision is explicit."}
+		case "node-idea-gate":
+			return []string{
+				"Stop once you choose one route: idea_gate_passed, idea_gate_rejected, or a valid dynamic retry signal.",
+				"Do not reopen ideation yourself once the available ideas and objections are sufficient to decide.",
+			}
+		case "node-revision-gate":
+			return []string{
+				"Stop once you compute the review aggregate and emit revision_decision plus revision_feedback when revising.",
+				"Do not reopen evidence gathering or redraft content at this gate.",
+			}
+		case "node-aggregate":
+			return []string{"Stop once the final case decision is synthesized from the accumulated artifacts and reviews."}
+		}
+	}
+	return []string{
+		"Stop once the assigned node contract is satisfied and the final JSON is machine-readable.",
+	}
+}
+
 func appendScientistBenchSkillRecommendations(
 	b *strings.Builder,
 	item scientistbench.Case,
@@ -1115,6 +1231,7 @@ func buildScientistBenchWorkerPrompt(
 	var b strings.Builder
 	b.WriteString(strings.TrimSpace(profile.PromptPreamble))
 	b.WriteString("\n\n")
+	appendScientistBenchConvergenceSection(&b, node, profile)
 	b.WriteString("Scientist Bench case context.\n")
 	fmt.Fprintf(&b, "Case ID: %s\n", item.ID)
 	fmt.Fprintf(&b, "Mode: %s\n", item.Mode)
@@ -1165,7 +1282,8 @@ func buildScientistBenchWorkerPrompt(
 	b.WriteString("- Work only within your role boundary.\n")
 	b.WriteString("- Use available tools when they materially improve the output.\n")
 	b.WriteString("- Be concrete and evidence-driven. Never fabricate citations, results, or data.\n")
-	b.WriteString("- Your final response must be valid JSON without markdown fences.\n")
+	b.WriteString("- Intermediate turns may be brief prose or tool work. Only the terminal response is parsed by the orchestrator.\n")
+	b.WriteString("- The terminal response must be valid JSON without markdown fences.\n")
 
 	// status rules differ by node type to prevent research/analysis agents from
 	// emitting needs_revision (a revision-gate-only concept) which causes
@@ -1182,8 +1300,7 @@ func buildScientistBenchWorkerPrompt(
 		b.WriteString("- status must be \"succeeded\" or \"failed\" only. Do NOT use \"needs_revision\".\n")
 	} else {
 		b.WriteString("- status must be \"succeeded\" or \"failed\" only.\n")
-		b.WriteString("- IMPORTANT: If your work is not yet complete, do NOT say complete in the loop controller - say continue and keep working.\n")
-		b.WriteString("- Only output JSON when you are genuinely done with all required steps. Incomplete work = keep looping.\n")
+		b.WriteString("- Return the final JSON as soon as your node contract is satisfied. Do not keep looping for cosmetic improvements.\n")
 	}
 
 	b.WriteString("- Use this shape: {\"status\":\"succeeded|failed\",\"summary\":\"...\",\"success_signal\":\"...\",\"failure_signal\":\"...\",\"overall_score\":0.0,\"revision_decision\":\"accept|revise\",\"revision_feedback\":[...],\"evidence_summary\":[...],\"citations\":[...],\"references\":[{\"key\":\"smith2024\",\"title\":\"...\",\"authors\":[\"...\"],\"year\":2024,\"venue\":\"...\",\"doi\":\"...\",\"url\":\"...\",\"zotero_key\":\"...\",\"formatted_reference\":\"...\",\"bibtex\":\"@article{...}\",\"key_claim\":\"...\"}],\"risks\":[...],\"ideas\":[...],\"objections\":[...],\"method_plan\":{\"summary\":\"...\",\"pipeline_steps\":[...],\"acceptance_checks\":[...],\"implementation_notes\":[...],\"runtime_hints\":[...]},\"execution\":{\"runtime_id\":\"...\",\"commands\":[...],\"verification_summary\":\"...\",\"verification_passed\":true,\"output_files\":[...],\"log_highlights\":[...]},\"review\":{\"decision\":\"accept|revise|reject\",\"summary\":\"...\",\"strengths\":[...],\"weaknesses\":[...],\"questions\":[...],\"confidence\":0.0,\"readable_paper\":true,\"novel_insight_present\":true,\"code_runs\":true,\"scores\":{\"overall\":0.0,\"idea_quality\":0.0,\"method_soundness\":0.0,\"result_interpretation\":0.0,\"writing_quality\":0.0}},\"comparison\":{\"summary\":\"...\",\"strengths\":[...],\"weaknesses\":[...],\"motivation_alignment\":0.0,\"methodology_alignment\":0.0,\"novelty_alignment\":0.0,\"experimental_alignment\":0.0,\"confidence\":0.0}}\n")
