@@ -50,6 +50,22 @@ type GeminiRawContent struct {
 
 func (GeminiRawContent) isPart() {}
 
+type ScientistBenchContent struct {
+	Kind          string `json:"kind,omitempty"`
+	AgentID       string `json:"agent_id,omitempty"`
+	AgentLabel    string `json:"agent_label,omitempty"`
+	State         string `json:"state,omitempty"`
+	Title         string `json:"title,omitempty"`
+	Detail        string `json:"detail,omitempty"`
+	ToolName      string `json:"tool_name,omitempty"`
+	CaseID        string `json:"case_id,omitempty"`
+	NodeID        string `json:"node_id,omitempty"`
+	RunID         string `json:"run_id,omitempty"`
+	TaskSessionID string `json:"task_session_id,omitempty"`
+}
+
+func (ScientistBenchContent) isPart() {}
+
 type TextContent struct {
 	Text string `json:"text"`
 }
@@ -145,6 +161,15 @@ func (m *Message) ReasoningContent() ReasoningContent {
 func (m *Message) GeminiRawContent() *GeminiRawContent {
 	for _, part := range m.Parts {
 		if c, ok := part.(GeminiRawContent); ok {
+			return &c
+		}
+	}
+	return nil
+}
+
+func (m *Message) ScientistBenchContent() *ScientistBenchContent {
+	for _, part := range m.Parts {
+		if c, ok := part.(ScientistBenchContent); ok {
 			return &c
 		}
 	}
@@ -340,6 +365,23 @@ func (m *Message) SetGeminiRawContent(raw GeminiRawContent) {
 
 	if len(raw.Parts) > 0 {
 		m.Parts = append(m.Parts, raw)
+	}
+}
+
+func (m *Message) SetScientistBenchContent(meta ScientistBenchContent) {
+	for i, part := range m.Parts {
+		if _, ok := part.(ScientistBenchContent); ok {
+			if meta == (ScientistBenchContent{}) {
+				m.Parts = slices.Delete(m.Parts, i, i+1)
+				return
+			}
+			m.Parts[i] = meta
+			return
+		}
+	}
+
+	if meta != (ScientistBenchContent{}) {
+		m.Parts = append(m.Parts, meta)
 	}
 }
 

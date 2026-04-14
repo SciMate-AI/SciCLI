@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"time"
 
@@ -14,6 +13,11 @@ import (
 )
 
 const maxScientistBenchAgentMessageLen = 500
+
+const (
+	scientistBenchMessageKindAgent  = "agent"
+	scientistBenchMessageKindStatus = "status"
+)
 
 func (app *App) startScientistBenchRunSync(ctx context.Context) {
 	if app.ScientistBench == nil || app.TaskRuns == nil || app.Messages == nil {
@@ -53,11 +57,11 @@ func (app *App) startScientistBenchRunSync(ctx context.Context) {
 				if toolName := strings.TrimSpace(payload.ToolName); toolName != "" {
 					_ = app.recordScientistBenchToolCall(watchCtx, item.ID, run.ID, toolName, string(payload.Status))
 				}
-				line := scientistBenchTaskEventLine(item, run, payload)
-				if strings.TrimSpace(line) == "" {
+				meta := scientistBenchTaskEventContent(item, run, payload)
+				if meta == nil {
 					continue
 				}
-				if err := app.postScientistBenchText(watchCtx, item.RootSessionID, line); err != nil {
+				if err := app.upsertScientistBenchStatusMessage(watchCtx, item.RootSessionID, run.ID, *meta); err != nil {
 					logging.Warn("Failed to mirror scientist bench task progress", "case_id", item.ID, "session_id", payload.SessionID, "error", err)
 				}
 			}
@@ -66,33 +70,107 @@ func (app *App) startScientistBenchRunSync(ctx context.Context) {
 }
 
 func (app *App) postScientistBenchLaunch(ctx context.Context, item scientistbench.Case, run scientistbench.RunRecord, prefix string) error {
-	return app.postScientistBenchText(ctx, item.RootSessionID, scientistBenchLaunchLine(item, run, prefix))
+	meta := scientistBenchLaunchContent(item, run, prefix)
+	return app.upsertScientistBenchStatusMessage(ctx, item.RootSessionID, run.ID, meta)
 }
 
 func (app *App) postScientistBenchNodeResult(ctx context.Context, item scientistbench.Case, run scientistbench.RunRecord) error {
-	return app.postScientistBenchText(ctx, item.RootSessionID, scientistBenchNodeResultLine(item, run))
+	meta := scientistBenchNodeResultContent(item, run)
+	return app.upsertScientistBenchStatusMessage(ctx, item.RootSessionID, run.ID, meta)
 }
 
-func (app *App) postScientistBenchText(ctx context.Context, sessionID string, text string) error {
+func (app *App) upsertScientistBenchStatusMessage(
+	ctx context.Context,
+	sessionID string,
+	runID string,
+	meta message.ScientistBenchContent,
+) error {
+	return app.upsertScientistBenchMirror(ctx, sessionID, scientistBenchStatusMirrorKey(runID), meta, "", scientistBenchStateFinishReason(meta.State))
+}
+
+func (app *App) upsertScientistBenchAgentMessage(
+	ctx context.Context,
+	item scientistbench.Case,
+	run scientistbench.RunRecord,
+	source message.Message,
+) error {
+	text := strings.TrimSpace(source.Content().Text)
+	if text == "" || isScientistBenchStructuredOutput(text) {
+		return nil
+	}
+
+	meta := message.ScientistBenchContent{
+		Kind:          scientistBenchMessageKindAgent,
+		AgentID:       firstNonEmpty(run.Role, item.GraphState.ActiveRole, "agent"),
+		AgentLabel:    scientistBenchAgentLabel(firstNonEmpty(run.Role, item.GraphState.ActiveRole, "agent")),
+		State:         scientistBenchAgentState(source),
+		Title:         scientistBenchAgentTitle(source),
+		CaseID:        item.ID,
+		NodeID:        firstNonEmpty(run.NodeID, item.GraphState.ActiveNode),
+		RunID:         run.ID,
+		TaskSessionID: firstNonEmpty(run.TaskRunSessionID, run.SessionID),
+	}
+	return app.upsertScientistBenchMirror(
+		ctx,
+		item.RootSessionID,
+		scientistBenchAgentMirrorKey(source.ID),
+		meta,
+		truncateWithEllipsis(text, maxScientistBenchAgentMessageLen),
+		scientistBenchAgentFinishReason(source),
+	)
+}
+
+func (app *App) upsertScientistBenchMirror(
+	ctx context.Context,
+	sessionID string,
+	mirrorKey string,
+	meta message.ScientistBenchContent,
+	body string,
+	finishReason message.FinishReason,
+) error {
 	if app.Messages == nil {
 		return nil
 	}
 	sessionID = strings.TrimSpace(sessionID)
-	text = strings.TrimSpace(text)
-	if sessionID == "" || text == "" {
+	mirrorKey = strings.TrimSpace(mirrorKey)
+	if sessionID == "" || mirrorKey == "" {
 		return nil
 	}
-	_, err := app.Messages.Create(ctx, sessionID, message.CreateMessageParams{
-		Role: message.Assistant,
-		Parts: []message.ContentPart{
-			message.TextContent{Text: text},
-			message.Finish{
-				Reason: message.FinishReasonEndTurn,
-				Time:   time.Now().Unix(),
-			},
-		},
+
+	if msgID, ok := app.lookupScientistBenchMirror(mirrorKey, meta.Kind); ok {
+		msg, err := app.Messages.Get(ctx, msgID)
+		if err == nil {
+			msg.SetScientistBenchContent(meta)
+			msg.SetContent(body)
+			if finishReason != "" {
+				msg.AddFinish(finishReason)
+			}
+			if updateErr := app.Messages.Update(ctx, msg); updateErr == nil {
+				return nil
+			}
+		}
+		app.deleteScientistBenchMirror(mirrorKey, meta.Kind)
+	}
+
+	parts := []message.ContentPart{
+		meta,
+		message.TextContent{Text: body},
+	}
+	if finishReason != "" {
+		parts = append(parts, message.Finish{
+			Reason: finishReason,
+			Time:   time.Now().Unix(),
+		})
+	}
+	msg, err := app.Messages.Create(ctx, sessionID, message.CreateMessageParams{
+		Role:  message.Assistant,
+		Parts: parts,
 	})
-	return err
+	if err != nil {
+		return err
+	}
+	app.storeScientistBenchMirror(mirrorKey, meta.Kind, msg.ID)
+	return nil
 }
 
 func (app *App) findScientistBenchRunByTaskSession(ctx context.Context, taskSessionID string) (scientistbench.Case, scientistbench.RunRecord, bool) {
@@ -123,47 +201,49 @@ func looksLikeScientistBenchTask(sessionID string) bool {
 	return strings.HasPrefix(strings.TrimSpace(sessionID), "sbtask-")
 }
 
-func scientistBenchLaunchLine(item scientistbench.Case, run scientistbench.RunRecord, prefix string) string {
-	parts := []string{
-		firstNonEmpty(strings.TrimSpace(prefix), "Scientist Bench started"),
-		"case " + item.ID,
-		"mode " + string(item.Mode),
-		"node " + firstNonEmpty(run.NodeID, item.GraphState.ActiveNode),
-		"role " + firstNonEmpty(run.Role, item.GraphState.ActiveRole),
+func scientistBenchLaunchContent(item scientistbench.Case, run scientistbench.RunRecord, prefix string) message.ScientistBenchContent {
+	detail := strings.TrimSpace(prefix)
+	if detail == "" {
+		detail = "Agent scheduled"
 	}
-	if strings.TrimSpace(run.SessionID) != "" {
-		parts = append(parts, "task "+run.SessionID)
+	if title := strings.TrimSpace(item.Title); title != "" {
+		detail = detail + " • " + title
 	}
-	if strings.TrimSpace(item.Title) != "" {
-		parts = append(parts, item.Title)
+	return message.ScientistBenchContent{
+		Kind:          scientistBenchMessageKindStatus,
+		AgentID:       firstNonEmpty(run.Role, item.GraphState.ActiveRole, "agent"),
+		AgentLabel:    scientistBenchAgentLabel(firstNonEmpty(run.Role, item.GraphState.ActiveRole, "agent")),
+		State:         "started",
+		Title:         "ScientistBench",
+		Detail:        detail,
+		CaseID:        item.ID,
+		NodeID:        firstNonEmpty(run.NodeID, item.GraphState.ActiveNode),
+		RunID:         run.ID,
+		TaskSessionID: firstNonEmpty(run.TaskRunSessionID, run.SessionID),
 	}
-	parts = append(parts, "Progress will stream in this chat.")
-	return strings.Join(parts, " | ")
 }
 
-func scientistBenchTaskEventLine(item scientistbench.Case, run scientistbench.RunRecord, event taskrun.Event) string {
-	stage := scientistBenchEventLabel(event)
-	if stage == "" {
-		return ""
+func scientistBenchTaskEventContent(item scientistbench.Case, run scientistbench.RunRecord, event taskrun.Event) *message.ScientistBenchContent {
+	state := scientistBenchEventLabel(event)
+	if state == "" {
+		return nil
 	}
 
-	parts := []string{
-		"Scientist Bench progress",
-		"case " + item.ID,
-		"node " + firstNonEmpty(run.NodeID, item.GraphState.ActiveNode),
-		"role " + firstNonEmpty(run.Role, item.GraphState.ActiveRole),
-		stage,
+	title := scientistBenchEventTitle(event)
+	detail := scientistBenchEventDetail(event)
+	return &message.ScientistBenchContent{
+		Kind:          scientistBenchMessageKindStatus,
+		AgentID:       firstNonEmpty(run.Role, item.GraphState.ActiveRole, "agent"),
+		AgentLabel:    scientistBenchAgentLabel(firstNonEmpty(run.Role, item.GraphState.ActiveRole, "agent")),
+		State:         state,
+		Title:         title,
+		Detail:        detail,
+		ToolName:      strings.TrimSpace(event.ToolName),
+		CaseID:        item.ID,
+		NodeID:        firstNonEmpty(run.NodeID, item.GraphState.ActiveNode),
+		RunID:         run.ID,
+		TaskSessionID: firstNonEmpty(run.TaskRunSessionID, run.SessionID),
 	}
-	if detail := strings.TrimSpace(event.Detail); detail != "" {
-		parts = append(parts, detail)
-	}
-	if toolName := strings.TrimSpace(event.ToolName); toolName != "" {
-		parts = append(parts, "tool "+toolName)
-	}
-	if reason := strings.TrimSpace(event.Metadata.PermissionReason); reason != "" {
-		parts = append(parts, reason)
-	}
-	return strings.Join(parts, " | ")
 }
 
 func scientistBenchEventLabel(event taskrun.Event) string {
@@ -173,7 +253,7 @@ func scientistBenchEventLabel(event taskrun.Event) string {
 	case taskrun.EventStarted:
 		return "started"
 	case taskrun.EventProgress:
-		return "progress"
+		return "streaming"
 	case taskrun.EventFinished:
 		switch event.Status {
 		case taskrun.StatusComplete:
@@ -188,46 +268,111 @@ func scientistBenchEventLabel(event taskrun.Event) string {
 			return "finished"
 		}
 	case taskrun.EventCancelRequested:
-		return "cancel requested"
+		return "canceled"
 	default:
 		return ""
 	}
 }
 
-func scientistBenchNodeResultLine(item scientistbench.Case, run scientistbench.RunRecord) string {
-	status := firstNonEmpty(run.Status, string(item.Status), "complete")
-	detail := firstNonEmpty(run.OutputSummary, run.Error, "Completed")
-
-	parts := []string{
-		"Scientist Bench update",
-		"case " + item.ID,
-		"node " + firstNonEmpty(run.NodeID, item.GraphState.ActiveNode),
-		"role " + firstNonEmpty(run.Role, item.GraphState.ActiveRole),
-		status,
-		detail,
-	}
-	if len(run.SignalsEmitted) > 0 {
-		parts = append(parts, "signal "+strings.Join(run.SignalsEmitted, ","))
-	}
-	switch {
-	case scientistBenchCaseIsTerminal(item):
-		if item.Termination.Signal != "" {
-			parts = append(parts, "termination "+string(item.Termination.Signal))
+func scientistBenchEventTitle(event taskrun.Event) string {
+	switch event.Kind {
+	case taskrun.EventQueued:
+		return "Queued"
+	case taskrun.EventStarted:
+		return "Starting"
+	case taskrun.EventProgress:
+		if toolName := strings.TrimSpace(event.ToolName); toolName != "" {
+			return "Running " + toolName
 		}
-	case item.GraphState.ActiveNode != "" && item.GraphState.ActiveNode != run.NodeID:
-		parts = append(parts, "next node "+item.GraphState.ActiveNode)
-		if item.GraphState.ActiveRole != "" {
-			parts = append(parts, "next role "+item.GraphState.ActiveRole)
+		return "Working"
+	case taskrun.EventFinished:
+		switch event.Status {
+		case taskrun.StatusComplete:
+			return "Completed"
+		case taskrun.StatusBlocked:
+			return "Waiting for permission"
+		case taskrun.StatusCanceled:
+			return "Canceled"
+		case taskrun.StatusFailed:
+			return "Failed"
+		default:
+			return "Finished"
 		}
-	case item.GraphState.ActiveRole != "" && item.GraphState.ActiveRole != run.Role:
-		parts = append(parts, "next role "+item.GraphState.ActiveRole)
+	case taskrun.EventCancelRequested:
+		return "Cancel requested"
+	default:
+		return "Working"
 	}
-	return strings.Join(parts, " | ")
 }
 
-// startScientistBenchMessageSync subscribes to message creation events and mirrors
-// assistant messages from sub-agent sessions (sbtask-*) to the root session, so
-// users can see what each agent is actually writing as it works.
+func scientistBenchEventDetail(event taskrun.Event) string {
+	parts := make([]string, 0, 3)
+	if detail := strings.TrimSpace(event.Detail); detail != "" {
+		parts = append(parts, detail)
+	}
+	if reason := strings.TrimSpace(event.Metadata.PermissionReason); reason != "" {
+		parts = append(parts, reason)
+	}
+	if preview := strings.TrimSpace(event.Metadata.ToolInputPreview); preview != "" && strings.TrimSpace(event.ToolName) != "" {
+		parts = append(parts, preview)
+	}
+	return strings.Join(parts, " • ")
+}
+
+func scientistBenchNodeResultContent(item scientistbench.Case, run scientistbench.RunRecord) message.ScientistBenchContent {
+	state := strings.TrimSpace(run.Status)
+	if state == "" {
+		state = string(item.Status)
+	}
+	if state == "" {
+		state = "complete"
+	}
+
+	detailParts := make([]string, 0, 4)
+	if detail := strings.TrimSpace(firstNonEmpty(run.OutputSummary, run.Error)); detail != "" {
+		detailParts = append(detailParts, detail)
+	}
+	if len(run.SignalsEmitted) > 0 {
+		detailParts = append(detailParts, "signal "+strings.Join(run.SignalsEmitted, ", "))
+	}
+	if scientistBenchCaseIsTerminal(item) {
+		if item.Termination.Signal != "" {
+			detailParts = append(detailParts, "termination "+string(item.Termination.Signal))
+		}
+	}
+
+	return message.ScientistBenchContent{
+		Kind:          scientistBenchMessageKindStatus,
+		AgentID:       firstNonEmpty(run.Role, item.GraphState.ActiveRole, "agent"),
+		AgentLabel:    scientistBenchAgentLabel(firstNonEmpty(run.Role, item.GraphState.ActiveRole, "agent")),
+		State:         state,
+		Title:         scientistBenchResultTitle(state),
+		Detail:        strings.Join(detailParts, " • "),
+		CaseID:        item.ID,
+		NodeID:        firstNonEmpty(run.NodeID, item.GraphState.ActiveNode),
+		RunID:         run.ID,
+		TaskSessionID: firstNonEmpty(run.TaskRunSessionID, run.SessionID),
+	}
+}
+
+func scientistBenchResultTitle(state string) string {
+	switch strings.TrimSpace(state) {
+	case "blocked":
+		return "Waiting for permission"
+	case "canceled":
+		return "Canceled"
+	case "failed", string(scientistbench.StatusNotResolved):
+		return "Failed"
+	case string(scientistbench.StatusResolved):
+		return "Resolved"
+	default:
+		return "Completed"
+	}
+}
+
+// startScientistBenchMessageSync subscribes to child session assistant messages
+// and mirrors them into the root ScientistBench session while the agent is still
+// streaming, so the user sees an actual conversation instead of post-hoc logs.
 func (app *App) startScientistBenchMessageSync(ctx context.Context) {
 	if app.ScientistBench == nil || app.Messages == nil {
 		return
@@ -252,26 +397,11 @@ func (app *App) startScientistBenchMessageSync(ctx context.Context) {
 				if !ok {
 					return
 				}
-				// Messages are created empty and updated with each streaming
-				// token. We want the final, complete turn — that is the
-				// UpdatedEvent fired when the provider emits EventStop
-				// (FinishReasonEndTurn) or EventError (FinishReasonError).
-				// CreatedEvents carry empty content and are useless here.
-				if event.Type != pubsub.UpdatedEvent {
-					continue
-				}
 				msg := event.Payload
 				if !looksLikeScientistBenchTask(msg.SessionID) {
 					continue
 				}
 				if msg.Role != message.Assistant {
-					continue
-				}
-				// Only forward complete turns, not mid-stream token updates.
-				// ToolUse finish means the LLM called a tool — no prose to
-				// show. Empty finish reason means the stream is still open.
-				fr := msg.FinishReason()
-				if fr == "" || fr == message.FinishReasonToolUse {
 					continue
 				}
 				text := strings.TrimSpace(msg.Content().Text)
@@ -282,11 +412,7 @@ func (app *App) startScientistBenchMessageSync(ctx context.Context) {
 				if !ok {
 					continue
 				}
-				line := scientistBenchAgentMessageLine(item, run, text)
-				if strings.TrimSpace(line) == "" {
-					continue
-				}
-				if err := app.postScientistBenchText(watchCtx, item.RootSessionID, line); err != nil {
+				if err := app.upsertScientistBenchAgentMessage(watchCtx, item, run, msg); err != nil {
 					logging.Warn("Failed to mirror scientist bench agent message", "case_id", item.ID, "session_id", msg.SessionID, "error", err)
 				}
 			}
@@ -296,17 +422,127 @@ func (app *App) startScientistBenchMessageSync(ctx context.Context) {
 
 // isScientistBenchStructuredOutput detects the final JSON WorkerOutput blob that
 // agents emit at the end of their run. We skip mirroring this because it is
-// already captured and summarised by watchScientistBenchNodeRun.
+// already captured and summarized by watchScientistBenchNodeRun.
 func isScientistBenchStructuredOutput(text string) bool {
 	return strings.HasPrefix(text, "{") && strings.Contains(text, `"status":`)
 }
 
-// scientistBenchAgentMessageLine formats a single agent turn for display in the
-// root session, prefixed with the agent role so the user knows who is speaking.
-func scientistBenchAgentMessageLine(item scientistbench.Case, run scientistbench.RunRecord, text string) string {
-	role := firstNonEmpty(run.Role, item.GraphState.ActiveRole, "agent")
-	excerpt := truncateWithEllipsis(text, maxScientistBenchAgentMessageLen)
-	return fmt.Sprintf("[%s] %s", role, excerpt)
+func scientistBenchAgentState(msg message.Message) string {
+	if !msg.IsFinished() {
+		return "streaming"
+	}
+	switch msg.FinishReason() {
+	case message.FinishReasonCanceled:
+		return "canceled"
+	case message.FinishReasonError:
+		return "failed"
+	case message.FinishReasonPermissionDenied:
+		return "blocked"
+	default:
+		return "complete"
+	}
+}
+
+func scientistBenchAgentTitle(msg message.Message) string {
+	if !msg.IsFinished() {
+		return "Streaming"
+	}
+	switch msg.FinishReason() {
+	case message.FinishReasonCanceled:
+		return "Canceled"
+	case message.FinishReasonError:
+		return "Failed"
+	case message.FinishReasonPermissionDenied:
+		return "Waiting for permission"
+	default:
+		return "Message"
+	}
+}
+
+func scientistBenchAgentFinishReason(msg message.Message) message.FinishReason {
+	if !msg.IsFinished() {
+		return ""
+	}
+	if msg.FinishReason() == message.FinishReasonToolUse {
+		return message.FinishReasonEndTurn
+	}
+	return msg.FinishReason()
+}
+
+func scientistBenchStateFinishReason(state string) message.FinishReason {
+	switch strings.TrimSpace(state) {
+	case "complete", "resolved", "failed", "blocked", "canceled":
+		return message.FinishReasonEndTurn
+	default:
+		return ""
+	}
+}
+
+func scientistBenchAgentMirrorKey(sourceMessageID string) string {
+	return "agent:" + strings.TrimSpace(sourceMessageID)
+}
+
+func scientistBenchStatusMirrorKey(runID string) string {
+	return "status:" + strings.TrimSpace(runID)
+}
+
+func (app *App) storeScientistBenchMirror(mirrorKey, kind, messageID string) {
+	app.scientistBenchMirrorMu.Lock()
+	defer app.scientistBenchMirrorMu.Unlock()
+	switch kind {
+	case scientistBenchMessageKindAgent:
+		if app.scientistBenchAgentMirrors == nil {
+			app.scientistBenchAgentMirrors = make(map[string]string)
+		}
+		app.scientistBenchAgentMirrors[mirrorKey] = messageID
+	default:
+		if app.scientistBenchStatusMirrors == nil {
+			app.scientistBenchStatusMirrors = make(map[string]string)
+		}
+		app.scientistBenchStatusMirrors[mirrorKey] = messageID
+	}
+}
+
+func (app *App) lookupScientistBenchMirror(mirrorKey, kind string) (string, bool) {
+	app.scientistBenchMirrorMu.Lock()
+	defer app.scientistBenchMirrorMu.Unlock()
+	switch kind {
+	case scientistBenchMessageKindAgent:
+		msgID, ok := app.scientistBenchAgentMirrors[mirrorKey]
+		return msgID, ok
+	default:
+		msgID, ok := app.scientistBenchStatusMirrors[mirrorKey]
+		return msgID, ok
+	}
+}
+
+func (app *App) deleteScientistBenchMirror(mirrorKey, kind string) {
+	app.scientistBenchMirrorMu.Lock()
+	defer app.scientistBenchMirrorMu.Unlock()
+	switch kind {
+	case scientistBenchMessageKindAgent:
+		delete(app.scientistBenchAgentMirrors, mirrorKey)
+	default:
+		delete(app.scientistBenchStatusMirrors, mirrorKey)
+	}
+}
+
+func scientistBenchAgentLabel(role string) string {
+	role = strings.TrimSpace(role)
+	if role == "" {
+		return "Agent"
+	}
+	role = strings.ReplaceAll(role, "-", " ")
+	role = strings.ReplaceAll(role, "_", " ")
+	parts := strings.Fields(role)
+	for i := range parts {
+		part := strings.ToLower(parts[i])
+		if part == "" {
+			continue
+		}
+		parts[i] = strings.ToUpper(part[:1]) + part[1:]
+	}
+	return strings.Join(parts, " ")
 }
 
 func (app *App) recordScientistBenchToolCall(ctx context.Context, caseID string, runID string, toolName string, taskStatus string) error {
@@ -350,5 +586,5 @@ func truncateWithEllipsis(s string, max int) string {
 	if len(s) <= max {
 		return s
 	}
-	return s[:max] + "…"
+	return s[:max] + "..."
 }

@@ -54,6 +54,9 @@ type App struct {
 
 	scientistBenchContinuationMu sync.Mutex
 	scientistBenchContinuation   map[string]int // number of in-flight continuations per case
+	scientistBenchMirrorMu       sync.Mutex
+	scientistBenchAgentMirrors   map[string]string
+	scientistBenchStatusMirrors  map[string]string
 	scientistBenchStarter        func(context.Context, string) (ScientistBenchNodeRun, error)
 }
 
@@ -64,14 +67,16 @@ func New(ctx context.Context, conn *sql.DB) (*App, error) {
 	files := history.NewService(q, conn)
 
 	app := &App{
-		Sessions:                   sessions,
-		Messages:                   messages,
-		History:                    files,
-		Permissions:                permission.NewPermissionService(),
-		LSPClients:                 make(map[string]*lsp.Client),
-		Skills:                     skills.NewService(),
-		TaskRuns:                   taskrun.NewService(conn),
-		scientistBenchContinuation: make(map[string]int),
+		Sessions:                    sessions,
+		Messages:                    messages,
+		History:                     files,
+		Permissions:                 permission.NewPermissionService(),
+		LSPClients:                  make(map[string]*lsp.Client),
+		Skills:                      skills.NewService(),
+		TaskRuns:                    taskrun.NewService(conn),
+		scientistBenchContinuation:  make(map[string]int),
+		scientistBenchAgentMirrors:  make(map[string]string),
+		scientistBenchStatusMirrors: make(map[string]string),
 	}
 
 	researchSvc, err := research.NewService()

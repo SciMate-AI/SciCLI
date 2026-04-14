@@ -70,6 +70,104 @@ func renderMessage(msg string, isUser bool, isFocused bool, width int, info ...s
 	return consoleTranscriptBlock(width, header, body)
 }
 
+func renderSplitLine(width int, left string, right string) string {
+	width = max(1, width)
+	if strings.TrimSpace(right) == "" {
+		return ansi.Truncate(left, width, "...")
+	}
+	rightWidth := lipgloss.Width(right)
+	leftWidth := max(1, width-rightWidth-1)
+	left = ansi.Truncate(left, leftWidth, "...")
+	gap := max(1, width-lipgloss.Width(left)-rightWidth)
+	return left + strings.Repeat(" ", gap) + right
+}
+
+func scientistBenchStateColors(state string) (lipgloss.AdaptiveColor, lipgloss.AdaptiveColor) {
+	t := theme.CurrentTheme()
+	switch strings.TrimSpace(state) {
+	case "complete", "resolved":
+		return t.Success(), t.Success()
+	case "failed":
+		return t.Error(), t.Error()
+	case "blocked":
+		return t.Warning(), t.Warning()
+	case "canceled":
+		return t.TextMuted(), t.TextMuted()
+	case "started":
+		return t.Secondary(), t.Secondary()
+	case "queued":
+		return t.Info(), t.Info()
+	default:
+		return t.Primary(), t.Primary()
+	}
+}
+
+func scientistBenchStateLabel(state string) string {
+	switch strings.TrimSpace(state) {
+	case "complete":
+		return "complete"
+	case "resolved":
+		return "resolved"
+	case "failed":
+		return "failed"
+	case "blocked":
+		return "blocked"
+	case "canceled":
+		return "canceled"
+	case "started":
+		return "started"
+	case "queued":
+		return "queued"
+	default:
+		return "live"
+	}
+}
+
+func renderScientistBenchMessage(msg message.Message, meta message.ScientistBenchContent, isFocused bool, width int) string {
+	t := theme.CurrentTheme()
+	baseStyle := styles.BaseStyle()
+	borderColor, badgeColor := scientistBenchStateColors(meta.State)
+
+	agentLabel := strings.TrimSpace(meta.AgentLabel)
+	if agentLabel == "" {
+		agentLabel = "Agent"
+	}
+	agentBadge := consoleBadge(agentLabel, t.BackgroundDarker(), t.TextEmphasized())
+	stateBadge := consoleBadge(scientistBenchStateLabel(meta.State), badgeColor, t.Background())
+
+	title := strings.TrimSpace(meta.Title)
+	if title == "" {
+		title = "ScientistBench"
+	}
+	headerLeft := lipgloss.JoinHorizontal(
+		lipgloss.Left,
+		stateBadge,
+		" ",
+		baseStyle.Bold(true).Foreground(t.Text()).Render(title),
+	)
+	header := renderSplitLine(max(1, width-4), headerLeft, agentBadge)
+
+	lines := []string{header}
+	if strings.TrimSpace(meta.Detail) != "" {
+		lines = append(lines, baseStyle.Foreground(t.TextMuted()).Render(meta.Detail))
+	}
+	if body := strings.TrimSpace(msg.Content().Text); body != "" {
+		renderedBody := styles.ForceReplaceBackgroundWithLipgloss(toMarkdown(body, isFocused, max(12, width-6)), t.BackgroundSecondary())
+		lines = append(lines, strings.TrimSuffix(renderedBody, "\n"))
+	}
+
+	cardStyle := lipgloss.NewStyle().
+		Width(max(1, width)).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(borderColor).
+		Background(t.BackgroundSecondary()).
+		Padding(0, 1)
+	if isFocused {
+		cardStyle = cardStyle.BorderForeground(t.BorderFocused())
+	}
+	return cardStyle.Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
+}
+
 func renderUserMessage(msg message.Message, isFocused bool, width int, position int) uiMessage {
 	var styledAttachments []string
 	attachmentStyles := styles.BaseStyle().Foreground(theme.CurrentTheme().TextMuted())
@@ -111,6 +209,17 @@ func renderAssistantMessage(
 	position int,
 ) []uiMessage {
 	messages := []uiMessage{}
+	if meta := msg.ScientistBenchContent(); meta != nil {
+		rendered := renderScientistBenchMessage(msg, *meta, msg.ID == focusedUIMessageId, width)
+		messages = append(messages, uiMessage{
+			ID:          msg.ID,
+			messageType: assistantMessageType,
+			position:    position,
+			height:      lipgloss.Height(rendered),
+			content:     rendered,
+		})
+		return messages
+	}
 	content := msg.Content().String()
 	thinking := msg.IsThinking()
 	thinkingContent := msg.ReasoningContent().Thinking

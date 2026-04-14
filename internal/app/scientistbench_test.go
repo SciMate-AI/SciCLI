@@ -678,13 +678,14 @@ func TestPostScientistBenchLaunchWritesRootSessionMessage(t *testing.T) {
 	}, "Scientist Bench node started")
 	require.NoError(t, err)
 
-	text := msgs.latestText(t, "root-1")
-	assert.Contains(t, text, "Scientist Bench node started")
-	assert.Contains(t, text, "case case-launch")
-	assert.Contains(t, text, "mode paper_generation")
-	assert.Contains(t, text, "node node-case-intake")
-	assert.Contains(t, text, "role chief_scientist")
-	assert.Contains(t, text, "task sbtask-launch")
+	msg := msgs.latestMessage(t, "root-1")
+	meta := msg.ScientistBenchContent()
+	require.NotNil(t, meta)
+	assert.Equal(t, scientistBenchMessageKindStatus, meta.Kind)
+	assert.Equal(t, "started", meta.State)
+	assert.Equal(t, "Chief Scientist", meta.AgentLabel)
+	assert.Contains(t, meta.Detail, "Scientist Bench node started")
+	assert.Contains(t, meta.Detail, "Write the scicli paper")
 }
 
 func TestStartScientistBenchRunSyncMirrorsTaskProgressIntoRootSession(t *testing.T) {
@@ -729,14 +730,90 @@ func TestStartScientistBenchRunSyncMirrorsTaskProgressIntoRootSession(t *testing
 	taskRuns.Finish(sess.ID, taskrun.StatusComplete, "Drafted method plan", nil)
 
 	require.Eventually(t, func() bool {
-		lines := strings.Join(msgs.listTexts("root-1"), "\n")
-		return strings.Contains(lines, "progress | Running tool rg | tool rg") &&
-			strings.Contains(lines, "complete | Drafted method plan")
+		msgs := msgs.listSession("root-1")
+		if len(msgs) != 1 {
+			return false
+		}
+		meta := msgs[0].ScientistBenchContent()
+		return meta != nil && meta.State == "complete" && strings.Contains(meta.Detail, "Drafted method plan")
 	}, 2*time.Second, 20*time.Millisecond)
 
-	lines := msgs.listTexts("root-1")
-	assert.Contains(t, strings.Join(lines, "\n"), "Scientist Bench progress | case case-sync | node node-method-plan | role method_planner | progress | Running tool rg | tool rg")
-	assert.Contains(t, strings.Join(lines, "\n"), "Scientist Bench progress | case case-sync | node node-method-plan | role method_planner | complete | Drafted method plan")
+	rootMsgs := msgs.listSession("root-1")
+	require.Len(t, rootMsgs, 1)
+	meta := rootMsgs[0].ScientistBenchContent()
+	require.NotNil(t, meta)
+	assert.Equal(t, "complete", meta.State)
+	assert.Equal(t, "Method Planner", meta.AgentLabel)
+	assert.Contains(t, meta.Detail, "Drafted method plan")
+}
+
+func TestStartScientistBenchMessageSyncStreamsAgentTurnsIntoRootSession(t *testing.T) {
+	msgs := newStubMessageService()
+	bench := newStubScientistBenchService(scientistbench.Case{
+		ID:            "case-stream",
+		RootSessionID: "root-stream",
+		GraphState: scientistbench.GraphState{
+			ActiveNode: "node-method-plan",
+			ActiveRole: "method_planner",
+		},
+		Runs: []scientistbench.RunRecord{
+			{
+				ID:               "run-stream",
+				NodeID:           "node-method-plan",
+				Role:             "method_planner",
+				SessionID:        "sbtask-stream",
+				TaskRunSessionID: "sbtask-stream",
+			},
+		},
+	})
+	app := &App{
+		Messages:                    msgs,
+		ScientistBench:              bench,
+		scientistBenchAgentMirrors:  make(map[string]string),
+		scientistBenchStatusMirrors: make(map[string]string),
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	app.startScientistBenchMessageSync(ctx)
+	t.Cleanup(func() {
+		cancel()
+		app.watcherWG.Wait()
+	})
+	time.Sleep(50 * time.Millisecond)
+
+	childMsg, err := msgs.Create(context.Background(), "sbtask-stream", message.CreateMessageParams{
+		Role: message.Assistant,
+		Parts: []message.ContentPart{
+			message.TextContent{Text: "Drafting the method section"},
+		},
+	})
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool {
+		rootMsgs := msgs.listSession("root-stream")
+		return len(rootMsgs) == 1 && strings.Contains(rootMsgs[0].Content().Text, "Drafting the method section")
+	}, 2*time.Second, 20*time.Millisecond)
+
+	childMsg.AppendContent(" with an ablation plan.")
+	childMsg.AddFinish(message.FinishReasonEndTurn)
+	require.NoError(t, msgs.Update(context.Background(), childMsg))
+
+	require.Eventually(t, func() bool {
+		rootMsgs := msgs.listSession("root-stream")
+		if len(rootMsgs) != 1 {
+			return false
+		}
+		rootMsg := rootMsgs[0]
+		return strings.Contains(rootMsg.Content().Text, "with an ablation plan.") && rootMsg.IsFinished()
+	}, 2*time.Second, 20*time.Millisecond)
+
+	rootMsg := msgs.latestMessage(t, "root-stream")
+	meta := rootMsg.ScientistBenchContent()
+	require.NotNil(t, meta)
+	assert.Equal(t, scientistBenchMessageKindAgent, meta.Kind)
+	assert.Equal(t, "Method Planner", meta.AgentLabel)
+	assert.Equal(t, "complete", meta.State)
+	assert.Contains(t, rootMsg.Content().Text, "Drafting the method section with an ablation plan.")
 }
 
 func TestPostScientistBenchNodeResultWritesNextStepSummary(t *testing.T) {
@@ -760,15 +837,14 @@ func TestPostScientistBenchNodeResultWritesNextStepSummary(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	text := msgs.latestText(t, "root-1")
-	assert.Contains(t, text, "Scientist Bench update")
-	assert.Contains(t, text, "case case-next")
-	assert.Contains(t, text, "node node-method-plan")
-	assert.Contains(t, text, "role method_planner")
-	assert.Contains(t, text, "Method plan drafted")
-	assert.Contains(t, text, "signal method_ready")
-	assert.Contains(t, text, "next node node-execution")
-	assert.Contains(t, text, "next role execution_agent")
+	msg := msgs.latestMessage(t, "root-1")
+	meta := msg.ScientistBenchContent()
+	require.NotNil(t, meta)
+	assert.Equal(t, scientistBenchMessageKindStatus, meta.Kind)
+	assert.Equal(t, "complete", meta.State)
+	assert.Equal(t, "Method Planner", meta.AgentLabel)
+	assert.Contains(t, meta.Detail, "Method plan drafted")
+	assert.Contains(t, meta.Detail, "signal method_ready")
 }
 
 func TestReadyRolesForNodeHonorsDependencies(t *testing.T) {
@@ -1193,6 +1269,13 @@ func (s *stubMessageService) latestText(t *testing.T, sessionID string) string {
 	msgs := s.listSession(sessionID)
 	require.NotEmpty(t, msgs)
 	return strings.TrimSpace(msgs[len(msgs)-1].Content().Text)
+}
+
+func (s *stubMessageService) latestMessage(t *testing.T, sessionID string) message.Message {
+	t.Helper()
+	msgs := s.listSession(sessionID)
+	require.NotEmpty(t, msgs)
+	return msgs[len(msgs)-1]
 }
 
 type stubScientistBenchService struct {
