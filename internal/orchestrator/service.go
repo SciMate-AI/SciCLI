@@ -163,8 +163,8 @@ func (s *service) GetNode(id string) (NodeSpec, bool) {
 func scientistBenchConvergence(stepBudget int, strategy string) WorkerConvergencePolicy {
 	return WorkerConvergencePolicy{
 		StepBudget:      stepBudget,
-		CompletionMode:  WorkerCompletionModeStructuredJSON,
-		TerminalJSONKey: "status",
+		CompletionMode:  WorkerCompletionModeLoopTagged,
+		TerminalJSONKey: "",
 		Strategy:        strategy,
 	}
 }

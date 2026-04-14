@@ -17,6 +17,11 @@ const (
 	Tool      MessageRole = "tool"
 )
 
+const (
+	ScientistBenchVisibilityVisible = "visible"
+	ScientistBenchVisibilityHidden  = "hidden"
+)
+
 type FinishReason string
 
 const (
@@ -52,6 +57,7 @@ func (GeminiRawContent) isPart() {}
 
 type ScientistBenchContent struct {
 	Kind          string `json:"kind,omitempty"`
+	Visibility    string `json:"visibility,omitempty"`
 	AgentID       string `json:"agent_id,omitempty"`
 	AgentLabel    string `json:"agent_label,omitempty"`
 	State         string `json:"state,omitempty"`

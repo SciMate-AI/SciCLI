@@ -53,6 +53,7 @@ func TestMarshallPartsScientistBenchContentRoundTrip(t *testing.T) {
 	parts := []ContentPart{
 		ScientistBenchContent{
 			Kind:          "agent",
+			Visibility:    ScientistBenchVisibilityVisible,
 			AgentID:       "method_planner",
 			AgentLabel:    "Method Planner",
 			State:         "streaming",

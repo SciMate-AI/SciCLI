@@ -469,7 +469,7 @@ func (a *agent) streamAndHandleEvents(ctx context.Context, sessionID string, msg
 
 	assistantMsg, err := a.messages.Create(ctx, sessionID, message.CreateMessageParams{
 		Role:  message.Assistant,
-		Parts: []message.ContentPart{},
+		Parts: assistantMessageInitialParts(sessionID),
 		Model: a.provider.Model().ID,
 	})
 	if err != nil {
@@ -656,6 +656,19 @@ func (a *agent) processEvent(ctx context.Context, sessionID string, assistantMsg
 	}
 
 	return nil
+}
+
+func assistantMessageInitialParts(sessionID string) []message.ContentPart {
+	sessionID = strings.TrimSpace(sessionID)
+	if strings.HasPrefix(sessionID, "sbtask-") {
+		return []message.ContentPart{
+			message.ScientistBenchContent{
+				Kind:       "agent",
+				Visibility: message.ScientistBenchVisibilityVisible,
+			},
+		}
+	}
+	return []message.ContentPart{}
 }
 
 func (a *agent) publishTaskProgress(sessionID, detail, toolName string, metadata *taskrun.EventMetadata) {

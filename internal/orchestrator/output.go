@@ -17,11 +17,67 @@ type IdeaPayload struct {
 	SupportingRefs []string `json:"supporting_refs,omitempty"`
 }
 
+func (p *IdeaPayload) UnmarshalJSON(data []byte) error {
+	if p == nil {
+		return nil
+	}
+	trimmed := strings.TrimSpace(string(data))
+	if trimmed == "" || trimmed == "null" {
+		*p = IdeaPayload{}
+		return nil
+	}
+	if len(trimmed) > 0 && trimmed[0] == '"' {
+		var summary string
+		if err := json.Unmarshal(data, &summary); err != nil {
+			return err
+		}
+		summary = strings.TrimSpace(summary)
+		*p = IdeaPayload{
+			Title:   summary,
+			Summary: summary,
+		}
+		return nil
+	}
+	type alias IdeaPayload
+	var out alias
+	if err := json.Unmarshal(data, &out); err != nil {
+		return err
+	}
+	*p = IdeaPayload(out)
+	return nil
+}
+
 type ObjectionPayload struct {
 	IdeaTitle    string   `json:"idea_title,omitempty"`
 	Summary      string   `json:"summary,omitempty"`
 	Severity     string   `json:"severity,omitempty"`
 	EvidenceRefs []string `json:"evidence_refs,omitempty"`
+}
+
+func (p *ObjectionPayload) UnmarshalJSON(data []byte) error {
+	if p == nil {
+		return nil
+	}
+	trimmed := strings.TrimSpace(string(data))
+	if trimmed == "" || trimmed == "null" {
+		*p = ObjectionPayload{}
+		return nil
+	}
+	if len(trimmed) > 0 && trimmed[0] == '"' {
+		var summary string
+		if err := json.Unmarshal(data, &summary); err != nil {
+			return err
+		}
+		*p = ObjectionPayload{Summary: strings.TrimSpace(summary)}
+		return nil
+	}
+	type alias ObjectionPayload
+	var out alias
+	if err := json.Unmarshal(data, &out); err != nil {
+		return err
+	}
+	*p = ObjectionPayload(out)
+	return nil
 }
 
 type MethodPlanPayload struct {

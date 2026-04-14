@@ -19,6 +19,11 @@ const (
 	scientistBenchMessageKindStatus = "status"
 )
 
+type scientistBenchRunLocator struct {
+	CaseID string
+	RunID  string
+}
+
 func (app *App) startScientistBenchRunSync(ctx context.Context) {
 	if app.ScientistBench == nil || app.TaskRuns == nil || app.Messages == nil {
 		return
@@ -95,12 +100,13 @@ func (app *App) upsertScientistBenchAgentMessage(
 	source message.Message,
 ) error {
 	text := strings.TrimSpace(source.Content().Text)
-	if text == "" || isScientistBenchStructuredOutput(text) {
+	if text == "" || !scientistBenchMessageIsExplicitlyVisible(source) {
 		return nil
 	}
 
 	meta := message.ScientistBenchContent{
 		Kind:          scientistBenchMessageKindAgent,
+		Visibility:    message.ScientistBenchVisibilityVisible,
 		AgentID:       firstNonEmpty(run.Role, item.GraphState.ActiveRole, "agent"),
 		AgentLabel:    scientistBenchAgentLabel(firstNonEmpty(run.Role, item.GraphState.ActiveRole, "agent")),
 		State:         scientistBenchAgentState(source),
@@ -181,6 +187,16 @@ func (app *App) findScientistBenchRunByTaskSession(ctx context.Context, taskSess
 	if taskSessionID == "" {
 		return scientistbench.Case{}, scientistbench.RunRecord{}, false
 	}
+	if locator, ok := app.lookupScientistBenchTaskRun(taskSessionID); ok {
+		item, err := app.ScientistBench.Get(ctx, locator.CaseID)
+		if err == nil {
+			if run, found := findScientistBenchRun(item, locator.RunID); found {
+				app.storeScientistBenchTaskRun(taskSessionID, locator.CaseID, locator.RunID)
+				return item, run, true
+			}
+		}
+		app.deleteScientistBenchTaskRun(taskSessionID)
+	}
 
 	items, err := app.ScientistBench.List(ctx)
 	if err != nil {
@@ -189,6 +205,9 @@ func (app *App) findScientistBenchRunByTaskSession(ctx context.Context, taskSess
 	for _, item := range items {
 		for i := len(item.Runs) - 1; i >= 0; i-- {
 			run := item.Runs[i]
+			if mappedSessionID := firstNonEmpty(run.TaskRunSessionID, run.SessionID); strings.TrimSpace(mappedSessionID) != "" {
+				app.storeScientistBenchTaskRun(mappedSessionID, item.ID, run.ID)
+			}
 			if run.TaskRunSessionID == taskSessionID || run.SessionID == taskSessionID {
 				return item, run, true
 			}
@@ -211,6 +230,7 @@ func scientistBenchLaunchContent(item scientistbench.Case, run scientistbench.Ru
 	}
 	return message.ScientistBenchContent{
 		Kind:          scientistBenchMessageKindStatus,
+		Visibility:    message.ScientistBenchVisibilityVisible,
 		AgentID:       firstNonEmpty(run.Role, item.GraphState.ActiveRole, "agent"),
 		AgentLabel:    scientistBenchAgentLabel(firstNonEmpty(run.Role, item.GraphState.ActiveRole, "agent")),
 		State:         "started",
@@ -233,6 +253,7 @@ func scientistBenchTaskEventContent(item scientistbench.Case, run scientistbench
 	detail := scientistBenchEventDetail(event)
 	return &message.ScientistBenchContent{
 		Kind:          scientistBenchMessageKindStatus,
+		Visibility:    message.ScientistBenchVisibilityVisible,
 		AgentID:       firstNonEmpty(run.Role, item.GraphState.ActiveRole, "agent"),
 		AgentLabel:    scientistBenchAgentLabel(firstNonEmpty(run.Role, item.GraphState.ActiveRole, "agent")),
 		State:         state,
@@ -343,6 +364,7 @@ func scientistBenchNodeResultContent(item scientistbench.Case, run scientistbenc
 
 	return message.ScientistBenchContent{
 		Kind:          scientistBenchMessageKindStatus,
+		Visibility:    message.ScientistBenchVisibilityVisible,
 		AgentID:       firstNonEmpty(run.Role, item.GraphState.ActiveRole, "agent"),
 		AgentLabel:    scientistBenchAgentLabel(firstNonEmpty(run.Role, item.GraphState.ActiveRole, "agent")),
 		State:         state,
@@ -404,8 +426,10 @@ func (app *App) startScientistBenchMessageSync(ctx context.Context) {
 				if msg.Role != message.Assistant {
 					continue
 				}
-				text := strings.TrimSpace(msg.Content().Text)
-				if text == "" || isScientistBenchStructuredOutput(text) {
+				if !scientistBenchMessageIsExplicitlyVisible(msg) {
+					continue
+				}
+				if strings.TrimSpace(msg.Content().Text) == "" {
 					continue
 				}
 				item, run, ok := app.findScientistBenchRunByTaskSession(watchCtx, msg.SessionID)
@@ -420,11 +444,21 @@ func (app *App) startScientistBenchMessageSync(ctx context.Context) {
 	}()
 }
 
-// isScientistBenchStructuredOutput detects the final JSON WorkerOutput blob that
-// agents emit at the end of their run. We skip mirroring this because it is
-// already captured and summarized by watchScientistBenchNodeRun.
-func isScientistBenchStructuredOutput(text string) bool {
-	return strings.HasPrefix(text, "{") && strings.Contains(text, `"status":`)
+func scientistBenchMessageIsExplicitlyVisible(msg message.Message) bool {
+	meta := msg.ScientistBenchContent()
+	if meta == nil {
+		return false
+	}
+	return strings.TrimSpace(meta.Visibility) == message.ScientistBenchVisibilityVisible
+}
+
+func scientistBenchMessageVisibility(msg message.Message) string {
+	if meta := msg.ScientistBenchContent(); meta != nil {
+		if visibility := strings.TrimSpace(meta.Visibility); visibility != "" {
+			return visibility
+		}
+	}
+	return message.ScientistBenchVisibilityVisible
 }
 
 func scientistBenchAgentState(msg message.Message) string {
@@ -480,6 +514,45 @@ func scientistBenchStateFinishReason(state string) message.FinishReason {
 
 func scientistBenchAgentMirrorKey(sourceMessageID string) string {
 	return "agent:" + strings.TrimSpace(sourceMessageID)
+}
+
+func (app *App) storeScientistBenchTaskRun(taskSessionID, caseID, runID string) {
+	taskSessionID = strings.TrimSpace(taskSessionID)
+	caseID = strings.TrimSpace(caseID)
+	runID = strings.TrimSpace(runID)
+	if taskSessionID == "" || caseID == "" || runID == "" {
+		return
+	}
+	app.scientistBenchTaskRunIndexMu.Lock()
+	defer app.scientistBenchTaskRunIndexMu.Unlock()
+	if app.scientistBenchTaskRunIndex == nil {
+		app.scientistBenchTaskRunIndex = make(map[string]scientistBenchRunLocator)
+	}
+	app.scientistBenchTaskRunIndex[taskSessionID] = scientistBenchRunLocator{
+		CaseID: caseID,
+		RunID:  runID,
+	}
+}
+
+func (app *App) lookupScientistBenchTaskRun(taskSessionID string) (scientistBenchRunLocator, bool) {
+	taskSessionID = strings.TrimSpace(taskSessionID)
+	if taskSessionID == "" {
+		return scientistBenchRunLocator{}, false
+	}
+	app.scientistBenchTaskRunIndexMu.RLock()
+	defer app.scientistBenchTaskRunIndexMu.RUnlock()
+	locator, ok := app.scientistBenchTaskRunIndex[taskSessionID]
+	return locator, ok
+}
+
+func (app *App) deleteScientistBenchTaskRun(taskSessionID string) {
+	taskSessionID = strings.TrimSpace(taskSessionID)
+	if taskSessionID == "" {
+		return
+	}
+	app.scientistBenchTaskRunIndexMu.Lock()
+	defer app.scientistBenchTaskRunIndexMu.Unlock()
+	delete(app.scientistBenchTaskRunIndex, taskSessionID)
 }
 
 func scientistBenchStatusMirrorKey(runID string) string {

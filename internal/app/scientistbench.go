@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"reflect"
+	"sort"
 	"strings"
 	"time"
 
@@ -138,11 +139,6 @@ func (app *App) StartScientistBenchActiveNodeRun(ctx context.Context, caseID str
 	if !ok {
 		return ScientistBenchNodeRun{}, fmt.Errorf("worker profile for role %s is not registered", roleID)
 	}
-	item.GraphState.ActiveRole = roleID
-	item, err = app.ScientistBench.Save(ctx, item)
-	if err != nil {
-		return ScientistBenchNodeRun{}, err
-	}
 	item, liveRun := app.reconcileScientistBenchCheckpoint(item, node.ID, roleID, time.Now())
 	item, err = app.ScientistBench.Save(ctx, item)
 	if err != nil {
@@ -154,6 +150,16 @@ func (app *App) StartScientistBenchActiveNodeRun(ctx context.Context, caseID str
 			Case: item,
 			Run:  *liveRun,
 		}, nil
+	}
+
+	prompt := buildScientistBenchWorkerPrompt(item, node, profile, app.RuntimeRegistry, app.RuntimeExecutor, app.Skills)
+	item, run, reused, err := app.reserveScientistBenchRoleRun(ctx, item.ID, node, roleID, prompt, false, true)
+	if err != nil {
+		return ScientistBenchNodeRun{}, err
+	}
+	if reused {
+		_ = app.postScientistBenchLaunch(context.Background(), item, run, "Scientist Bench node already running")
+		return ScientistBenchNodeRun{Case: item, Run: run}, nil
 	}
 
 	taskSessionID := "sbtask-" + uuid.NewString()
@@ -171,58 +177,34 @@ func (app *App) StartScientistBenchActiveNodeRun(ctx context.Context, caseID str
 		app.Permissions.AutoApproveSession(taskSession.ID)
 	}
 
-	prompt := buildScientistBenchWorkerPrompt(item, node, profile, app.RuntimeRegistry, app.RuntimeExecutor, app.Skills)
-	if app.TaskRuns != nil {
-		app.TaskRuns.Queue(taskSession, prompt)
-	}
-
-	run := scientistbench.RunRecord{
-		ID:               "run-" + uuid.NewString(),
-		SessionID:        taskSession.ID,
-		Role:             roleID,
-		RoleInstance:     fmt.Sprintf("%s#%d", roleID, nextRoleOrdinal(item, roleID)),
-		NodeID:           node.ID,
-		Status:           "queued",
-		StartedAt:        time.Now().Unix(),
-		InputSummary:     truncateScientistBenchText(prompt, maxScientistBenchSummaryLen),
-		TaskRunSessionID: taskSession.ID,
-		TaskRunStatus:    "queued",
-	}
-
-	item = app.captureRuntimePlansForCase(item, node.ID, roleID, run.ID)
-
-	item, err = app.ScientistBench.UpsertRun(ctx, item.ID, run)
+	item, run, err = app.attachScientistBenchReservedRun(ctx, item.ID, run.ID, taskSession.ID)
 	if err != nil {
 		return ScientistBenchNodeRun{}, err
+	}
+	if app.TaskRuns != nil {
+		app.TaskRuns.Queue(taskSession, prompt)
 	}
 
 	worker, err := agent.NewAgent(
 		config.AgentTask,
 		app.Sessions,
 		app.Messages,
-		agent.RoleWorkerTools(profile.ToolProfile, app.Permissions, app.History, app.LSPClients, app.Skills),
+		app.scientistBenchWorkerTools(item.ID, run, node, profile),
 		app.Skills,
 		app.TaskRuns,
 	)
 	if err != nil {
+		_ = app.failScientistBenchReservedRun(context.Background(), item.ID, run.ID, "failed", err.Error())
 		return ScientistBenchNodeRun{}, fmt.Errorf("create role worker: %w", err)
 	}
 
 	done, err := worker.Run(context.Background(), taskSession.ID, prompt)
 	if err != nil {
-		run.Status = "failed"
-		run.TaskRunStatus = "failed"
-		run.Error = err.Error()
-		run.FinishedAt = time.Now().Unix()
-		_, _ = app.ScientistBench.UpsertRun(context.Background(), item.ID, run)
+		_ = app.failScientistBenchReservedRun(context.Background(), item.ID, run.ID, "failed", err.Error())
 		return ScientistBenchNodeRun{}, fmt.Errorf("start role worker: %w", err)
 	}
 	if done == nil {
-		run.Status = "failed"
-		run.TaskRunStatus = "failed"
-		run.Error = "role worker returned nil event channel"
-		run.FinishedAt = time.Now().Unix()
-		_, _ = app.ScientistBench.UpsertRun(context.Background(), item.ID, run)
+		_ = app.failScientistBenchReservedRun(context.Background(), item.ID, run.ID, "failed", "role worker returned nil event channel")
 		return ScientistBenchNodeRun{}, fmt.Errorf("start role worker: nil event channel")
 	}
 
@@ -266,6 +248,10 @@ func (app *App) ensureScientistBenchRootSession(ctx context.Context, item scient
 }
 
 func (app *App) scheduleScientistBenchContinuation(caseID string) {
+	app.scheduleScientistBenchContinuationAfter(caseID, 0)
+}
+
+func (app *App) scheduleScientistBenchContinuationAfter(caseID string, delay time.Duration) {
 	caseID = strings.TrimSpace(caseID)
 	if caseID == "" || app.ScientistBench == nil || app.Orchestrator == nil {
 		return
@@ -284,6 +270,15 @@ func (app *App) scheduleScientistBenchContinuation(caseID string) {
 		defer app.watcherWG.Done()
 		defer cancel()
 		defer app.finishScientistBenchContinuation(caseID)
+		if delay > 0 {
+			timer := time.NewTimer(delay)
+			defer timer.Stop()
+			select {
+			case <-ctx.Done():
+				return
+			case <-timer.C:
+			}
+		}
 		_, _ = app.startScientistBenchContinuation(ctx, caseID)
 	}()
 }
@@ -414,6 +409,10 @@ func (app *App) startScientistBenchSpecificRoleRun(
 	if err != nil {
 		return ScientistBenchNodeRun{}, err
 	}
+	item, err = app.ScientistBench.Save(ctx, item)
+	if err != nil {
+		return ScientistBenchNodeRun{}, err
+	}
 	if exhausted, exhaustedItem, err := app.enforceScientistBenchBudget(ctx, item); err != nil {
 		return ScientistBenchNodeRun{}, err
 	} else if exhausted {
@@ -428,12 +427,14 @@ func (app *App) startScientistBenchSpecificRoleRun(
 	if !ok {
 		return ScientistBenchNodeRun{}, fmt.Errorf("worker profile for role %s is not registered", roleID)
 	}
-	if hasSuccessfulNodeRoleRun(item, node.ID, roleID) {
-		return ScientistBenchNodeRun{}, fmt.Errorf("role %s already completed for node %s", roleID, node.ID)
+	prompt := buildScientistBenchWorkerPrompt(item, node, profile, app.RuntimeRegistry, app.RuntimeExecutor, app.Skills)
+	item, run, reused, err := app.reserveScientistBenchRoleRun(ctx, item.ID, node, roleID, prompt, parallel, false)
+	if err != nil {
+		return ScientistBenchNodeRun{}, err
 	}
-	if liveRun, ok := latestRecoverableNodeRoleRun(item, node.ID, roleID); ok && shouldKeepScientistBenchRunAlive(app.TaskRuns, liveRun, time.Now()) {
-		_ = app.postScientistBenchLaunch(context.Background(), item, liveRun, "Scientist Bench node already running")
-		return ScientistBenchNodeRun{Case: item, Run: liveRun}, nil
+	if reused {
+		_ = app.postScientistBenchLaunch(context.Background(), item, run, "Scientist Bench node already running")
+		return ScientistBenchNodeRun{Case: item, Run: run}, nil
 	}
 
 	taskSessionID := "sbtask-" + uuid.NewString()
@@ -455,50 +456,35 @@ func (app *App) startScientistBenchSpecificRoleRun(
 		app.Permissions.AutoApproveSession(taskSession.ID)
 	}
 
-	prompt := buildScientistBenchWorkerPrompt(item, node, profile, app.RuntimeRegistry, app.RuntimeExecutor, app.Skills)
-	if app.TaskRuns != nil {
-		app.TaskRuns.Queue(taskSession, prompt)
-	}
-
-	run := scientistbench.RunRecord{
-		ID:               "run-" + uuid.NewString(),
-		SessionID:        taskSession.ID,
-		Role:             roleID,
-		RoleInstance:     fmt.Sprintf("%s#%d", roleID, nextRoleOrdinal(item, roleID)),
-		NodeID:           node.ID,
-		Status:           "queued",
-		StartedAt:        time.Now().Unix(),
-		InputSummary:     truncateScientistBenchText(prompt, maxScientistBenchSummaryLen),
-		TaskRunSessionID: taskSession.ID,
-		TaskRunStatus:    "queued",
-	}
-
-	item = app.captureRuntimePlansForCase(item, node.ID, roleID, run.ID)
-	item, err = app.ScientistBench.UpsertRun(ctx, item.ID, run)
+	item, run, err = app.attachScientistBenchReservedRun(ctx, item.ID, run.ID, taskSession.ID)
 	if err != nil {
 		return ScientistBenchNodeRun{}, err
+	}
+	if app.TaskRuns != nil {
+		app.TaskRuns.Queue(taskSession, prompt)
 	}
 
 	worker, err := agent.NewAgent(
 		config.AgentTask,
 		app.Sessions,
 		app.Messages,
-		agent.RoleWorkerTools(profile.ToolProfile, app.Permissions, app.History, app.LSPClients, app.Skills),
+		app.scientistBenchWorkerTools(item.ID, run, node, profile),
 		app.Skills,
 		app.TaskRuns,
 	)
 	if err != nil {
+		_ = app.failScientistBenchReservedRun(context.Background(), item.ID, run.ID, "failed", err.Error())
 		return ScientistBenchNodeRun{}, fmt.Errorf("create role worker: %w", err)
 	}
 
 	done, err := worker.Run(context.Background(), taskSession.ID, prompt)
 	if err != nil {
-		run.Status = "failed"
-		run.TaskRunStatus = "failed"
-		run.Error = err.Error()
-		run.FinishedAt = time.Now().Unix()
-		_, _ = app.ScientistBench.UpsertRun(context.Background(), item.ID, run)
+		_ = app.failScientistBenchReservedRun(context.Background(), item.ID, run.ID, "failed", err.Error())
 		return ScientistBenchNodeRun{}, fmt.Errorf("start role worker: %w", err)
+	}
+	if done == nil {
+		_ = app.failScientistBenchReservedRun(context.Background(), item.ID, run.ID, "failed", "role worker returned nil event channel")
+		return ScientistBenchNodeRun{}, fmt.Errorf("start role worker: nil event channel")
 	}
 
 	if parallel {
@@ -515,6 +501,136 @@ func (app *App) startScientistBenchSpecificRoleRun(
 		return ScientistBenchNodeRun{}, fmt.Errorf("run %s not found after scheduling", run.ID)
 	}
 	return ScientistBenchNodeRun{Case: item, Run: updatedRun}, nil
+}
+
+func (app *App) reserveScientistBenchRoleRun(
+	ctx context.Context,
+	caseID string,
+	node orchestrator.NodeSpec,
+	roleID string,
+	prompt string,
+	parallel bool,
+	requireReady bool,
+) (scientistbench.Case, scientistbench.RunRecord, bool, error) {
+	if app.ScientistBench == nil {
+		return scientistbench.Case{}, scientistbench.RunRecord{}, false, fmt.Errorf("scientist bench service is not configured")
+	}
+
+	caseID = strings.TrimSpace(caseID)
+	roleID = strings.TrimSpace(roleID)
+	now := time.Now()
+
+	var (
+		reservedRun scientistbench.RunRecord
+		reused      bool
+	)
+	item, err := app.ScientistBench.MutateCase(ctx, caseID, func(item *scientistbench.Case) error {
+		if item == nil {
+			return fmt.Errorf("scientist bench case %s not found", caseID)
+		}
+		if scientistBenchCaseIsTerminal(*item) {
+			return fmt.Errorf("case %s is terminal", item.ID)
+		}
+		if requireReady {
+			if !sliceContains(readyRolesForNode(*item, node), roleID) {
+				if liveRun, ok := latestRecoverableNodeRoleRun(*item, node.ID, roleID); ok && shouldKeepScientistBenchRunAlive(app.TaskRuns, liveRun, now) {
+					reservedRun = liveRun
+					reused = true
+					return nil
+				}
+				return fmt.Errorf("role %s is no longer ready for node %s", roleID, node.ID)
+			}
+		}
+		if hasSuccessfulNodeRoleRun(*item, node.ID, roleID) {
+			return fmt.Errorf("role %s already completed for node %s", roleID, node.ID)
+		}
+		if liveRun, ok := latestRecoverableNodeRoleRun(*item, node.ID, roleID); ok {
+			if shouldKeepScientistBenchRunAlive(app.TaskRuns, liveRun, now) {
+				reservedRun = liveRun
+				app.storeScientistBenchTaskRun(firstNonEmpty(liveRun.TaskRunSessionID, liveRun.SessionID), item.ID, liveRun.ID)
+				reused = true
+				return nil
+			}
+			taskStatus, detail := scientistBenchRecoveryDetail(app.TaskRuns, liveRun)
+			liveRun.Status = "failed"
+			liveRun.TaskRunStatus = firstNonEmpty(taskStatus, liveRun.TaskRunStatus, "failed")
+			liveRun.Error = detail
+			liveRun.FinishedAt = now.Unix()
+			item.Runs = upsertScientistBenchRunLocal(item.Runs, liveRun)
+		}
+		if !parallel {
+			item.GraphState.ActiveRole = roleID
+		}
+		reservedRun = scientistbench.RunRecord{
+			ID:            "run-" + uuid.NewString(),
+			Role:          roleID,
+			RoleInstance:  fmt.Sprintf("%s#%d", roleID, nextRoleOrdinal(*item, roleID)),
+			NodeID:        node.ID,
+			Status:        "queued",
+			StartedAt:     now.Unix(),
+			InputSummary:  truncateScientistBenchText(prompt, maxScientistBenchSummaryLen),
+			TaskRunStatus: "queued",
+		}
+		*item = app.captureRuntimePlansForCase(*item, node.ID, roleID, reservedRun.ID)
+		item.Runs = upsertScientistBenchRunLocal(item.Runs, reservedRun)
+		return nil
+	})
+	if err != nil {
+		return scientistbench.Case{}, scientistbench.RunRecord{}, false, err
+	}
+	return item, reservedRun, reused, nil
+}
+
+func (app *App) attachScientistBenchReservedRun(
+	ctx context.Context,
+	caseID string,
+	runID string,
+	taskSessionID string,
+) (scientistbench.Case, scientistbench.RunRecord, error) {
+	var savedRun scientistbench.RunRecord
+	item, err := app.ScientistBench.MutateCase(ctx, caseID, func(item *scientistbench.Case) error {
+		run, ok := findScientistBenchRun(*item, runID)
+		if !ok {
+			return fmt.Errorf("run %s not found", runID)
+		}
+		run.SessionID = taskSessionID
+		run.TaskRunSessionID = taskSessionID
+		run.Status = "queued"
+		run.TaskRunStatus = "queued"
+		item.Runs = upsertScientistBenchRunLocal(item.Runs, run)
+		savedRun = run
+		return nil
+	})
+	if err != nil {
+		return scientistbench.Case{}, scientistbench.RunRecord{}, err
+	}
+	app.storeScientistBenchTaskRun(taskSessionID, item.ID, savedRun.ID)
+	return item, savedRun, nil
+}
+
+func (app *App) failScientistBenchReservedRun(
+	ctx context.Context,
+	caseID string,
+	runID string,
+	taskStatus string,
+	detail string,
+) error {
+	if app == nil || app.ScientistBench == nil {
+		return nil
+	}
+	_, err := app.ScientistBench.MutateCase(ctx, caseID, func(item *scientistbench.Case) error {
+		run, ok := findScientistBenchRun(*item, runID)
+		if !ok {
+			return nil
+		}
+		run.Status = "failed"
+		run.TaskRunStatus = firstNonEmpty(strings.TrimSpace(taskStatus), run.TaskRunStatus, "failed")
+		run.Error = strings.TrimSpace(detail)
+		run.FinishedAt = time.Now().Unix()
+		item.Runs = upsertScientistBenchRunLocal(item.Runs, run)
+		return nil
+	})
+	return err
 }
 
 func sliceContains(slice []string, value string) bool {
@@ -567,14 +683,21 @@ func (app *App) watchScientistBenchNodeRun(
 	parsed := orchestrator.WorkerOutput{}
 	outcomeErr := result.Error
 	if outcomeErr == nil {
-		var parseErr error
-		parsed, parseErr = orchestrator.StrictParseWorkerOutput(content)
-		if parseErr == nil {
-			parsed = app.reconcileScientistBenchRuntimeExecution(context.Background(), run, node, parsed)
-			parseErr = orchestrator.ValidateWorkerOutputForRole(node, run.Role, parsed)
+		if currentRun, ok := app.scientistBenchCurrentRunSnapshot(context.Background(), caseID, run.ID); ok && scientistBenchRunHasTerminalStateUpdate(currentRun) {
+			run = currentRun
 		}
-		if parseErr != nil {
-			outcomeErr = parseErr
+	}
+	if outcomeErr == nil {
+		if !scientistBenchRunHasTerminalStateUpdate(run) {
+			var parseErr error
+			parsed, parseErr = orchestrator.StrictParseWorkerOutput(content)
+			if parseErr == nil {
+				parsed = app.reconcileScientistBenchRuntimeExecution(context.Background(), run, node, parsed)
+				parseErr = orchestrator.ValidateWorkerOutputForRole(node, run.Role, parsed)
+			}
+			if parseErr != nil {
+				outcomeErr = parseErr
+			}
 		}
 	}
 
@@ -595,7 +718,11 @@ func (app *App) watchScientistBenchNodeRun(
 		return
 	}
 	if shouldContinue {
-		app.scheduleScientistBenchContinuation(caseID)
+		if retry, delay := scientistBenchContractRetryDecision(item, savedRun); retry && delay > 0 {
+			app.scheduleScientistBenchContinuationAfter(caseID, delay)
+		} else {
+			app.scheduleScientistBenchContinuation(caseID)
+		}
 	}
 	if activeNode, ok := app.Orchestrator.GetNode(item.GraphState.ActiveNode); ok {
 		app.launchScientistBenchReadyRoles(caseID, item, activeNode, savedRun.Role)
@@ -618,13 +745,32 @@ func (app *App) persistScientistBenchNodeRunOutcome(
 	)
 
 	item, err := app.ScientistBench.MutateCase(ctx, caseID, func(item *scientistbench.Case) error {
+		defer func() {
+			*item = scientistbench.SyncWorkflowState(*item)
+		}()
+		usedToolState := false
 		now := time.Now().Unix()
 		if currentRun, ok := findScientistBenchRun(*item, run.ID); ok {
 			if len(run.ToolCalls) == 0 {
 				run.ToolCalls = append([]string(nil), currentRun.ToolCalls...)
 			}
+			if len(run.StateUpdates) == 0 {
+				run.StateUpdates = append([]string(nil), currentRun.StateUpdates...)
+			}
+			if len(run.StateUpdateOps) == 0 {
+				run.StateUpdateOps = append([]string(nil), currentRun.StateUpdateOps...)
+			}
 			if strings.TrimSpace(run.TaskRunStatus) == "" {
 				run.TaskRunStatus = currentRun.TaskRunStatus
+			}
+			if scientistBenchRunHasTerminalStateUpdate(currentRun) {
+				usedToolState = true
+				if strings.TrimSpace(run.OutputSummary) == "" {
+					run.OutputSummary = currentRun.OutputSummary
+				}
+				if len(run.SignalsEmitted) == 0 {
+					run.SignalsEmitted = append([]string(nil), currentRun.SignalsEmitted...)
+				}
 			}
 		}
 
@@ -640,15 +786,47 @@ func (app *App) persistScientistBenchNodeRunOutcome(
 			run.TaskRunStatus = firstNonEmpty(run.TaskRunStatus, "failed")
 			run.Error = outcomeErr.Error()
 		} else {
-			run.OutputSummary = truncateScientistBenchText(parsed.Summary, maxScientistBenchSummaryLen)
+			if !usedToolState {
+				run.OutputSummary = truncateScientistBenchText(parsed.Summary, maxScientistBenchSummaryLen)
+			}
+			if strings.TrimSpace(run.OutputSummary) == "" {
+				run.OutputSummary = truncateScientistBenchText(content, maxScientistBenchSummaryLen)
+			}
 			if strings.TrimSpace(run.OutputSummary) == "" {
 				run.OutputSummary = "Completed"
 			}
-			run.SignalsEmitted = normalizeRunSignals(parsed, node)
+			if !usedToolState {
+				run.SignalsEmitted = normalizeRunSignals(parsed, node)
+			}
 		}
 		item.Runs = upsertScientistBenchRunLocal(item.Runs, run)
 
-		if outcomeErr == nil && strings.TrimSpace(content) != "" {
+		if outcomeErr == nil {
+			if missing := scientistBenchMissingRoleContractUpdates(run, node); len(missing) > 0 {
+				run.Status = "failed"
+				run.TaskRunStatus = "failed"
+				run.Error = "missing required state updates: " + strings.Join(missing, ", ")
+				run.OutputSummary = "Node contract unsatisfied"
+				run.SignalsEmitted = nil
+				item.Runs = upsertScientistBenchRunLocal(item.Runs, run)
+
+				if retry, _ := scientistBenchContractRetryDecision(*item, run); retry {
+					readyRoles := readyRolesForNode(*item, node)
+					if len(readyRoles) > 0 {
+						item.GraphState.ActiveRole = readyRoles[0]
+						shouldContinue = true
+					} else if liveRole := firstLiveNodeRoleForNode(*item, node.ID); liveRole != "" {
+						item.GraphState.ActiveRole = liveRole
+					}
+				} else {
+					item.GraphState.ActiveRole = run.Role
+				}
+				savedRun = run
+				return nil
+			}
+		}
+
+		if outcomeErr == nil && !usedToolState && strings.TrimSpace(content) != "" {
 			item.Artifacts = append(item.Artifacts, scientistBenchArtifactsForOutput(run, node, parsed, now)...)
 			*item = applyScientistBenchWorkerOutput(*item, run, parsed)
 			*item = applyScientistBenchReviewOutput(*item, run, parsed)
@@ -680,9 +858,31 @@ func (app *App) persistScientistBenchNodeRunOutcome(
 			savedRun = run
 			return nil
 		}
+		if missing := scientistBenchMissingNodeContractUpdates(*item, node); len(missing) > 0 {
+			run.Status = "failed"
+			run.TaskRunStatus = "failed"
+			run.Error = "node contract unsatisfied: missing " + strings.Join(missing, ", ")
+			run.OutputSummary = "Node contract unsatisfied"
+			run.SignalsEmitted = nil
+			item.Runs = upsertScientistBenchRunLocal(item.Runs, run)
+
+			if retry, _ := scientistBenchContractRetryDecision(*item, run); retry {
+				readyRoles := readyRolesForNode(*item, node)
+				if len(readyRoles) > 0 {
+					item.GraphState.ActiveRole = readyRoles[0]
+					shouldContinue = true
+				} else if liveRole := firstLiveNodeRoleForNode(*item, node.ID); liveRole != "" {
+					item.GraphState.ActiveRole = liveRole
+				}
+			} else {
+				item.GraphState.ActiveRole = run.Role
+			}
+			savedRun = run
+			return nil
+		}
 
 		prevActiveNode := item.GraphState.ActiveNode
-		signal := determineScientistBenchNodeSignal(*item, node, parsed)
+		signal := determineScientistBenchNodeSignal(*item, node, run, parsed)
 		updated, applyErr := app.Orchestrator.ApplySignal(*item, signal)
 		if applyErr != nil {
 			return applyErr
@@ -700,7 +900,7 @@ func (app *App) persistScientistBenchNodeRunOutcome(
 	if currentRun, ok := findScientistBenchRun(item, run.ID); ok {
 		savedRun = currentRun
 	}
-	if !shouldContinue && !scientistBenchCaseIsTerminal(item) {
+	if !shouldContinue && !scientistBenchCaseIsTerminal(item) && !scientistBenchIsContractFailure(savedRun.Error) {
 		if activeNode, ok := app.Orchestrator.GetNode(item.GraphState.ActiveNode); ok && len(readyRolesForNode(item, activeNode)) > 0 {
 			shouldContinue = true
 		}
@@ -711,8 +911,21 @@ func (app *App) persistScientistBenchNodeRunOutcome(
 func determineScientistBenchNodeSignal(
 	item scientistbench.Case,
 	node orchestrator.NodeSpec,
+	run scientistbench.RunRecord,
 	parsed orchestrator.WorkerOutput,
 ) string {
+	for _, emitted := range sanitizeStrings(run.SignalsEmitted) {
+		switch emitted {
+		case node.SuccessSignal:
+			return node.SuccessSignal
+		case node.FailureSignal:
+			return node.FailureSignal
+		default:
+			if _, ok := node.DynamicRoutes[emitted]; ok {
+				return emitted
+			}
+		}
+	}
 	signal := node.SuccessSignal
 	if parsed.FailureSignal == node.FailureSignal {
 		signal = node.FailureSignal
@@ -940,6 +1153,57 @@ func scientistBenchReferenceDisplay(ref orchestrator.ReferencePayload) string {
 	return strings.Join(parts, ". ")
 }
 
+func appendScientistBenchStateToolInstructions(b *strings.Builder, node orchestrator.NodeSpec, profile orchestrator.WorkerProfile) {
+	if b == nil {
+		return
+	}
+	requiredTool, contract := scientistBenchRequiredStateTool(profile.RoleID, node)
+	if requiredTool == "" {
+		return
+	}
+	b.WriteString("- Required state tool: " + requiredTool + ".\n")
+	b.WriteString("- Optional memory tool: " + scientistBenchToolMemory + ".\n")
+	if contract != "" {
+		b.WriteString("- Tool contract: " + contract + "\n")
+	}
+	if nodeContract, ok := lookupScientistBenchNodeContract(node.ID); ok {
+		if len(nodeContract.WritableSlices) > 0 {
+			b.WriteString("- Writable shared state slices: " + strings.Join(nodeContract.WritableSlices, ", ") + ".\n")
+		}
+		if len(nodeContract.CompletionUpdates) > 0 {
+			b.WriteString("- Node completion updates: " + strings.Join(nodeContract.CompletionUpdates, ", ") + ".\n")
+		}
+	}
+}
+
+func scientistBenchRequiredStateTool(roleID string, node orchestrator.NodeSpec) (string, string) {
+	switch strings.TrimSpace(roleID) {
+	case "chief_scientist":
+		switch node.ID {
+		case "node-revision-gate":
+			return scientistBenchToolRouteDecision, "Set summary, status, and the route signal. Include revision_decision plus revision_feedback when revising, and overall_score when aggregating review quality."
+		default:
+			return scientistBenchToolRouteDecision, "Set summary, status, and the exact routing signal that should advance or fail this node."
+		}
+	case "research_agent":
+		return scientistBenchToolResearchPack, "Submit evidence_summary, normalized references, and any citations or risks you want preserved."
+	case "idea_maker":
+		return scientistBenchToolIdeas, "Submit the final idea set with concrete title, summary, novelty_claim, hypotheses, and supporting_refs."
+	case "idea_hater":
+		return scientistBenchToolObjections, "Submit decisive objections or conditional acceptances for the candidate ideas."
+	case "method_planner":
+		return scientistBenchToolMethodPlan, "Submit an executable method_plan with summary, pipeline_steps, acceptance_checks, implementation_notes, and runtime_hints."
+	case "execution_agent":
+		return scientistBenchToolExecutionReport, "Submit the execution payload with commands, verification summary, pass/fail status, outputs, and log highlights."
+	case "advisor_agent", "judge_agent", "domain_expert_reviewer":
+		return scientistBenchToolReview, "Submit the review payload with decision, summary, strengths, weaknesses, questions, calibrated scores, and confidence."
+	case "paper_comparison_reviewer":
+		return scientistBenchToolComparison, "Submit the comparison payload with all alignment dimensions, strengths, weaknesses, and confidence."
+	default:
+		return scientistBenchToolArtifact, "Submit summary plus any produced artifact path, kind, label, metadata, and the final node status."
+	}
+}
+
 func appendScientistBenchRoleContractOverride(b *strings.Builder, node orchestrator.NodeSpec, profile orchestrator.WorkerProfile) {
 	if b == nil {
 		return
@@ -982,10 +1246,17 @@ func appendScientistBenchConvergenceSection(b *strings.Builder, node orchestrato
 	if policy.StepBudget > 0 {
 		fmt.Fprintf(b, "- Autonomous turn budget: %d.\n", policy.StepBudget)
 	}
-	b.WriteString("- Do not emit <agent_loop_status> tags for this workflow.\n")
-	b.WriteString("- Intermediate turns may be brief progress notes or tool actions.\n")
-	b.WriteString("- As soon as your role contract is satisfied, return the terminal JSON object only.\n")
-	b.WriteString("- If you reach the final allowed turn with unresolved gaps, return best-effort JSON with status=\"failed\" and summarize the blocker.\n")
+	if policy.CompletionMode == orchestrator.WorkerCompletionModeLoopTagged {
+		b.WriteString("- Follow the loop controller instructions for <agent_loop_status>continue</agent_loop_status> and <agent_loop_status>complete</agent_loop_status>.\n")
+		b.WriteString("- Intermediate turns should be tool-forward and brief.\n")
+		b.WriteString("- Once your required scientistbench_* state tool succeeds, finish with a concise natural-language handoff.\n")
+		b.WriteString("- If the final allowed step still has blockers, mark the state tool submission as failed and summarize the blocker in plain language.\n")
+	} else {
+		b.WriteString("- Do not emit <agent_loop_status> tags for this workflow.\n")
+		b.WriteString("- Intermediate turns may be brief progress notes or tool actions.\n")
+		b.WriteString("- As soon as your role contract is satisfied, return the terminal JSON object only.\n")
+		b.WriteString("- If you reach the final allowed turn with unresolved gaps, return best-effort JSON with status=\"failed\" and summarize the blocker.\n")
+	}
 	for _, bullet := range scientistBenchConvergenceBullets(node, profile) {
 		fmt.Fprintf(b, "- %s\n", bullet)
 	}
@@ -1069,7 +1340,7 @@ func scientistBenchConvergenceBullets(node orchestrator.NodeSpec, profile orches
 		}
 	}
 	return []string{
-		"Stop once the assigned node contract is satisfied and the final JSON is machine-readable.",
+		"Stop once the assigned node contract is satisfied and the required scientistbench_* state tool has persisted the machine state.",
 	}
 }
 
@@ -1282,30 +1553,11 @@ func buildScientistBenchWorkerPrompt(
 	b.WriteString("- Work only within your role boundary.\n")
 	b.WriteString("- Use available tools when they materially improve the output.\n")
 	b.WriteString("- Be concrete and evidence-driven. Never fabricate citations, results, or data.\n")
-	b.WriteString("- Intermediate turns may be brief prose or tool work. Only the terminal response is parsed by the orchestrator.\n")
-	b.WriteString("- The terminal response must be valid JSON without markdown fences.\n")
-
-	// status rules differ by node type to prevent research/analysis agents from
-	// emitting needs_revision (a revision-gate-only concept) which causes
-	// confusing repeated incomplete outputs instead of looping to finish the work.
-	isRevisionGate := node.ID == "node-revision-gate"
-	isReviewNode := node.Type == "review" || node.ID == "node-advisor-review" ||
-		node.ID == "node-judge-review" || node.ID == "node-domain-review" ||
-		node.ID == "node-paper-compare"
-
-	if isRevisionGate {
-		b.WriteString("- status must be \"succeeded\" (paper_quality_acceptable) or \"failed\" (paper_needs_revision).\n")
-		b.WriteString("- Set revision_decision to \"accept\" or \"revise\" and populate revision_feedback with specific items when revising.\n")
-	} else if isReviewNode {
-		b.WriteString("- status must be \"succeeded\" or \"failed\" only. Do NOT use \"needs_revision\".\n")
-	} else {
-		b.WriteString("- status must be \"succeeded\" or \"failed\" only.\n")
-		b.WriteString("- Return the final JSON as soon as your node contract is satisfied. Do not keep looping for cosmetic improvements.\n")
-	}
-
-	b.WriteString("- Use this shape: {\"status\":\"succeeded|failed\",\"summary\":\"...\",\"success_signal\":\"...\",\"failure_signal\":\"...\",\"overall_score\":0.0,\"revision_decision\":\"accept|revise\",\"revision_feedback\":[...],\"evidence_summary\":[...],\"citations\":[...],\"references\":[{\"key\":\"smith2024\",\"title\":\"...\",\"authors\":[\"...\"],\"year\":2024,\"venue\":\"...\",\"doi\":\"...\",\"url\":\"...\",\"zotero_key\":\"...\",\"formatted_reference\":\"...\",\"bibtex\":\"@article{...}\",\"key_claim\":\"...\"}],\"risks\":[...],\"ideas\":[...],\"objections\":[...],\"method_plan\":{\"summary\":\"...\",\"pipeline_steps\":[...],\"acceptance_checks\":[...],\"implementation_notes\":[...],\"runtime_hints\":[...]},\"execution\":{\"runtime_id\":\"...\",\"commands\":[...],\"verification_summary\":\"...\",\"verification_passed\":true,\"output_files\":[...],\"log_highlights\":[...]},\"review\":{\"decision\":\"accept|revise|reject\",\"summary\":\"...\",\"strengths\":[...],\"weaknesses\":[...],\"questions\":[...],\"confidence\":0.0,\"readable_paper\":true,\"novel_insight_present\":true,\"code_runs\":true,\"scores\":{\"overall\":0.0,\"idea_quality\":0.0,\"method_soundness\":0.0,\"result_interpretation\":0.0,\"writing_quality\":0.0}},\"comparison\":{\"summary\":\"...\",\"strengths\":[...],\"weaknesses\":[...],\"motivation_alignment\":0.0,\"methodology_alignment\":0.0,\"novelty_alignment\":0.0,\"experimental_alignment\":0.0,\"confidence\":0.0}}\n")
-	b.WriteString("- overall_score: set to the mean review score (0-5) when acting as reviewer or revision gate.\n")
-	b.WriteString("- Only set success_signal or failure_signal if you are confident it matches the assigned node contract.\n")
+	b.WriteString("- Shared machine state must be committed with the provided scientistbench_* tool. Do not put machine-readable JSON in assistant chat.\n")
+	b.WriteString("- Your final visible assistant message should be short natural language for humans, not a structured payload dump.\n")
+	b.WriteString("- Do not consider the node complete until the required scientistbench_* state tool has been called successfully.\n")
+	b.WriteString("- Use scientistbench_record_memory only for durable side observations; it does not replace the required terminal state tool.\n")
+	appendScientistBenchStateToolInstructions(&b, node, profile)
 	appendScientistBenchRoleContractOverride(&b, node, profile)
 	appendScientistBenchSkillRecommendations(&b, item, node, profile, skillsSvc)
 	return strings.TrimSpace(b.String())
@@ -1318,6 +1570,193 @@ func findScientistBenchRun(item scientistbench.Case, runID string) (scientistben
 		}
 	}
 	return scientistbench.RunRecord{}, false
+}
+
+func (app *App) scientistBenchCurrentRunSnapshot(ctx context.Context, caseID string, runID string) (scientistbench.RunRecord, bool) {
+	if app == nil || app.ScientistBench == nil {
+		return scientistbench.RunRecord{}, false
+	}
+	item, err := app.ScientistBench.Get(ctx, caseID)
+	if err != nil {
+		return scientistbench.RunRecord{}, false
+	}
+	return findScientistBenchRun(item, runID)
+}
+
+func scientistBenchRunHasTerminalStateUpdate(run scientistbench.RunRecord) bool {
+	for _, update := range run.StateUpdates {
+		update = strings.TrimSpace(update)
+		if update == "" || update == scientistBenchToolMemory {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func scientistBenchRunHasAppliedStateUpdate(run scientistbench.RunRecord, updateName string, opKey string) bool {
+	opKey = strings.TrimSpace(opKey)
+	if opKey != "" {
+		for _, existing := range run.StateUpdateOps {
+			if strings.TrimSpace(existing) == opKey {
+				return true
+			}
+		}
+	}
+	updateName = strings.TrimSpace(updateName)
+	if opKey == "" && updateName == scientistBenchToolMemory {
+		for _, existing := range run.StateUpdates {
+			if strings.TrimSpace(existing) == updateName {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func scientistBenchRunHasStateUpdate(run scientistbench.RunRecord, updateName string) bool {
+	updateName = strings.TrimSpace(updateName)
+	if updateName == "" {
+		return false
+	}
+	for _, existing := range run.StateUpdates {
+		if strings.TrimSpace(existing) == updateName {
+			return true
+		}
+	}
+	return false
+}
+
+func scientistBenchRequiredUpdatesForRole(node orchestrator.NodeSpec, roleID string) []string {
+	roleID = strings.TrimSpace(roleID)
+	if reducer, ok := scientistBenchRoleReducerFor(node.ID, roleID); ok && strings.TrimSpace(reducer.RequiredUpdate) != "" {
+		return []string{strings.TrimSpace(reducer.RequiredUpdate)}
+	}
+	if len(node.AssignedRoles) == 1 && strings.TrimSpace(node.AssignedRoles[0]) == roleID {
+		if contract, ok := lookupScientistBenchNodeContract(node.ID); ok {
+			return sanitizeStrings(contract.CompletionUpdates)
+		}
+	}
+	return nil
+}
+
+func scientistBenchMissingRoleContractUpdates(run scientistbench.RunRecord, node orchestrator.NodeSpec) []string {
+	required := scientistBenchRequiredUpdatesForRole(node, run.Role)
+	if len(required) == 0 {
+		return nil
+	}
+	missing := make([]string, 0, len(required))
+	for _, updateName := range required {
+		if !scientistBenchRunHasStateUpdate(run, updateName) {
+			missing = append(missing, updateName)
+		}
+	}
+	return missing
+}
+
+func scientistBenchMissingNodeContractUpdates(item scientistbench.Case, node orchestrator.NodeSpec) []string {
+	contract, ok := lookupScientistBenchNodeContract(node.ID)
+	if !ok {
+		return nil
+	}
+	missing := make([]string, 0, len(contract.CompletionUpdates)+len(node.AssignedRoles))
+	for _, updateName := range sanitizeStrings(contract.CompletionUpdates) {
+		found := false
+		for _, run := range item.Runs {
+			if run.NodeID != node.ID || run.Status != "complete" || strings.TrimSpace(run.Error) != "" {
+				continue
+			}
+			if scientistBenchRunHasStateUpdate(run, updateName) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			missing = append(missing, updateName)
+		}
+	}
+	for _, roleID := range node.AssignedRoles {
+		required := scientistBenchRequiredUpdatesForRole(node, roleID)
+		if len(required) == 0 {
+			continue
+		}
+		roleSatisfied := false
+		for _, run := range item.Runs {
+			if run.NodeID != node.ID || run.Role != strings.TrimSpace(roleID) || run.Status != "complete" || strings.TrimSpace(run.Error) != "" {
+				continue
+			}
+			roleMissing := false
+			for _, updateName := range required {
+				if !scientistBenchRunHasStateUpdate(run, updateName) {
+					roleMissing = true
+					break
+				}
+			}
+			if !roleMissing {
+				roleSatisfied = true
+				break
+			}
+		}
+		if !roleSatisfied {
+			missing = append(missing, roleID+":"+strings.Join(required, "+"))
+		}
+	}
+	return sanitizeStrings(missing)
+}
+
+type scientistBenchContractRetryPolicy struct {
+	MaxAutoRetries int
+	RetryDelay     time.Duration
+}
+
+func scientistBenchContractRetryPolicyFor(roleID string) scientistBenchContractRetryPolicy {
+	switch strings.TrimSpace(roleID) {
+	case "chief_scientist":
+		return scientistBenchContractRetryPolicy{MaxAutoRetries: 0}
+	case "research_agent", "method_planner", "code_agent", "execution_agent", "paper_writer", "figure_agent":
+		return scientistBenchContractRetryPolicy{MaxAutoRetries: 1, RetryDelay: 3 * time.Second}
+	case "advisor_agent", "judge_agent", "domain_expert_reviewer", "paper_comparison_reviewer":
+		return scientistBenchContractRetryPolicy{MaxAutoRetries: 1, RetryDelay: 2 * time.Second}
+	default:
+		return scientistBenchContractRetryPolicy{MaxAutoRetries: 1, RetryDelay: 2 * time.Second}
+	}
+}
+
+func scientistBenchIsContractFailure(errText string) bool {
+	errText = strings.TrimSpace(errText)
+	return strings.HasPrefix(errText, "missing required state updates:") ||
+		strings.HasPrefix(errText, "node contract unsatisfied:")
+}
+
+func scientistBenchConsecutiveContractFailures(item scientistbench.Case, nodeID string, roleID string) int {
+	count := 0
+	for i := len(item.Runs) - 1; i >= 0; i-- {
+		run := item.Runs[i]
+		if run.NodeID != nodeID || run.Role != roleID {
+			continue
+		}
+		if scientistBenchIsContractFailure(run.Error) {
+			count++
+			continue
+		}
+		break
+	}
+	return count
+}
+
+func scientistBenchContractRetryDecision(item scientistbench.Case, run scientistbench.RunRecord) (bool, time.Duration) {
+	if !scientistBenchIsContractFailure(run.Error) {
+		return false, 0
+	}
+	policy := scientistBenchContractRetryPolicyFor(run.Role)
+	if policy.MaxAutoRetries <= 0 {
+		return false, 0
+	}
+	failures := scientistBenchConsecutiveContractFailures(item, run.NodeID, run.Role)
+	if failures <= policy.MaxAutoRetries {
+		return true, policy.RetryDelay
+	}
+	return false, 0
 }
 
 func nextRoleOrdinal(item scientistbench.Case, roleID string) int {
@@ -2003,12 +2442,19 @@ func appendScientistBenchContextSections(
 	// exactly what has been completed and what is missing.
 	isCS := profile.RoleID == "chief_scientist"
 	if isCS {
-		b.WriteString("\nPipeline status (completed stages).\n")
-		if len(item.GraphState.CompletedNodes) == 0 {
-			b.WriteString("  (no stages completed yet)\n")
+		b.WriteString("\nWorkflow phase state.\n")
+		if len(item.Workflow.Phases) == 0 {
+			b.WriteString("  (workflow state not initialized yet)\n")
 		} else {
-			for _, n := range item.GraphState.CompletedNodes {
-				fmt.Fprintf(b, "  - %s\n", n)
+			for _, phase := range item.Workflow.Phases {
+				fmt.Fprintf(b, "  - [%s] %s", phase.Status, phase.Label)
+				if phase.ActiveNode != "" {
+					fmt.Fprintf(b, " active=%s", phase.ActiveNode)
+				}
+				if len(phase.AppliedStateUpdates) > 0 {
+					fmt.Fprintf(b, " updates=%s", strings.Join(phase.AppliedStateUpdates, "|"))
+				}
+				b.WriteString("\n")
 			}
 		}
 		if len(item.GraphState.BlockedNodes) > 0 {
@@ -2072,6 +2518,8 @@ func appendScientistBenchContextSections(
 		b.WriteString("You may emit \"research_insufficient\" to request a research retry,\n")
 		b.WriteString("OR proceed using the core_idea and constraints as the basis for ideation.\n")
 	}
+
+	appendScientistBenchMemorySection(b, item, node, profile)
 
 	if len(item.IdeaModule.AcceptedIdeas) > 0 {
 		b.WriteString("\nAccepted ideas so far.\n")
@@ -2213,6 +2661,113 @@ func appendScientistBenchContextSections(
 		fmt.Fprintf(b, "Reproduction correctness mean: %.2f\n", item.Scores.Reproduction.CorrectnessMean)
 		fmt.Fprintf(b, "Paper comparison methodology alignment: %.2f\n", item.Scores.PaperComparison.MethodologyAlignment)
 	}
+}
+
+func appendScientistBenchMemorySection(
+	b *strings.Builder,
+	item scientistbench.Case,
+	node orchestrator.NodeSpec,
+	profile orchestrator.WorkerProfile,
+) {
+	if b == nil || len(item.Memories) == 0 {
+		return
+	}
+	relevant := relevantScientistBenchMemories(item.Memories, node, profile, 6)
+	if len(relevant) == 0 {
+		return
+	}
+	b.WriteString("\nPersistent memory.\n")
+	for _, memory := range relevant {
+		fmt.Fprintf(b, "- [%s/%s] %s\n", firstNonEmpty(memory.Role, "unknown"), firstNonEmpty(memory.Kind, "memory"), memory.Summary)
+		if len(memory.Details) > 0 {
+			fmt.Fprintf(b, "  Details: %s\n", strings.Join(memory.Details, " | "))
+		}
+	}
+}
+
+func relevantScientistBenchMemories(
+	memories []scientistbench.MemoryEntry,
+	node orchestrator.NodeSpec,
+	profile orchestrator.WorkerProfile,
+	limit int,
+) []scientistbench.MemoryEntry {
+	if len(memories) == 0 {
+		return nil
+	}
+	if limit <= 0 {
+		limit = 6
+	}
+	type scoredMemory struct {
+		memory scientistbench.MemoryEntry
+		score  int
+	}
+	scored := make([]scoredMemory, 0, len(memories))
+	for _, memory := range memories {
+		score := scientistBenchMemoryScore(memory, node, profile)
+		if score > 0 {
+			scored = append(scored, scoredMemory{memory: memory, score: score})
+		}
+	}
+	if len(scored) > 0 {
+		sort.SliceStable(scored, func(i, j int) bool {
+			if scored[i].score == scored[j].score {
+				if scored[i].memory.CreatedAt == scored[j].memory.CreatedAt {
+					return scored[i].memory.ID < scored[j].memory.ID
+				}
+				return scored[i].memory.CreatedAt > scored[j].memory.CreatedAt
+			}
+			return scored[i].score > scored[j].score
+		})
+		if len(scored) < limit {
+			limit = len(scored)
+		}
+		out := make([]scientistbench.MemoryEntry, 0, limit)
+		for i := 0; i < limit; i++ {
+			out = append(out, scored[i].memory)
+		}
+		return out
+	}
+	if len(memories) < limit {
+		limit = len(memories)
+	}
+	return append([]scientistbench.MemoryEntry(nil), memories[:limit]...)
+}
+
+func scientistBenchMemoryScore(memory scientistbench.MemoryEntry, node orchestrator.NodeSpec, profile orchestrator.WorkerProfile) int {
+	score := 0
+	if strings.EqualFold(memory.NodeID, node.ID) || strings.EqualFold(memory.Stage, node.Stage) {
+		score += 8
+	}
+	if strings.EqualFold(memory.Role, profile.RoleID) {
+		score += 5
+	}
+	switch profile.RoleID {
+	case "chief_scientist":
+		score += 3
+	case "idea_maker", "idea_hater":
+		if strings.Contains(memory.Kind, "research") || strings.Contains(memory.Kind, "idea") {
+			score += 4
+		}
+	case "method_planner", "code_agent", "execution_agent":
+		if strings.Contains(memory.Kind, "idea") || strings.Contains(memory.Kind, "method") || strings.Contains(memory.Kind, "execution") {
+			score += 4
+		}
+	case "paper_writer", "figure_agent":
+		if strings.Contains(memory.Kind, "method") || strings.Contains(memory.Kind, "review") || strings.Contains(memory.Kind, "artifact") {
+			score += 4
+		}
+	case "advisor_agent", "judge_agent", "domain_expert_reviewer", "paper_comparison_reviewer":
+		if strings.Contains(memory.Kind, "execution") || strings.Contains(memory.Kind, "review") || strings.Contains(memory.Kind, "artifact") {
+			score += 4
+		}
+	}
+	if strings.TrimSpace(memory.Summary) != "" {
+		score++
+	}
+	if len(memory.Details) > 0 {
+		score++
+	}
+	return score
 }
 
 func appendScientistBenchRuntimeSection(

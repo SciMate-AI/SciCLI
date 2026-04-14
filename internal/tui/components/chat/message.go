@@ -210,6 +210,9 @@ func renderAssistantMessage(
 ) []uiMessage {
 	messages := []uiMessage{}
 	if meta := msg.ScientistBenchContent(); meta != nil {
+		if strings.TrimSpace(meta.Visibility) == message.ScientistBenchVisibilityHidden {
+			return messages
+		}
 		rendered := renderScientistBenchMessage(msg, *meta, msg.ID == focusedUIMessageId, width)
 		messages = append(messages, uiMessage{
 			ID:          msg.ID,

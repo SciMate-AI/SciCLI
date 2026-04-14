@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/SciMate-AI/scicli/internal/llm/agent"
+	llmtools "github.com/SciMate-AI/scicli/internal/llm/tools"
 	"github.com/SciMate-AI/scicli/internal/message"
 	"github.com/SciMate-AI/scicli/internal/orchestrator"
 	"github.com/SciMate-AI/scicli/internal/pubsub"
@@ -187,17 +188,59 @@ func TestBuildScientistBenchWorkerPromptIncludesConvergencePolicy(t *testing.T) 
 		RoleID:         "research_agent",
 		PromptPreamble: "Research agent preamble",
 		Convergence: orchestrator.WorkerConvergencePolicy{
-			StepBudget:      4,
-			CompletionMode:  orchestrator.WorkerCompletionModeStructuredJSON,
-			TerminalJSONKey: "status",
-			Strategy:        "research_pack",
+			StepBudget:     4,
+			CompletionMode: orchestrator.WorkerCompletionModeLoopTagged,
+			Strategy:       "research_pack",
 		},
 	}
 
 	prompt := buildScientistBenchWorkerPrompt(item, node, profile, nil, nil, nil)
-	assert.Contains(t, prompt, `<scicli_execution_policy step_budget="4" completion_mode="structured_json" terminal_json_key="status" strategy="research_pack" node="node-corpus-retrieval" role="research_agent" />`)
-	assert.Contains(t, prompt, "Do not emit <agent_loop_status> tags")
+	assert.Contains(t, prompt, `<scicli_execution_policy step_budget="4" completion_mode="loop_tagged" terminal_json_key="" strategy="research_pack" node="node-corpus-retrieval" role="research_agent" />`)
+	assert.Contains(t, prompt, "Follow the loop controller instructions")
 	assert.Contains(t, prompt, "Autonomous turn budget: 4.")
+	assert.Contains(t, prompt, scientistBenchToolResearchPack)
+}
+
+func TestBuildScientistBenchWorkerPromptUsesStateToolContract(t *testing.T) {
+	item := scientistbench.Case{ID: "case-tools"}
+	node := orchestrator.NodeSpec{ID: "node-method-plan", Stage: "method_planning"}
+	profile := orchestrator.WorkerProfile{
+		RoleID:         "method_planner",
+		PromptPreamble: "Method planner preamble",
+		Convergence: orchestrator.WorkerConvergencePolicy{
+			StepBudget:     3,
+			CompletionMode: orchestrator.WorkerCompletionModeLoopTagged,
+			Strategy:       "method_spec",
+		},
+	}
+
+	prompt := buildScientistBenchWorkerPrompt(item, node, profile, nil, nil, nil)
+	assert.Contains(t, prompt, scientistBenchToolMethodPlan)
+	assert.Contains(t, prompt, "Do not put machine-readable JSON in assistant chat")
+	assert.NotContains(t, prompt, "Use this shape:")
+}
+
+func TestBuildScientistBenchWorkerPromptShowsWorkflowPhaseState(t *testing.T) {
+	item := scientistbench.SyncWorkflowState(scientistbench.Case{
+		ID: "case-chief",
+		GraphState: scientistbench.GraphState{
+			ActiveNode:     "node-method-plan",
+			CurrentStage:   "method_planning",
+			CompletedNodes: []string{"node-case-intake", "node-research-plan", "node-corpus-retrieval", "node-idea-gate"},
+		},
+		Runs: []scientistbench.RunRecord{
+			{ID: "run-idea", NodeID: "node-idea-gate", StartedAt: 1, FinishedAt: 2, StateUpdates: []string{scientistBenchToolIdeas, scientistBenchToolObjections, scientistBenchToolRouteDecision}},
+			{ID: "run-method", NodeID: "node-method-plan", StartedAt: 3, StateUpdates: []string{scientistBenchToolMethodPlan}},
+		},
+	})
+	node := orchestrator.NodeSpec{ID: "node-method-plan", Stage: "method_planning"}
+	profile := orchestrator.WorkerProfile{RoleID: "chief_scientist", PromptPreamble: "Chief scientist preamble"}
+
+	prompt := buildScientistBenchWorkerPrompt(item, node, profile, nil, nil, nil)
+	assert.Contains(t, prompt, "Workflow phase state.")
+	assert.Contains(t, prompt, "[completed] Research")
+	assert.Contains(t, prompt, "[active] Method")
+	assert.Contains(t, prompt, "Writable shared state slices")
 }
 
 func TestBuildScientistBenchWorkerPromptIncludesNormalizedReferenceBundle(t *testing.T) {
@@ -763,6 +806,7 @@ func TestStartScientistBenchRunSyncMirrorsTaskProgressIntoRootSession(t *testing
 	meta := rootMsgs[0].ScientistBenchContent()
 	require.NotNil(t, meta)
 	assert.Equal(t, "complete", meta.State)
+	assert.Equal(t, message.ScientistBenchVisibilityVisible, meta.Visibility)
 	assert.Equal(t, "Method Planner", meta.AgentLabel)
 	assert.Contains(t, meta.Detail, "Drafted method plan")
 }
@@ -804,6 +848,10 @@ func TestStartScientistBenchMessageSyncStreamsAgentTurnsIntoRootSession(t *testi
 	childMsg, err := msgs.Create(context.Background(), "sbtask-stream", message.CreateMessageParams{
 		Role: message.Assistant,
 		Parts: []message.ContentPart{
+			message.ScientistBenchContent{
+				Kind:       scientistBenchMessageKindAgent,
+				Visibility: message.ScientistBenchVisibilityVisible,
+			},
 			message.TextContent{Text: "Drafting the method section"},
 		},
 	})
@@ -831,9 +879,106 @@ func TestStartScientistBenchMessageSyncStreamsAgentTurnsIntoRootSession(t *testi
 	meta := rootMsg.ScientistBenchContent()
 	require.NotNil(t, meta)
 	assert.Equal(t, scientistBenchMessageKindAgent, meta.Kind)
+	assert.Equal(t, message.ScientistBenchVisibilityVisible, meta.Visibility)
 	assert.Equal(t, "Method Planner", meta.AgentLabel)
 	assert.Equal(t, "complete", meta.State)
 	assert.Contains(t, rootMsg.Content().Text, "Drafting the method section with an ablation plan.")
+}
+
+func TestStartScientistBenchMessageSyncSkipsHiddenAgentMessages(t *testing.T) {
+	msgs := newStubMessageService()
+	bench := newStubScientistBenchService(scientistbench.Case{
+		ID:            "case-hidden",
+		RootSessionID: "root-hidden",
+		GraphState: scientistbench.GraphState{
+			ActiveNode: "node-method-plan",
+			ActiveRole: "method_planner",
+		},
+		Runs: []scientistbench.RunRecord{
+			{
+				ID:               "run-hidden",
+				NodeID:           "node-method-plan",
+				Role:             "method_planner",
+				SessionID:        "sbtask-hidden",
+				TaskRunSessionID: "sbtask-hidden",
+			},
+		},
+	})
+	app := &App{
+		Messages:                    msgs,
+		ScientistBench:              bench,
+		scientistBenchAgentMirrors:  make(map[string]string),
+		scientistBenchStatusMirrors: make(map[string]string),
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	app.startScientistBenchMessageSync(ctx)
+	t.Cleanup(func() {
+		cancel()
+		app.watcherWG.Wait()
+	})
+	time.Sleep(50 * time.Millisecond)
+
+	_, err := msgs.Create(context.Background(), "sbtask-hidden", message.CreateMessageParams{
+		Role: message.Assistant,
+		Parts: []message.ContentPart{
+			message.ScientistBenchContent{
+				Kind:       scientistBenchMessageKindAgent,
+				Visibility: message.ScientistBenchVisibilityHidden,
+			},
+			message.TextContent{Text: "{\"status\":\"machine\"}"},
+		},
+	})
+	require.NoError(t, err)
+
+	time.Sleep(150 * time.Millisecond)
+	assert.Empty(t, msgs.listSession("root-hidden"))
+}
+
+func TestStartScientistBenchMessageSyncSkipsUnclassifiedAssistantMessages(t *testing.T) {
+	msgs := newStubMessageService()
+	bench := newStubScientistBenchService(scientistbench.Case{
+		ID:            "case-unclassified",
+		RootSessionID: "root-unclassified",
+		GraphState: scientistbench.GraphState{
+			ActiveNode: "node-method-plan",
+			ActiveRole: "method_planner",
+		},
+		Runs: []scientistbench.RunRecord{
+			{
+				ID:               "run-unclassified",
+				NodeID:           "node-method-plan",
+				Role:             "method_planner",
+				SessionID:        "sbtask-unclassified",
+				TaskRunSessionID: "sbtask-unclassified",
+			},
+		},
+	})
+	app := &App{
+		Messages:                    msgs,
+		ScientistBench:              bench,
+		scientistBenchAgentMirrors:  make(map[string]string),
+		scientistBenchStatusMirrors: make(map[string]string),
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	app.startScientistBenchMessageSync(ctx)
+	t.Cleanup(func() {
+		cancel()
+		app.watcherWG.Wait()
+	})
+	time.Sleep(50 * time.Millisecond)
+
+	_, err := msgs.Create(context.Background(), "sbtask-unclassified", message.CreateMessageParams{
+		Role: message.Assistant,
+		Parts: []message.ContentPart{
+			message.TextContent{Text: "This should not be mirrored without explicit visibility metadata"},
+		},
+	})
+	require.NoError(t, err)
+
+	time.Sleep(150 * time.Millisecond)
+	assert.Empty(t, msgs.listSession("root-unclassified"))
 }
 
 func TestPostScientistBenchNodeResultWritesNextStepSummary(t *testing.T) {
@@ -999,6 +1144,368 @@ func TestWatchScientistBenchNodeRunRejectsMalformedWorkerOutput(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "failed", savedRun.Status)
 	assert.Contains(t, savedRun.Error, "worker output must be valid JSON")
+}
+
+func TestWatchScientistBenchNodeRunAcceptsToolFirstStateUpdate(t *testing.T) {
+	run := scientistbench.RunRecord{
+		ID:            "run-tool-first",
+		NodeID:        "node-method-plan",
+		Role:          "method_planner",
+		Status:        "queued",
+		SessionID:     "sess-tool-first",
+		TaskRunStatus: "running",
+	}
+	item := scientistbench.Case{
+		ID:            "case-tool-first",
+		RootSessionID: "root-tool-first",
+		Status:        scientistbench.StatusRunning,
+		GraphState: scientistbench.GraphState{
+			CurrentStage: "method_planning",
+			ActiveNode:   "node-method-plan",
+			ActiveRole:   "method_planner",
+		},
+		Runs: []scientistbench.RunRecord{run},
+	}
+
+	bench := newStubScientistBenchService(item)
+	app := &App{
+		Messages:       newStubMessageService(),
+		ScientistBench: bench,
+		Orchestrator:   orchestrator.NewService(),
+	}
+	node, ok := app.Orchestrator.GetNode("node-method-plan")
+	require.True(t, ok)
+	profile, ok := app.Orchestrator.WorkerProfileForRole("method_planner")
+	require.True(t, ok)
+
+	tools := app.scientistBenchStateTools(item.ID, run, node, profile)
+	require.NotEmpty(t, tools)
+	input, err := json.Marshal(map[string]any{
+		"summary": "Executable plan recorded",
+		"method_plan": map[string]any{
+			"summary":              "Train baseline then evaluate retrieval",
+			"pipeline_steps":       []string{"prepare data", "train baseline", "evaluate retrieval"},
+			"acceptance_checks":    []string{"training script exits 0", "retrieval metric reported"},
+			"implementation_notes": []string{"start from existing trainer"},
+			"runtime_hints":        []string{"smoke test first"},
+		},
+	})
+	require.NoError(t, err)
+	resp, err := tools[0].Run(context.Background(), llmtools.ToolCall{Name: tools[0].Info().Name, Input: string(input)})
+	require.NoError(t, err)
+	assert.False(t, resp.IsError)
+
+	done := make(chan agent.AgentEvent, 1)
+	done <- agent.AgentEvent{
+		Message: message.Message{
+			Parts: []message.ContentPart{message.TextContent{Text: "Method plan recorded and ready for implementation."}},
+		},
+	}
+	close(done)
+
+	app.watchScientistBenchNodeRun(item.ID, run, node, done)
+
+	saved, err := bench.Get(context.Background(), item.ID)
+	require.NoError(t, err)
+	savedRun, ok := findScientistBenchRun(saved, run.ID)
+	require.True(t, ok)
+	assert.Equal(t, "complete", savedRun.Status)
+	assert.Empty(t, savedRun.Error)
+	assert.Contains(t, savedRun.StateUpdates, scientistBenchToolMethodPlan)
+	assert.Equal(t, "planned", saved.IdeaModule.Status)
+	require.NotEmpty(t, saved.Memories)
+}
+
+func TestPersistScientistBenchNodeRunOutcomeFailsWhenRoleContractMissing(t *testing.T) {
+	run := scientistbench.RunRecord{
+		ID:            "run-missing-contract",
+		NodeID:        "node-method-plan",
+		Role:          "method_planner",
+		Status:        "queued",
+		SessionID:     "sess-missing-contract",
+		TaskRunStatus: "running",
+	}
+	item := scientistbench.Case{
+		ID:            "case-missing-contract",
+		RootSessionID: "root-missing-contract",
+		Status:        scientistbench.StatusRunning,
+		GraphState: scientistbench.GraphState{
+			CurrentStage: "method_planning",
+			ActiveNode:   "node-method-plan",
+			ActiveRole:   "method_planner",
+		},
+		Runs: []scientistbench.RunRecord{run},
+	}
+
+	bench := newStubScientistBenchService(item)
+	app := &App{
+		ScientistBench: bench,
+		Orchestrator:   orchestrator.NewService(),
+	}
+	node, ok := app.Orchestrator.GetNode("node-method-plan")
+	require.True(t, ok)
+
+	saved, savedRun, shouldContinue, err := app.persistScientistBenchNodeRunOutcome(
+		context.Background(),
+		item.ID,
+		run,
+		node,
+		orchestrator.WorkerOutput{Summary: "Drafted a plan without submitting the state tool"},
+		"Drafted a plan without submitting the state tool",
+		nil,
+	)
+	require.NoError(t, err)
+	assert.True(t, shouldContinue)
+	assert.Equal(t, "failed", savedRun.Status)
+	assert.Contains(t, savedRun.Error, scientistBenchToolMethodPlan)
+	assert.Equal(t, "node-method-plan", saved.GraphState.ActiveNode)
+	assert.Equal(t, "method_planner", saved.GraphState.ActiveRole)
+	assert.Empty(t, saved.IdeaModule.Status)
+}
+
+func TestPersistScientistBenchNodeRunOutcomeFailsWhenFinalNodeContractMissing(t *testing.T) {
+	run := scientistbench.RunRecord{
+		ID:            "run-chief-missing-route",
+		NodeID:        "node-idea-gate",
+		Role:          "chief_scientist",
+		Status:        "queued",
+		SessionID:     "sess-chief-missing-route",
+		TaskRunStatus: "running",
+	}
+	item := scientistbench.Case{
+		ID:            "case-chief-missing-route",
+		RootSessionID: "root-chief-missing-route",
+		Status:        scientistbench.StatusRunning,
+		GraphState: scientistbench.GraphState{
+			CurrentStage: "ideation",
+			ActiveNode:   "node-idea-gate",
+			ActiveRole:   "chief_scientist",
+		},
+		Runs: []scientistbench.RunRecord{
+			{ID: "run-maker", NodeID: "node-idea-gate", Role: "idea_maker", Status: "complete", StateUpdates: []string{scientistBenchToolIdeas}},
+			{ID: "run-hater", NodeID: "node-idea-gate", Role: "idea_hater", Status: "complete", StateUpdates: []string{scientistBenchToolObjections}},
+			run,
+		},
+	}
+
+	bench := newStubScientistBenchService(item)
+	app := &App{
+		ScientistBench: bench,
+		Orchestrator:   orchestrator.NewService(),
+	}
+	node, ok := app.Orchestrator.GetNode("node-idea-gate")
+	require.True(t, ok)
+
+	saved, savedRun, shouldContinue, err := app.persistScientistBenchNodeRunOutcome(
+		context.Background(),
+		item.ID,
+		run,
+		node,
+		orchestrator.WorkerOutput{Summary: "Accepted the ideas but never committed the route"},
+		"Accepted the ideas but never committed the route",
+		nil,
+	)
+	require.NoError(t, err)
+	assert.False(t, shouldContinue)
+	assert.Equal(t, "failed", savedRun.Status)
+	assert.Contains(t, savedRun.Error, scientistBenchToolRouteDecision)
+	assert.Equal(t, "node-idea-gate", saved.GraphState.ActiveNode)
+	assert.Equal(t, "chief_scientist", saved.GraphState.ActiveRole)
+}
+
+func TestPersistScientistBenchNodeRunOutcomeStopsAfterContractRetryBudget(t *testing.T) {
+	run := scientistbench.RunRecord{
+		ID:            "run-method-contract-2",
+		NodeID:        "node-method-plan",
+		Role:          "method_planner",
+		Status:        "queued",
+		SessionID:     "sess-method-contract-2",
+		TaskRunStatus: "running",
+	}
+	item := scientistbench.Case{
+		ID:            "case-method-contract-2",
+		RootSessionID: "root-method-contract-2",
+		Status:        scientistbench.StatusRunning,
+		GraphState: scientistbench.GraphState{
+			CurrentStage: "method_planning",
+			ActiveNode:   "node-method-plan",
+			ActiveRole:   "method_planner",
+		},
+		Runs: []scientistbench.RunRecord{
+			{
+				ID:            "run-method-contract-1",
+				NodeID:        "node-method-plan",
+				Role:          "method_planner",
+				Status:        "failed",
+				TaskRunStatus: "failed",
+				Error:         "missing required state updates: " + scientistBenchToolMethodPlan,
+				FinishedAt:    time.Now().Add(-time.Minute).Unix(),
+			},
+			run,
+		},
+	}
+
+	bench := newStubScientistBenchService(item)
+	app := &App{
+		ScientistBench: bench,
+		Orchestrator:   orchestrator.NewService(),
+	}
+	node, ok := app.Orchestrator.GetNode("node-method-plan")
+	require.True(t, ok)
+
+	saved, savedRun, shouldContinue, err := app.persistScientistBenchNodeRunOutcome(
+		context.Background(),
+		item.ID,
+		run,
+		node,
+		orchestrator.WorkerOutput{Summary: "Still no state tool submission"},
+		"Still no state tool submission",
+		nil,
+	)
+	require.NoError(t, err)
+	assert.False(t, shouldContinue)
+	assert.Equal(t, "failed", savedRun.Status)
+	assert.Equal(t, "method_planner", saved.GraphState.ActiveRole)
+}
+
+func TestReserveScientistBenchRoleRunIsAtomicPerRole(t *testing.T) {
+	item := scientistbench.Case{
+		ID:            "case-reserve",
+		RootSessionID: "root-reserve",
+		Status:        scientistbench.StatusRunning,
+		GraphState: scientistbench.GraphState{
+			CurrentStage: "method_planning",
+			ActiveNode:   "node-method-plan",
+			ActiveRole:   "method_planner",
+		},
+	}
+
+	bench := newStubScientistBenchService(item)
+	app := &App{
+		ScientistBench: bench,
+		Orchestrator:   orchestrator.NewService(),
+	}
+	node, ok := app.Orchestrator.GetNode("node-method-plan")
+	require.True(t, ok)
+
+	firstItem, firstRun, reused, err := app.reserveScientistBenchRoleRun(
+		context.Background(),
+		item.ID,
+		node,
+		"method_planner",
+		"Prepare the executable method plan",
+		false,
+		true,
+	)
+	require.NoError(t, err)
+	assert.False(t, reused)
+	assert.Equal(t, "queued", firstRun.Status)
+	assert.Equal(t, "method_planner", firstItem.GraphState.ActiveRole)
+
+	secondItem, secondRun, reused, err := app.reserveScientistBenchRoleRun(
+		context.Background(),
+		item.ID,
+		node,
+		"method_planner",
+		"Prepare the executable method plan",
+		false,
+		true,
+	)
+	require.NoError(t, err)
+	assert.True(t, reused)
+	assert.Equal(t, firstRun.ID, secondRun.ID)
+	require.Len(t, secondItem.Runs, 1)
+	assert.Equal(t, "queued", secondItem.Runs[0].Status)
+}
+
+func TestFindScientistBenchRunByTaskSessionCachesLookup(t *testing.T) {
+	bench := newStubScientistBenchService(scientistbench.Case{
+		ID: "case-cache",
+		Runs: []scientistbench.RunRecord{
+			{ID: "run-cache", SessionID: "sbtask-cache", TaskRunSessionID: "sbtask-cache", Role: "method_planner", NodeID: "node-method-plan"},
+		},
+	})
+	app := &App{
+		ScientistBench:             bench,
+		scientistBenchTaskRunIndex: make(map[string]scientistBenchRunLocator),
+	}
+
+	_, _, ok := app.findScientistBenchRunByTaskSession(context.Background(), "sbtask-cache")
+	require.True(t, ok)
+	_, _, ok = app.findScientistBenchRunByTaskSession(context.Background(), "sbtask-cache")
+	require.True(t, ok)
+	assert.Equal(t, 1, bench.listCalls)
+}
+
+func TestScientistBenchStateToolIsIdempotentPerToolCallID(t *testing.T) {
+	run := scientistbench.RunRecord{
+		ID:            "run-ideas",
+		NodeID:        "node-idea-gate",
+		Role:          "idea_maker",
+		Status:        "queued",
+		SessionID:     "sess-ideas",
+		TaskRunStatus: "running",
+	}
+	item := scientistbench.Case{
+		ID:     "case-ideas",
+		Status: scientistbench.StatusRunning,
+		GraphState: scientistbench.GraphState{
+			CurrentStage: "ideation",
+			ActiveNode:   "node-idea-gate",
+			ActiveRole:   "idea_maker",
+		},
+		Runs: []scientistbench.RunRecord{run},
+	}
+	bench := newStubScientistBenchService(item)
+	app := &App{ScientistBench: bench, Orchestrator: orchestrator.NewService()}
+	node, ok := app.Orchestrator.GetNode("node-idea-gate")
+	require.True(t, ok)
+	profile, ok := app.Orchestrator.WorkerProfileForRole("idea_maker")
+	require.True(t, ok)
+	tools := app.scientistBenchStateTools(item.ID, run, node, profile)
+	require.NotEmpty(t, tools)
+
+	input, err := json.Marshal(map[string]any{
+		"summary": "Two candidate ideas ready",
+		"ideas": []map[string]any{
+			{
+				"title":           "Idea A",
+				"summary":         "Use a hybrid encoder",
+				"novelty_claim":   "Combines priors",
+				"hypotheses":      []string{"hybrid wins on retrieval"},
+				"supporting_refs": []string{"smith2024"},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	call := llmtools.ToolCall{ID: "call-repeat", Name: tools[0].Info().Name, Input: string(input)}
+	_, err = tools[0].Run(context.Background(), call)
+	require.NoError(t, err)
+	_, err = tools[0].Run(context.Background(), call)
+	require.NoError(t, err)
+
+	saved, err := bench.Get(context.Background(), item.ID)
+	require.NoError(t, err)
+	require.Len(t, saved.IdeaModule.AcceptedIdeas, 1)
+	require.Len(t, saved.Artifacts, 1)
+	require.Len(t, saved.Memories, 1)
+	savedRun, ok := findScientistBenchRun(saved, run.ID)
+	require.True(t, ok)
+	assert.Contains(t, savedRun.StateUpdateOps, "scientistbench_submit_ideas:call-repeat")
+}
+
+func TestRelevantScientistBenchMemoriesPrioritizesNodeAndRole(t *testing.T) {
+	memories := []scientistbench.MemoryEntry{
+		{ID: "m1", NodeID: "node-paper-draft", Stage: "paper_writing", Role: "paper_writer", Kind: "artifact_note", Summary: "Exact draft memory", CreatedAt: 100},
+		{ID: "m2", NodeID: "node-method-plan", Stage: "method_planning", Role: "chief_scientist", Kind: "review_focus", Summary: "Less relevant", CreatedAt: 200},
+		{ID: "m3", NodeID: "node-paper-draft", Stage: "paper_writing", Role: "chief_scientist", Kind: "review_feedback", Summary: "Stage-relevant memory", CreatedAt: 150},
+	}
+
+	out := relevantScientistBenchMemories(memories, orchestrator.NodeSpec{ID: "node-paper-draft", Stage: "paper_writing"}, orchestrator.WorkerProfile{RoleID: "paper_writer"}, 2)
+	require.Len(t, out, 2)
+	assert.Equal(t, "m1", out[0].ID)
+	assert.Equal(t, "m3", out[1].ID)
 }
 
 func TestScientistBenchRegressionFixtures(t *testing.T) {
@@ -1299,7 +1806,8 @@ func (s *stubMessageService) latestMessage(t *testing.T, sessionID string) messa
 }
 
 type stubScientistBenchService struct {
-	items map[string]scientistbench.Case
+	items     map[string]scientistbench.Case
+	listCalls int
 }
 
 type stubSessionService struct {
@@ -1390,6 +1898,7 @@ func (s *stubScientistBenchService) Get(_ context.Context, caseID string) (scien
 }
 
 func (s *stubScientistBenchService) List(context.Context) ([]scientistbench.Case, error) {
+	s.listCalls++
 	out := make([]scientistbench.Case, 0, len(s.items))
 	for _, item := range s.items {
 		out = append(out, item)

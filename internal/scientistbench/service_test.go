@@ -132,6 +132,34 @@ func TestUpdateGraphStateMarksCaseRunning(t *testing.T) {
 	assert.Equal(t, "node-research-plan", item.GraphState.ActiveNode)
 }
 
+func TestSyncWorkflowStateBuildsPhaseMachine(t *testing.T) {
+	item := SyncWorkflowState(Case{
+		ID:     "case-workflow",
+		Status: StatusRunning,
+		GraphState: GraphState{
+			ActiveNode:      "node-paper-draft",
+			CompletedNodes:  []string{"node-case-intake", "node-research-plan", "node-corpus-retrieval", "node-idea-gate", "node-method-plan", "node-implementation", "node-execution", "node-analysis-figures"},
+			BlockedNodes:    []string{},
+			CurrentStage:    "paper_writing",
+			ActiveRole:      "paper_writer",
+			ReceivedSignals: []string{"execution_complete"},
+		},
+		Runs: []RunRecord{
+			{ID: "run-intake", NodeID: "node-case-intake", StartedAt: 10, FinishedAt: 20, StateUpdates: []string{"scientistbench_submit_route_decision"}},
+			{ID: "run-research", NodeID: "node-corpus-retrieval", StartedAt: 30, FinishedAt: 40, StateUpdates: []string{"scientistbench_submit_research_pack"}},
+			{ID: "run-draft", NodeID: "node-paper-draft", StartedAt: 50, StateUpdates: []string{"scientistbench_submit_artifact"}},
+		},
+	})
+
+	assert.Equal(t, "paper_writing", item.Workflow.CurrentPhase)
+	require.NotEmpty(t, item.Workflow.Phases)
+	assert.Equal(t, WorkflowPhaseCompleted, item.Workflow.Phases[0].Status)
+	assert.Equal(t, WorkflowPhaseCompleted, item.Workflow.Phases[1].Status)
+	assert.Equal(t, WorkflowPhaseActive, item.Workflow.Phases[5].Status)
+	assert.Equal(t, "node-paper-draft", item.Workflow.Phases[5].ActiveNode)
+	assert.Contains(t, item.Workflow.Phases[5].AppliedStateUpdates, "scientistbench_submit_artifact")
+}
+
 func resetScientistBenchTestState(t *testing.T) {
 	t.Helper()
 

@@ -63,7 +63,7 @@ func TestWorkerProfileForRole(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, WorkerToolProfileResearch, profile.ToolProfile)
 	assert.Equal(t, 4, profile.Convergence.StepBudget)
-	assert.Equal(t, WorkerCompletionModeStructuredJSON, profile.Convergence.CompletionMode)
+	assert.Equal(t, WorkerCompletionModeLoopTagged, profile.Convergence.CompletionMode)
 	assert.Contains(t, profile.PromptPreamble, "structured paper search")
 
 	profile, ok = svc.WorkerProfileForRole("idea_hater")

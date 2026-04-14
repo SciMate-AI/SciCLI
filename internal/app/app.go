@@ -57,6 +57,8 @@ type App struct {
 	scientistBenchMirrorMu       sync.Mutex
 	scientistBenchAgentMirrors   map[string]string
 	scientistBenchStatusMirrors  map[string]string
+	scientistBenchTaskRunIndexMu sync.RWMutex
+	scientistBenchTaskRunIndex   map[string]scientistBenchRunLocator
 	scientistBenchStarter        func(context.Context, string) (ScientistBenchNodeRun, error)
 }
 
@@ -77,6 +79,7 @@ func New(ctx context.Context, conn *sql.DB) (*App, error) {
 		scientistBenchContinuation:  make(map[string]int),
 		scientistBenchAgentMirrors:  make(map[string]string),
 		scientistBenchStatusMirrors: make(map[string]string),
+		scientistBenchTaskRunIndex:  make(map[string]scientistBenchRunLocator),
 	}
 
 	researchSvc, err := research.NewService()

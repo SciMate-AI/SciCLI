@@ -166,6 +166,31 @@ type GraphState struct {
 	BlockedNodes   []string       `json:"blocked_nodes,omitempty"`
 }
 
+type WorkflowPhaseStatus string
+
+const (
+	WorkflowPhasePending   WorkflowPhaseStatus = "pending"
+	WorkflowPhaseActive    WorkflowPhaseStatus = "active"
+	WorkflowPhaseCompleted WorkflowPhaseStatus = "completed"
+	WorkflowPhaseBlocked   WorkflowPhaseStatus = "blocked"
+)
+
+type WorkflowPhase struct {
+	ID                  string              `json:"id,omitempty"`
+	Label               string              `json:"label,omitempty"`
+	Nodes               []string            `json:"nodes,omitempty"`
+	Status              WorkflowPhaseStatus `json:"status,omitempty"`
+	ActiveNode          string              `json:"active_node,omitempty"`
+	AppliedStateUpdates []string            `json:"applied_state_updates,omitempty"`
+	StartedAt           int64               `json:"started_at,omitempty"`
+	FinishedAt          int64               `json:"finished_at,omitempty"`
+}
+
+type WorkflowState struct {
+	CurrentPhase string          `json:"current_phase,omitempty"`
+	Phases       []WorkflowPhase `json:"phases,omitempty"`
+}
+
 type IdeaCandidate struct {
 	ID             string   `json:"id,omitempty"`
 	Title          string   `json:"title,omitempty"`
@@ -207,8 +232,22 @@ type RunRecord struct {
 	TaskRunSessionID string   `json:"taskrun_session_id,omitempty"`
 	TaskRunStatus    string   `json:"taskrun_status,omitempty"`
 	ToolCalls        []string `json:"tool_calls,omitempty"`
+	StateUpdates     []string `json:"state_updates,omitempty"`
+	StateUpdateOps   []string `json:"state_update_ops,omitempty"`
 	SignalsEmitted   []string `json:"signals_emitted,omitempty"`
 	Error            string   `json:"error,omitempty"`
+}
+
+type MemoryEntry struct {
+	ID        string   `json:"id,omitempty"`
+	RunID     string   `json:"run_id,omitempty"`
+	Stage     string   `json:"stage,omitempty"`
+	NodeID    string   `json:"node_id,omitempty"`
+	Role      string   `json:"role,omitempty"`
+	Kind      string   `json:"kind,omitempty"`
+	Summary   string   `json:"summary,omitempty"`
+	Details   []string `json:"details,omitempty"`
+	CreatedAt int64    `json:"created_at,omitempty"`
 }
 
 type Artifact struct {
@@ -301,8 +340,10 @@ type Case struct {
 	Budget        Budget          `json:"budget,omitempty"`
 	Inputs        Inputs          `json:"inputs,omitempty"`
 	GraphState    GraphState      `json:"graph_state,omitempty"`
+	Workflow      WorkflowState   `json:"workflow,omitempty"`
 	IdeaModule    IdeaModule      `json:"idea_module,omitempty"`
 	Runs          []RunRecord     `json:"runs,omitempty"`
+	Memories      []MemoryEntry   `json:"memories,omitempty"`
 	Artifacts     []Artifact      `json:"artifacts,omitempty"`
 	Reviews       []Review        `json:"reviews,omitempty"`
 	Scores        AggregateScores `json:"scores,omitempty"`
@@ -645,9 +686,13 @@ func normalizeCase(item Case) Case {
 	}
 	item.Inputs = normalizeInputs(item.Inputs)
 	item.GraphState = normalizeGraphState(item.GraphState)
+	item.Workflow = normalizeWorkflow(item.Workflow)
 	item.IdeaModule = normalizeIdeaModule(item.IdeaModule)
 	for i, run := range item.Runs {
 		item.Runs[i] = normalizeRun(run)
+	}
+	for i, memory := range item.Memories {
+		item.Memories[i] = normalizeMemory(memory)
 	}
 	for i, artifact := range item.Artifacts {
 		item.Artifacts[i] = normalizeArtifact(artifact)
@@ -656,11 +701,21 @@ func normalizeCase(item Case) Case {
 		item.Reviews[i] = normalizeReview(review)
 	}
 	item.Termination = normalizeTermination(item.Termination)
+	item = SyncWorkflowState(item)
 	slices.SortFunc(item.Runs, func(a, b RunRecord) int {
 		if a.StartedAt == b.StartedAt {
 			return strings.Compare(a.ID, b.ID)
 		}
 		if a.StartedAt > b.StartedAt {
+			return -1
+		}
+		return 1
+	})
+	slices.SortFunc(item.Memories, func(a, b MemoryEntry) int {
+		if a.CreatedAt == b.CreatedAt {
+			return strings.Compare(a.ID, b.ID)
+		}
+		if a.CreatedAt > b.CreatedAt {
 			return -1
 		}
 		return 1
@@ -788,6 +843,23 @@ func normalizeGraphState(graph GraphState) GraphState {
 	return graph
 }
 
+func normalizeWorkflow(workflow WorkflowState) WorkflowState {
+	workflow.CurrentPhase = strings.TrimSpace(workflow.CurrentPhase)
+	for i, phase := range workflow.Phases {
+		workflow.Phases[i] = normalizeWorkflowPhase(phase)
+	}
+	return workflow
+}
+
+func normalizeWorkflowPhase(phase WorkflowPhase) WorkflowPhase {
+	phase.ID = strings.TrimSpace(phase.ID)
+	phase.Label = strings.TrimSpace(phase.Label)
+	phase.Nodes = normalizeStrings(phase.Nodes)
+	phase.ActiveNode = strings.TrimSpace(phase.ActiveNode)
+	phase.AppliedStateUpdates = normalizeStrings(phase.AppliedStateUpdates)
+	return phase
+}
+
 func normalizeIdeaModule(module IdeaModule) IdeaModule {
 	module.Status = strings.TrimSpace(module.Status)
 	for i, idea := range module.AcceptedIdeas {
@@ -843,12 +915,32 @@ func normalizeRun(run RunRecord) RunRecord {
 	run.TaskRunSessionID = strings.TrimSpace(run.TaskRunSessionID)
 	run.TaskRunStatus = strings.TrimSpace(run.TaskRunStatus)
 	run.ToolCalls = normalizeStrings(run.ToolCalls)
+	run.StateUpdates = normalizeStrings(run.StateUpdates)
+	run.StateUpdateOps = normalizeStrings(run.StateUpdateOps)
 	run.SignalsEmitted = normalizeStrings(run.SignalsEmitted)
 	run.Error = strings.TrimSpace(run.Error)
 	if run.StartedAt == 0 {
 		run.StartedAt = time.Now().Unix()
 	}
 	return run
+}
+
+func normalizeMemory(memory MemoryEntry) MemoryEntry {
+	memory.ID = strings.TrimSpace(memory.ID)
+	if memory.ID == "" {
+		memory.ID = "memory-" + uuid.NewString()
+	}
+	memory.RunID = strings.TrimSpace(memory.RunID)
+	memory.Stage = strings.TrimSpace(memory.Stage)
+	memory.NodeID = strings.TrimSpace(memory.NodeID)
+	memory.Role = strings.TrimSpace(memory.Role)
+	memory.Kind = strings.TrimSpace(memory.Kind)
+	memory.Summary = strings.TrimSpace(memory.Summary)
+	memory.Details = normalizeStrings(memory.Details)
+	if memory.CreatedAt == 0 {
+		memory.CreatedAt = time.Now().Unix()
+	}
+	return memory
 }
 
 func normalizeArtifact(artifact Artifact) Artifact {
@@ -954,6 +1046,16 @@ func upsertRun(existing []RunRecord, incoming RunRecord) []RunRecord {
 }
 
 func upsertArtifact(existing []Artifact, incoming Artifact) []Artifact {
+	for i, item := range existing {
+		if item.ID == incoming.ID {
+			existing[i] = incoming
+			return existing
+		}
+	}
+	return append(existing, incoming)
+}
+
+func upsertMemory(existing []MemoryEntry, incoming MemoryEntry) []MemoryEntry {
 	for i, item := range existing {
 		if item.ID == incoming.ID {
 			existing[i] = incoming
